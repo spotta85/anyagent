@@ -342,9 +342,15 @@ def resolve_binary(bin: str | None) -> str:
     if explicit:
         return explicit
     exe = "anyagent" + (sysconfig.get_config_var("EXE") or "")
-    # The venv or system scripts dir, then `pip install --user`'s.
-    for scheme in (sysconfig.get_default_scheme(), f"{os.name}_user"):
-        path = os.path.join(sysconfig.get_path("scripts", scheme), exe)
+    # The venv or system scripts dir, then `pip install --user`'s, then the
+    # scripts dir of whatever environment holds this package (uv overlays).
+    candidates = [sysconfig.get_path("scripts", s) for s in (sysconfig.get_default_scheme(), f"{os.name}_user")]
+    package = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(4):
+        package = os.path.dirname(package)
+        candidates += [os.path.join(package, "bin"), os.path.join(package, "Scripts")]
+    for dir in candidates:
+        path = os.path.join(dir, exe)
         if os.path.isfile(path):
             return path
     raise FileNotFoundError(f"no anyagent binary next to {sys.executable}: pip install anyagent-py, or set ANYAGENT_BIN")
