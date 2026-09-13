@@ -38,7 +38,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - run: cargo build --release --locked --bin anyagent --target ${{ matrix.target }}
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.1.0
       - name: The Python wheel for this target (reuses the build above)
         run: uvx maturin build --release --locked --target ${{ matrix.target }} --out ../../dist
         working-directory: packages/python
