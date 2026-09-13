@@ -1,2 +1,4 @@
 node_modules/
 dist/
+# No lock: the optional platform packages of a new version are not on npm yet when CI runs.
+package-lock.json
