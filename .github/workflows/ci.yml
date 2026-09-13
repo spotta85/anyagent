@@ -39,7 +39,7 @@ jobs:
           node-version: "22"
       - run: cargo build --locked --features mock
         working-directory: .
-      - run: npm ci
+      - run: npm install --omit=optional
       - name: Generated types are current
         if: runner.os == 'Linux'
         run: npm run types && git diff --exit-code src/types.ts
