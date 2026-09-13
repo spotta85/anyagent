@@ -1,7 +1,7 @@
 # anyagent
 ### For apps that want to use the AI subscriptions a user already pays for. 
 
-[![CI](https://github.com/spotta85/anyagent-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/spotta85/anyagent-rs/actions/workflows/ci.yml)
+[![CI](https://github.com/spotta85/anyagent/actions/workflows/ci.yml/badge.svg)](https://github.com/spotta85/anyagent/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/anyagent.svg)](https://crates.io/crates/anyagent)
 [![docs](https://img.shields.io/badge/docs-anyagent.mintlify.site-8B5CF6)](https://anyagent.mintlify.site)
 [![docs.rs](https://img.shields.io/docsrs/anyagent)](https://docs.rs/anyagent)
@@ -106,7 +106,7 @@ Using an AI agent to build on anyagent? Point it at one of these:
 |---|---|
 | [`docs/skill.md`](docs/skill.md) | Agent skill: drop into `.claude/skills/anyagent/SKILL.md` (or your agent's skills dir) |
 | [llms.txt](https://anyagent.mintlify.site/llms.txt) / [llms-full.txt](https://anyagent.mintlify.site/llms-full.txt) | Whole docs site as plain text |
-| [Context7](https://context7.com/spotta85/anyagent-rs) | `use context7` in Cursor, Claude Code, etc. |
+| [Context7](https://context7.com/spotta85/anyagent) | `use context7` in Cursor, Claude Code, etc. |
 
 | Page | What it covers |
 |---|---|

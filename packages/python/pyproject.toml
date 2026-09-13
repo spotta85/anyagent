@@ -1,0 +1,36 @@
+[build-system]
+requires = ["maturin>=1.15,<2"]
+build-backend = "maturin"
+
+[project]
+name = "anyagent-py"
+description = "One API over the coding agents installed on a machine: Claude Code, Codex, Cursor, and more."
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+requires-python = ">=3.11"
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://anyagent.mintlify.site/sidecar"
+Repository = "https://github.com/spotta85/anyagent"
+
+# The wheel is the `anyagent` binary from Cargo.toml plus the `anyagent/`
+# package; maturin tags it for the platform and puts the binary on PATH.
+[tool.maturin]
+bindings = "bin"
+manifest-path = "../../Cargo.toml"
+python-source = "."
+module-name = "anyagent"
+strip = true
+exclude = ["anyagent/__pycache__/**"]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=1", "datamodel-code-generator>=0.35"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]
+testpaths = ["tests"]

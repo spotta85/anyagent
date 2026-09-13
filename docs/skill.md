@@ -33,7 +33,7 @@ changing code that calls anyagent:
 
 1. List the `Runtime` and `Session` calls and the `EventKind`s the change touches.
 2. Read the page for each from the table. Fetch the URL (plain markdown), or
-   query the Context7 MCP for library `/spotta85/anyagent-rs`. Done when every
+   query the Context7 MCP for library `/spotta85/anyagent`. Done when every
    call you will make and every event you will handle has its row read.
 3. Write the code, following the rules below.
 

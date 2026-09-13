@@ -45,3 +45,31 @@ jobs:
         run: npm run types && git diff --exit-code src/types.ts
       - run: npm test
       - run: npm run build
+
+  python:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.11"]
+        include:
+          - { os: ubuntu-latest, python: "3.14" }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: packages/python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: astral-sh/setup-uv@v10.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - run: cargo build --locked --features mock
+        working-directory: .
+      - run: uv sync --locked
+      - uses: extractions/setup-just@v4
+        if: runner.os == 'Linux'
+      - name: Generated types are current
+        if: runner.os == 'Linux'
+        run: just types && git diff --exit-code anyagent/types.py
+      - run: uv run pytest

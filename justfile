@@ -22,6 +22,13 @@ live harness feature='':
 schema:
     cargo run -q --example schema --features schema > packages/schema.json
 
+# Regenerate the Python types from packages/schema.json (the node ones: npm run types).
+types:
+    uv run --directory packages/python datamodel-codegen --input ../schema.json --input-file-type jsonschema \
+        --output anyagent/types.py --output-model-type typing.TypedDict --target-python-version 3.11 \
+        --no-use-closed-typed-dict --use-union-operator --formatters builtin \
+        --custom-file-header '# Generated from packages/schema.json by `just types`. Do not edit.'
+
 # Discover installed agents and probe what each can do.
 list:
     cargo run -- list

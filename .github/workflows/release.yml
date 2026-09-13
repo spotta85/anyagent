@@ -1,7 +1,7 @@
 # Release binaries for every supported target, plus the wire schema.
 # A tag `v*` publishes a GitHub release; a pull request that touches this
 # file, or a manual run, builds everything and stops at the artifacts — a
-# manual run with `npm: true` also publishes the npm packages.
+# manual run with `npm: true` or `pypi: true` also publishes those packages.
 name: Release
 
 on:
@@ -13,6 +13,10 @@ on:
     inputs:
       npm:
         description: "Publish the npm packages from this run"
+        type: boolean
+        default: false
+      pypi:
+        description: "Publish the PyPI package from this run"
         type: boolean
         default: false
 
@@ -34,12 +38,16 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - run: cargo build --release --locked --bin anyagent --target ${{ matrix.target }}
+      - uses: astral-sh/setup-uv@v10.1.0
+      - name: The Python wheel for this target (reuses the build above)
+        run: uvx maturin build --release --locked --target ${{ matrix.target }} --out ../../dist
+        working-directory: packages/python
       - name: Name the binary after its target
         shell: bash
         run: |
           ext=""
           [[ "${{ matrix.target }}" == *windows* ]] && ext=".exe"
-          mkdir dist
+          mkdir -p dist
           cp "target/${{ matrix.target }}/release/anyagent$ext" "dist/anyagent-${{ matrix.target }}$ext"
       - uses: actions/upload-artifact@v4
         with:
@@ -57,7 +65,7 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: Universal mac binary, schema, checksums
+      - name: Universal mac binary, schema, checksums (the wheels are in dist too)
         run: |
           lipo -create dist/anyagent-x86_64-apple-darwin dist/anyagent-aarch64-apple-darwin -output dist/anyagent-macos-universal
           cp packages/schema.json dist/schema.json
@@ -100,3 +108,21 @@ jobs:
           for p in platform/*/ anyagent/; do
             (cd "$p" && npm view "$(jq -r '.name + "@" + .version' package.json)" version >/dev/null 2>&1 || npm publish --access public)
           done
+
+  pypi:
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.pypi == 'true'
+    runs-on: ubuntu-latest
+    environment: pypi # trusted publishing: no token, PyPI trusts this workflow
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: dist
+      - run: mkdir wheels && mv dist/*.whl wheels/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: wheels
+          skip-existing: true # a rerun skips a version already on PyPI
