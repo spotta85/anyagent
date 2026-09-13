@@ -114,6 +114,8 @@ echo '{"id": 1, "cmd": "discover"}' | ./target/debug/anyagent serve --mock packa
 | Swift | Swift package `Anyagent` | next |
 | Go | `go get` | next |
 
+Linux builds need glibc 2.28 or newer: Ubuntu 20.04, Debian 10, RHEL 8 and up.
+
 ```ts
 import { Runtime, is } from "anyagent-ts";
 

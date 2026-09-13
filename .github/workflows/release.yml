@@ -28,10 +28,14 @@ jobs:
         include:
           - { target: x86_64-apple-darwin, os: macos-latest }
           - { target: aarch64-apple-darwin, os: macos-latest }
-          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest }
-          - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm }
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest, container: quay.io/pypa/manylinux_2_28_x86_64 }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm, container: quay.io/pypa/manylinux_2_28_aarch64 }
           - { target: x86_64-pc-windows-msvc, os: windows-latest }
     runs-on: ${{ matrix.os }}
+    # Linux builds inside a manylinux_2_28 container so the binary links against
+    # glibc 2.28 (Ubuntu 20.04, Debian 10, RHEL 8 and up) instead of the runner's;
+    # the other targets have no container and build on the host.
+    container: ${{ matrix.container }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
