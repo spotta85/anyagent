@@ -1,6 +1,6 @@
 {
   "name": "anyagent-ts",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "One API over the coding agents installed on a machine: Claude Code, Codex, Cursor, and more.",
   "license": "MIT OR Apache-2.0",
   "repository": { "type": "git", "url": "git+https://github.com/spotta85/anyagent.git", "directory": "packages/node/anyagent" },
@@ -16,11 +16,11 @@
     "live": "node --test --test-timeout 120000 test/live.test.ts"
   },
   "optionalDependencies": {
-    "@anyagent-ts/darwin-arm64": "0.0.4",
-    "@anyagent-ts/darwin-x64": "0.0.4",
-    "@anyagent-ts/linux-x64": "0.0.4",
-    "@anyagent-ts/linux-arm64": "0.0.4",
-    "@anyagent-ts/win32-x64": "0.0.4"
+    "@anyagent-ts/darwin-arm64": "0.0.5",
+    "@anyagent-ts/darwin-x64": "0.0.5",
+    "@anyagent-ts/linux-x64": "0.0.5",
+    "@anyagent-ts/linux-arm64": "0.0.5",
+    "@anyagent-ts/win32-x64": "0.0.5"
   },
   "devDependencies": {
     "@types/node": "^22",
