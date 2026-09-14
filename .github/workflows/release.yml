@@ -82,6 +82,9 @@ jobs:
         run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes || gh release upload "$GITHUB_REF_NAME" dist/* --clobber
         env:
           GH_TOKEN: ${{ github.token }}
+      - name: Tag the Go module too (`go get` resolves packages/go/vX.Y.Z; SwiftPM uses the vX.Y.Z tag as is)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: git tag "packages/go/$GITHUB_REF_NAME" && git push origin "packages/go/$GITHUB_REF_NAME"
 
   npm:
     needs: release

@@ -11,3 +11,4 @@ research
 /V0_LIVE_TEST_RESULTS.md
 .kiro/
 .env
+/.build/

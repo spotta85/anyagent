@@ -90,7 +90,7 @@ to a generator:
 ```bash
 npx json-schema-to-typescript packages/schema.json      # TypeScript
 datamodel-codegen --input packages/schema.json           # Python TypedDicts
-quicktype packages/schema.json --lang swift              # Swift
+python3 packages/typegen.py                              # Swift enums and Go structs, ours
 ```
 
 ## Testing an app without agents
@@ -111,8 +111,8 @@ echo '{"id": 1, "cmd": "discover"}' | ./target/debug/anyagent serve --mock packa
 |---|---|---|
 | TypeScript / Node ≥ 22.6 | `npm install anyagent-ts` | ready; the binary comes from an `@anyagent-ts/<os>-<arch>` package, no postinstall |
 | Python ≥ 3.11 | `pip install anyagent-py` | ready; the binary is inside the wheel and lands on the venv's PATH |
-| Swift | Swift package `Anyagent` | next |
-| Go | `go get` | next |
+| Swift ≥ 6 / macOS ≥ 13 | `.package(url: "https://github.com/spotta85/anyagent", from: "0.0.5")` | ready; the app bundles the binary as an auxiliary executable |
+| Go ≥ 1.23 | `go get github.com/spotta85/anyagent/packages/go` | ready; the binary sits next to the program or on PATH |
 
 Linux builds need glibc 2.28 or newer: Ubuntu 20.04, Debian 10, RHEL 8 and up.
 
@@ -155,13 +155,58 @@ async def main():
 asyncio.run(main())
 ```
 
+```swift
+import Anyagent
+
+let rt = try await Runtime.start()
+let session = try await rt.open("claude", OpenOptions(dir: FileManager.default.currentDirectoryPath))
+_ = try await session.prompt("explain this repo")
+turn: for try await ev in session.events() {
+    switch ev.kind {
+    case .textDelta(let d): print(d.text, terminator: "")
+    case .requestOpened(.permission(let p)): try await session.answer(p.id, .permission(.allowOnce))
+    case .turnEnded: break turn
+    default: break
+    }
+}
+try await session.close()
+await rt.close()
+```
+
+```go
+import anyagent "github.com/spotta85/anyagent/packages/go"
+
+rt, err := anyagent.Start(anyagent.Options{})
+session, err := rt.Open("claude", anyagent.OpenOptions{Dir: cwd})
+session.Prompt("explain this repo")
+for ev, err := range session.Events() {
+	if err != nil {
+		log.Fatal(err)
+	}
+	if d := ev.Kind.TextDelta; d != nil {
+		fmt.Print(d.Text)
+	}
+	if r := ev.Kind.RequestOpened; r != nil && r.Permission != nil {
+		choice := anyagent.PermissionChoiceAllowOnce
+		session.Answer(r.Permission.ID, anyagent.Answer{Permission: &choice})
+	}
+	if ev.Kind.TurnEnded != nil {
+		break
+	}
+}
+session.Close()
+rt.Close()
+```
+
 `session.info` and `session.status` stay current; a session error throws
-from the `for await` (raises from the `async for` in Python);
+from the `for await` (raises from the `async for` in Python, throws from
+the `for try await` in Swift, is yielded once by `Events` in Go);
 `rt.generate(agent, { dir }, prompt)` is one-shot text.
 `Runtime.start({ bin, mock })` runs the package over a mock script.
 Every package passes the same eleven tests over the mock scripts on macOS,
-Linux, and Windows in CI; the TypeScript package also runs ten live on
-claude and codex.
+Linux, and Windows in CI (Swift: macOS and Linux); the TypeScript package
+also runs ten live on claude and codex. `packages/README.md` lays the four
+packages side by side.
 
 ## Writing a wrapper
 
