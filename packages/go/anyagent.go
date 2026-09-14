@@ -197,7 +197,7 @@ func (rt *Runtime) Close() int {
 // Writes one command line; the reply's `ok` is unmarshaled into out (nil to ignore it).
 func (rt *Runtime) call(cmd map[string]any, out any) error {
 	r, err := rt.send(cmd, false)
-	if err != nil || out == nil || string(r.ok) == "null" {
+	if err != nil || out == nil || len(r.ok) == 0 || string(r.ok) == "null" {
 		return err
 	}
 	return json.Unmarshal(r.ok, out)
@@ -237,7 +237,7 @@ func (rt *Runtime) read(stdout io.Reader) {
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 64<<10), lineLimit)
 	for sc.Scan() {
-		rt.onLine(append([]byte(nil), sc.Bytes()...))
+		rt.onLine(append([]byte(nil), sc.Bytes()...)) // a copy: a reply's RawMessage outlives the scanner's buffer
 	}
 	if err := sc.Err(); err != nil {
 		rt.mu.Lock()

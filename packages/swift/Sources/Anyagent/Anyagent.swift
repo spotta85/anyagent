@@ -307,7 +307,7 @@ public actor Session {
     public private(set) var status: SessionStatus
     private let rt: Runtime
     private var queue: [Event] = []
-    private var waiter: CheckedContinuation<Void, Never>?
+    private var waiters: [CheckedContinuation<Void, Never>] = []
     private var error: AnyagentError?
     private var done = false
 
@@ -351,8 +351,8 @@ public actor Session {
         try await run(["cmd": "close"])
     }
 
-    /// This session's events in order. Ends after `closed`; throws once on a
-    /// session error, then ends (W3).
+    /// This session's events in order. Ends after `closed` or when the reading
+    /// task is cancelled; throws once on a session error, then ends (W3).
     public nonisolated func events() -> AsyncThrowingStream<Event, Error> {
         AsyncThrowingStream { try await self.next() }
     }
@@ -367,7 +367,7 @@ public actor Session {
         let _: JSONValue = try await call(fields)
     }
 
-    /// The next event, or nil at the end; the error once, when the queue is drained.
+    /// The next event; nil at the end or once the reading task is cancelled; the error once, when the queue is drained.
     private func next() async throws -> Event? {
         while true {
             if !queue.isEmpty { return queue.removeFirst() }
@@ -376,8 +376,12 @@ public actor Session {
                 done = true
                 throw error
             }
-            if done { return nil }
-            await withCheckedContinuation { waiter = $0 }
+            if done || Task.isCancelled { return nil }
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { waiters.append($0) }
+            } onCancel: {
+                Task { await self.wake() }
+            }
         }
     }
 
@@ -408,9 +412,10 @@ public actor Session {
         wake()
     }
 
+    /// Resumes every waiting reader; each re-checks the queue, the error, and its own cancellation.
     private func wake() {
-        waiter?.resume()
-        waiter = nil
+        for w in waiters { w.resume() }
+        waiters = []
     }
 }
 

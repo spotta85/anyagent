@@ -36,12 +36,15 @@ await rt.close()
 ```
 
 `ev.kind` is an enum with one case per event; `ev.kind.name` is the wire
-name (`"TextDelta"`) for a log line.
+name (`"TextDelta"`) for a log line. A variant this package does not know
+yet decodes as `.unrecognized(name)`, never as an error.
 
 `session.info` and `session.status` stay current (read them with `await`).
 A session error (`AuthRequired`, `ProcessExited`) throws from the
 `for try await`; a reader that falls 4096 events behind gets
-`ConsumerLagged` and its session is closed.
+`ConsumerLagged` and its session is closed. Cancelling the reading task
+ends the loop. Starting a runtime ignores `SIGPIPE` for the whole app, so
+a write to a dead binary throws instead of killing the app.
 
 One-shot text, no session: `try await rt.generate("codex", OpenOptions(dir: dir), "one-line title for this diff")`.
 

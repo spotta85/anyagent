@@ -40,7 +40,9 @@ rt.Close()
 ```
 
 `ev.Kind` has one field per event and exactly one is set; `ev.Kind.Name()`
-is the wire name (`"TextDelta"`) for a `switch` or a log line.
+is the wire name (`"TextDelta"`) for a `switch` or a log line. A variant
+this package does not know yet lands in `Unrecognized` with its wire name,
+never as an error.
 
 `session.Info()` and `session.Status()` stay current. A session error
 (`AuthRequired`, `ProcessExited`) is yielded once by `Events`, then the
@@ -54,3 +56,4 @@ pass `anyagent.Options{Bin: ..., Mock: "packages/mock-scripts/turn.json"}`.
 
 Docs: https://anyagent.mintlify.site/sidecar · Types: `types.go` is
 generated from the binary's JSON schema, so commands and events are one contract.
+A required list such as `Stdio.Args` must be a non-nil slice: `null` is rejected.

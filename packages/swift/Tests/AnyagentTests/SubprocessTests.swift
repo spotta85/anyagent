@@ -224,4 +224,14 @@ struct Subprocess {
         await rejects("ProtocolFailed") { try await speaks("nope") }
         await rejects("ProtocolFailed") { try await speaks(#"{"hello": {"protocol": 99, "anyagent": "x"}}"#) }
     }
+
+    @Test(.timeLimit(.minutes(1))) func cancelling_the_reading_task_ends_its_stream() async throws {
+        let rt = try await start("turn")
+        let session = try await rt.open("mock", OpenOptions(dir: dir))
+        let reader = Task { try await drain(session) }  // nothing prompted: it waits
+        try await Task.sleep(for: .milliseconds(100))
+        reader.cancel()
+        #expect(try await reader.value.isEmpty)
+        await rt.close()
+    }
 }

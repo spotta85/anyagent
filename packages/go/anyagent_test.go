@@ -179,21 +179,23 @@ func TestS4TwoSessionsSeeOnlyTheirOwnEventsInOrder(t *testing.T) {
 	rt := start(t, "chatter")
 	sessions := make([]*Session, 2)
 	events := make([][]Event, 2)
+	errs := make([]error, 2) // t.Fatal is for the test goroutine only: collect, check after Wait
 	var wg sync.WaitGroup
 	for i := range sessions {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s, err := rt.Open("mock", OpenOptions{Dir: dir})
-			ok(t, err)
-			sessions[i] = s
-			_, err = s.Prompt("x")
-			ok(t, err)
-			events[i], err = until(s, "TurnEnded")
-			ok(t, err)
+			sessions[i], errs[i] = rt.Open("mock", OpenOptions{Dir: dir})
+			if errs[i] == nil {
+				_, errs[i] = sessions[i].Prompt("x")
+			}
+			if errs[i] == nil {
+				events[i], errs[i] = until(sessions[i], "TurnEnded")
+			}
 		}()
 	}
 	wg.Wait()
+	ok(t, errors.Join(errs...))
 	if sessions[0].ID == sessions[1].ID {
 		t.Fatal("same id")
 	}

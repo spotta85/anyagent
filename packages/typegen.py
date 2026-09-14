@@ -4,7 +4,8 @@ packages/go/types.go. `just types` runs it; CI checks the output is current.
 
 Every definition becomes a struct, a string enum, or an enum with payloads
 (Rust's externally tagged enums: `{"TextDelta": {..}}` or a bare string
-`"ContextCompacted"`). Frames, lines, the hello and the error body are
+`"ContextCompacted"`); a variant the schema does not list decodes as
+`unrecognized` with its wire name, so a newer binary never fails a frame. Frames, lines, the hello and the error body are
 hand-written in each wrapper, so they are skipped here."""
 
 from __future__ import annotations
@@ -180,6 +181,8 @@ def swift_struct(s: Struct) -> str:
 def swift_string_enum(e: StringEnum) -> str:
     lines = swift_doc(e.doc) + [f"public enum {e.name}: String, Codable, Sendable, Equatable {{"]
     lines += [f'    case {swift_name(v)} = "{v}"' for v in e.values]
+    lines += ["    /// A value this package does not know (a newer binary).", "    case unrecognized", ""]
+    lines += ["    public init(from decoder: Decoder) throws {", "        self = Self(rawValue: try String(from: decoder)) ?? .unrecognized", "    }"]
     return "\n".join(lines + ["}"])
 
 
@@ -189,29 +192,30 @@ def swift_enum(e: Enum) -> str:
     raws = [(c, t) for kind, c, _, t in cases if kind == "raw"]
     tagged = [(c, n, t) for kind, c, n, t in cases if kind == "tagged"]
     raw_string = next((c for c, t in raws if t == ("str",)), None)
+    fallback = raw_string or "unrecognized"  # a string no unit matched
 
     lines = swift_doc(e.doc) + [f"public enum {e.name}: Codable, Sendable, Equatable {{"]
     lines += [f"    case {c}" + (f"({swift_type(t)})" if t else "") for _, c, _, t in cases]
+    lines += ["    /// A variant this package does not know (a newer binary): its wire name.", "    case unrecognized(String)"]
     lines += ["", f'    /// The variant\'s wire name: "{cases[0][2]}", …', "    public var name: String {", "        switch self {"]
-    lines += [f'        case .{c}: "{n}"' for _, c, n, _ in cases] + ["        }", "    }"]
+    lines += [f'        case .{c}: "{n}"' for _, c, n, _ in cases] + ["        case .unrecognized(let tag): tag", "        }", "    }"]
 
     lines += ["", "    public init(from decoder: Decoder) throws {"]
     if units:
         lines += ["        if let s = try? String(from: decoder) {", "            switch s {"]
         lines += [f'            case "{n}": self = .{c}' for c, n in units]
-        lines.append(f"            default: self = .{raw_string}(s)" if raw_string else "            default: throw unknownVariant(decoder, s)")
-        lines += ["            }", "            return", "        }"]
-    elif raw_string:
-        lines.append(f"        if let s = try? String(from: decoder) {{ self = .{raw_string}(s); return }}")
+        lines += [f"            default: self = .{fallback}(s)", "            }", "            return", "        }"]
+    else:
+        lines.append(f"        if let s = try? String(from: decoder) {{ self = .{fallback}(s); return }}")
     for c, t in raws:
         if t != ("str",):
             lines.append(f"        if let v = try? {swift_type(t)}(from: decoder) {{ self = .{c}(v); return }}")
     if tagged:
         lines += ["        let c = try decoder.container(keyedBy: Key.self)", "        switch c.allKeys.first?.stringValue {"]
         lines += [f'        case "{n}": self = .{c}(try c.decode({swift_type(t)}.self, forKey: Key("{n}")))' for c, n, t in tagged]
-        lines += ['        default: throw unknownVariant(decoder, c.allKeys.first?.stringValue ?? "{}")', "        }"]
+        lines += ['        default: self = .unrecognized(c.allKeys.first?.stringValue ?? "?")', "        }"]
     else:
-        lines.append('        throw unknownVariant(decoder, "?")')
+        lines.append('        self = .unrecognized("?")')
     lines.append("    }")
 
     lines += ["", "    public func encode(to encoder: Encoder) throws {", "        switch self {"]
@@ -222,7 +226,7 @@ def swift_enum(e: Enum) -> str:
             lines.append(f"        case .{c}(let v): try encoder.raw(v)")
         else:
             lines.append(f'        case .{c}(let v): try encoder.tagged("{n}", v)')
-    lines += ["        }", "    }", "}"]
+    lines += ["        case .unrecognized(let tag): try encoder.raw(tag)", "        }", "    }", "}"]
 
     if raw_string:
         lines += ["", f"extension {e.name}: ExpressibleByStringLiteral {{", f"    public init(stringLiteral v: String) {{ self = .{raw_string}(v) }}", "}"]
@@ -318,34 +322,32 @@ def go_enum(e: Enum) -> str:
             lines.append(f'\t{f} {go_type(opt(t))} `json:"{n}"`')
         else:
             lines.append(f'\t{f} {go_type(opt(t))} `json:"-"`')
-    lines.append("}")
+    lines += ['\tUnrecognized string `json:"-"` // a variant this package does not know (a newer binary): its wire name', "}"]
 
     lines += ["", f'// Name is the variant\'s wire name: "{fields[0][2]}", …', f"func (v {e.name}) Name() string {{", "\tswitch {"]
     lines += [f"\tcase {go_set(kind, f)}:\n\t\treturn \"{n}\"" for kind, f, n, _ in fields]
-    lines += ["\t}", '\treturn ""', "}"]
+    lines += ["\t}", "\treturn v.Unrecognized", "}"]
 
     lines += ["", f"func (v {e.name}) MarshalJSON() ([]byte, error) {{", "\tswitch {"]
     for kind, f, n, _ in fields:
         value = f'"{n}"' if kind == "unit" else f"v.{f}" if kind == "raw" else f'map[string]any{{"{n}": v.{f}}}'
         lines.append(f"\tcase {go_set(kind, f)}:\n\t\treturn json.Marshal({value})")
+    lines += ['\tcase v.Unrecognized != "":\n\t\treturn json.Marshal(v.Unrecognized)']
     lines += ["\t}", f'\treturn nil, fmt.Errorf("{e.name}: no variant set")', "}"]
 
-    if units or raws:
-        lines += ["", f"func (v *{e.name}) UnmarshalJSON(b []byte) error {{"]
-        if units or raw_string:
-            lines += ["\tvar s string", "\tif json.Unmarshal(b, &s) == nil {"]
-            if units:
-                lines += ["\t\tswitch s {"] + [f'\t\tcase "{n}":\n\t\t\tv.{f} = true\n\t\t\treturn nil' for f, n in units] + ["\t\t}"]
-            lines += [f"\t\tv.{raw_string} = &s", "\t\treturn nil"] if raw_string else [f'\t\treturn fmt.Errorf("{e.name}: unknown variant %q", s)']
-            lines.append("\t}")
-        for f, t in raws:
-            if t != ("str",):
-                lines += [f"\tvar raw {go_type(t)}", "\tif json.Unmarshal(b, &raw) == nil {", f"\t\tv.{f} = &raw", "\t\treturn nil", "\t}"]
-        if tagged:
-            lines += [f"\ttype plain {e.name}", "\treturn json.Unmarshal(b, (*plain)(v))"]
-        else:
-            lines.append(f'\treturn fmt.Errorf("{e.name}: unknown variant %s", b)')
-        lines.append("}")
+    lines += ["", f"func (v *{e.name}) UnmarshalJSON(b []byte) error {{", "\tvar s string", "\tif json.Unmarshal(b, &s) == nil {"]
+    if units:
+        lines += ["\t\tswitch s {"] + [f'\t\tcase "{n}":\n\t\t\tv.{f} = true\n\t\t\treturn nil' for f, n in units] + ["\t\t}"]
+    lines += [f"\t\tv.{raw_string} = &s" if raw_string else "\t\tv.Unrecognized = s", "\t\treturn nil", "\t}"]
+    for f, t in raws:
+        if t != ("str",):
+            lines += [f"\tvar raw {go_type(t)}", "\tif json.Unmarshal(b, &raw) == nil {", f"\t\tv.{f} = &raw", "\t\treturn nil", "\t}"]
+    if tagged:  # a tag nobody matched: the object's one key
+        lines += [f"\ttype plain {e.name}", '\tif err := json.Unmarshal(b, (*plain)(v)); err != nil || v.Name() != "" {', "\t\treturn err", "\t}"]
+        lines += ["\tvar m map[string]json.RawMessage", "\tjson.Unmarshal(b, &m)", "\tfor tag := range m {", "\t\tv.Unrecognized = tag", "\t}"]
+    else:
+        lines.append("\tv.Unrecognized = string(b)")
+    lines += ["\treturn nil", "}"]
     return "\n".join(lines)
 
 

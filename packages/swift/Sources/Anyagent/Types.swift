@@ -6,12 +6,15 @@ import Foundation
 public enum AgentRef: Codable, Sendable, Equatable {
     case string(String)
     case acp(AcpSpec)
+    /// A variant this package does not know (a newer binary): its wire name.
+    case unrecognized(String)
 
     /// The variant's wire name: "string", …
     public var name: String {
         switch self {
         case .string: "string"
         case .acp: "acp"
+        case .unrecognized(let tag): tag
         }
     }
 
@@ -20,7 +23,7 @@ public enum AgentRef: Codable, Sendable, Equatable {
         let c = try decoder.container(keyedBy: Key.self)
         switch c.allKeys.first?.stringValue {
         case "acp": self = .acp(try c.decode(AcpSpec.self, forKey: Key("acp")))
-        default: throw unknownVariant(decoder, c.allKeys.first?.stringValue ?? "{}")
+        default: self = .unrecognized(c.allKeys.first?.stringValue ?? "?")
         }
     }
 
@@ -28,6 +31,7 @@ public enum AgentRef: Codable, Sendable, Equatable {
         switch self {
         case .string(let v): try encoder.raw(v)
         case .acp(let v): try encoder.tagged("acp", v)
+        case .unrecognized(let tag): try encoder.raw(tag)
         }
     }
 }
@@ -52,6 +56,12 @@ public struct AcpSpec: Codable, Sendable, Equatable {
 public enum PermissionMode: String, Codable, Sendable, Equatable {
     case ask = "Ask"
     case autoApprove = "AutoApprove"
+    /// A value this package does not know (a newer binary).
+    case unrecognized
+
+    public init(from decoder: Decoder) throws {
+        self = Self(rawValue: try String(from: decoder)) ?? .unrecognized
+    }
 }
 
 /// A client-owned MCP server the agent should connect to, forwarded at open.
@@ -101,6 +111,8 @@ public enum McpConnection: Codable, Sendable, Equatable {
     case stdio(Stdio)
     case http(Http)
     case sse(Sse)
+    /// A variant this package does not know (a newer binary): its wire name.
+    case unrecognized(String)
 
     /// The variant's wire name: "Stdio", …
     public var name: String {
@@ -108,16 +120,18 @@ public enum McpConnection: Codable, Sendable, Equatable {
         case .stdio: "Stdio"
         case .http: "Http"
         case .sse: "Sse"
+        case .unrecognized(let tag): tag
         }
     }
 
     public init(from decoder: Decoder) throws {
+        if let s = try? String(from: decoder) { self = .unrecognized(s); return }
         let c = try decoder.container(keyedBy: Key.self)
         switch c.allKeys.first?.stringValue {
         case "Stdio": self = .stdio(try c.decode(Stdio.self, forKey: Key("Stdio")))
         case "Http": self = .http(try c.decode(Http.self, forKey: Key("Http")))
         case "Sse": self = .sse(try c.decode(Sse.self, forKey: Key("Sse")))
-        default: throw unknownVariant(decoder, c.allKeys.first?.stringValue ?? "{}")
+        default: self = .unrecognized(c.allKeys.first?.stringValue ?? "?")
         }
     }
 
@@ -126,6 +140,7 @@ public enum McpConnection: Codable, Sendable, Equatable {
         case .stdio(let v): try encoder.tagged("Stdio", v)
         case .http(let v): try encoder.tagged("Http", v)
         case .sse(let v): try encoder.tagged("Sse", v)
+        case .unrecognized(let tag): try encoder.raw(tag)
         }
     }
 }
@@ -133,25 +148,29 @@ public enum McpConnection: Codable, Sendable, Equatable {
 public enum ConfigValue: Codable, Sendable, Equatable {
     case string(String)
     case bool(Bool)
+    /// A variant this package does not know (a newer binary): its wire name.
+    case unrecognized(String)
 
     /// The variant's wire name: "string", …
     public var name: String {
         switch self {
         case .string: "string"
         case .bool: "bool"
+        case .unrecognized(let tag): tag
         }
     }
 
     public init(from decoder: Decoder) throws {
         if let s = try? String(from: decoder) { self = .string(s); return }
         if let v = try? Bool(from: decoder) { self = .bool(v); return }
-        throw unknownVariant(decoder, "?")
+        self = .unrecognized("?")
     }
 
     public func encode(to encoder: Encoder) throws {
         switch self {
         case .string(let v): try encoder.raw(v)
         case .bool(let v): try encoder.raw(v)
+        case .unrecognized(let tag): try encoder.raw(tag)
         }
     }
 }
@@ -167,21 +186,25 @@ extension ConfigValue: ExpressibleByBooleanLiteral {
 public enum Answer: Codable, Sendable, Equatable {
     case permission(PermissionChoice)
     case question([QuestionAnswer])
+    /// A variant this package does not know (a newer binary): its wire name.
+    case unrecognized(String)
 
     /// The variant's wire name: "Permission", …
     public var name: String {
         switch self {
         case .permission: "Permission"
         case .question: "Question"
+        case .unrecognized(let tag): tag
         }
     }
 
     public init(from decoder: Decoder) throws {
+        if let s = try? String(from: decoder) { self = .unrecognized(s); return }
         let c = try decoder.container(keyedBy: Key.self)
         switch c.allKeys.first?.stringValue {
         case "Permission": self = .permission(try c.decode(PermissionChoice.self, forKey: Key("Permission")))
         case "Question": self = .question(try c.decode([QuestionAnswer].self, forKey: Key("Question")))
-        default: throw unknownVariant(decoder, c.allKeys.first?.stringValue ?? "{}")
+        default: self = .unrecognized(c.allKeys.first?.stringValue ?? "?")
         }
     }
 
@@ -189,6 +212,7 @@ public enum Answer: Codable, Sendable, Equatable {
         switch self {
         case .permission(let v): try encoder.tagged("Permission", v)
         case .question(let v): try encoder.tagged("Question", v)
+        case .unrecognized(let tag): try encoder.raw(tag)
         }
     }
 }
@@ -198,26 +222,36 @@ public enum PermissionChoice: String, Codable, Sendable, Equatable {
     case allowAlways = "AllowAlways"
     case denyOnce = "DenyOnce"
     case denyAlways = "DenyAlways"
+    /// A value this package does not know (a newer binary).
+    case unrecognized
+
+    public init(from decoder: Decoder) throws {
+        self = Self(rawValue: try String(from: decoder)) ?? .unrecognized
+    }
 }
 
 public enum QuestionAnswer: Codable, Sendable, Equatable {
     case choices([String])
     case text(String)
+    /// A variant this package does not know (a newer binary): its wire name.
+    case unrecognized(String)
 
     /// The variant's wire name: "Choices", …
     public var name: String {
         switch self {
         case .choices: "Choices"
         case .text: "Text"
+        case .unrecognized(let tag): tag
         }
     }
 
     public init(from decoder: Decoder) throws {
+        if let s = try? String(from: decoder) { self = .unrecognized(s); return }
         let c = try decoder.container(keyedBy: Key.self)
         switch c.allKeys.first?.stringValue {
         case "Choices": self = .choices(try c.decode([String].self, forKey: Key("Choices")))
         case "Text": self = .text(try c.decode(String.self, forKey: Key("Text")))
-        default: throw unknownVariant(decoder, c.allKeys.first?.stringValue ?? "{}")
+        default: self = .unrecognized(c.allKeys.first?.stringValue ?? "?")
         }
     }
 
@@ -225,6 +259,7 @@ public enum QuestionAnswer: Codable, Sendable, Equatable {
         switch self {
         case .choices(let v): try encoder.tagged("Choices", v)
         case .text(let v): try encoder.tagged("Text", v)
+        case .unrecognized(let tag): try encoder.raw(tag)
         }
     }
 }
@@ -233,6 +268,12 @@ public enum QuestionAnswer: Codable, Sendable, Equatable {
 public enum RollbackScope: String, Codable, Sendable, Equatable {
     case conversation = "Conversation"
     case conversationAndFiles = "ConversationAndFiles"
+    /// A value this package does not know (a newer binary).
+    case unrecognized
+
+    public init(from decoder: Decoder) throws {
+        self = Self(rawValue: try String(from: decoder)) ?? .unrecognized
+    }
 }
 
 /// One normalized event produced by anyagent.
@@ -439,6 +480,8 @@ public enum EventKind: Codable, Sendable, Equatable {
     case planUsageUpdated(PlanUsage)
     case diagnostic(Diagnostic)
     case turnEnded(TurnEnded)
+    /// A variant this package does not know (a newer binary): its wire name.
+    case unrecognized(String)
 
     /// The variant's wire name: "TurnStarted", …
     public var name: String {
@@ -460,6 +503,7 @@ public enum EventKind: Codable, Sendable, Equatable {
         case .planUsageUpdated: "PlanUsageUpdated"
         case .diagnostic: "Diagnostic"
         case .turnEnded: "TurnEnded"
+        case .unrecognized(let tag): tag
         }
     }
 
@@ -467,7 +511,7 @@ public enum EventKind: Codable, Sendable, Equatable {
         if let s = try? String(from: decoder) {
             switch s {
             case "ContextCompacted": self = .contextCompacted
-            default: throw unknownVariant(decoder, s)
+            default: self = .unrecognized(s)
             }
             return
         }
@@ -489,7 +533,7 @@ public enum EventKind: Codable, Sendable, Equatable {
         case "PlanUsageUpdated": self = .planUsageUpdated(try c.decode(PlanUsage.self, forKey: Key("PlanUsageUpdated")))
         case "Diagnostic": self = .diagnostic(try c.decode(Diagnostic.self, forKey: Key("Diagnostic")))
         case "TurnEnded": self = .turnEnded(try c.decode(TurnEnded.self, forKey: Key("TurnEnded")))
-        default: throw unknownVariant(decoder, c.allKeys.first?.stringValue ?? "{}")
+        default: self = .unrecognized(c.allKeys.first?.stringValue ?? "?")
         }
     }
 
@@ -512,6 +556,7 @@ public enum EventKind: Codable, Sendable, Equatable {
         case .planUsageUpdated(let v): try encoder.tagged("PlanUsageUpdated", v)
         case .diagnostic(let v): try encoder.tagged("Diagnostic", v)
         case .turnEnded(let v): try encoder.tagged("TurnEnded", v)
+        case .unrecognized(let tag): try encoder.raw(tag)
         }
     }
 }
@@ -519,12 +564,15 @@ public enum EventKind: Codable, Sendable, Equatable {
 public enum TurnOrigin: Codable, Sendable, Equatable {
     case agent
     case prompt(String)
+    /// A variant this package does not know (a newer binary): its wire name.
+    case unrecognized(String)
 
     /// The variant's wire name: "Agent", …
     public var name: String {
         switch self {
         case .agent: "Agent"
         case .prompt: "Prompt"
+        case .unrecognized(let tag): tag
         }
     }
 
@@ -532,14 +580,14 @@ public enum TurnOrigin: Codable, Sendable, Equatable {
         if let s = try? String(from: decoder) {
             switch s {
             case "Agent": self = .agent
-            default: throw unknownVariant(decoder, s)
+            default: self = .unrecognized(s)
             }
             return
         }
         let c = try decoder.container(keyedBy: Key.self)
         switch c.allKeys.first?.stringValue {
         case "Prompt": self = .prompt(try c.decode(String.self, forKey: Key("Prompt")))
-        default: throw unknownVariant(decoder, c.allKeys.first?.stringValue ?? "{}")
+        default: self = .unrecognized(c.allKeys.first?.stringValue ?? "?")
         }
     }
 
@@ -547,6 +595,7 @@ public enum TurnOrigin: Codable, Sendable, Equatable {
         switch self {
         case .agent: try encoder.raw("Agent")
         case .prompt(let v): try encoder.tagged("Prompt", v)
+        case .unrecognized(let tag): try encoder.raw(tag)
         }
     }
 }
@@ -598,6 +647,8 @@ public enum ToolKind: Codable, Sendable, Equatable {
     case other
     case mcp(Mcp)
     case subagent
+    /// A variant this package does not know (a newer binary): its wire name.
+    case unrecognized(String)
 
     /// The variant's wire name: "Read", …
     public var name: String {
@@ -613,6 +664,7 @@ public enum ToolKind: Codable, Sendable, Equatable {
         case .other: "Other"
         case .mcp: "Mcp"
         case .subagent: "Subagent"
+        case .unrecognized(let tag): tag
         }
     }
 
@@ -629,14 +681,14 @@ public enum ToolKind: Codable, Sendable, Equatable {
             case "Think": self = .think
             case "Other": self = .other
             case "Subagent": self = .subagent
-            default: throw unknownVariant(decoder, s)
+            default: self = .unrecognized(s)
             }
             return
         }
         let c = try decoder.container(keyedBy: Key.self)
         switch c.allKeys.first?.stringValue {
         case "Mcp": self = .mcp(try c.decode(Mcp.self, forKey: Key("Mcp")))
-        default: throw unknownVariant(decoder, c.allKeys.first?.stringValue ?? "{}")
+        default: self = .unrecognized(c.allKeys.first?.stringValue ?? "?")
         }
     }
 
@@ -653,6 +705,7 @@ public enum ToolKind: Codable, Sendable, Equatable {
         case .other: try encoder.raw("Other")
         case .mcp(let v): try encoder.tagged("Mcp", v)
         case .subagent: try encoder.raw("Subagent")
+        case .unrecognized(let tag): try encoder.raw(tag)
         }
     }
 }
@@ -663,6 +716,12 @@ public enum ToolStatus: String, Codable, Sendable, Equatable {
     case completed = "Completed"
     case failed = "Failed"
     case cancelled = "Cancelled"
+    /// A value this package does not know (a newer binary).
+    case unrecognized
+
+    public init(from decoder: Decoder) throws {
+        self = Self(rawValue: try String(from: decoder)) ?? .unrecognized
+    }
 }
 
 public struct Command: Codable, Sendable, Equatable {
@@ -683,6 +742,8 @@ public enum ToolInput: Codable, Sendable, Equatable {
     case url(String)
     case query(String)
     case text(String)
+    /// A variant this package does not know (a newer binary): its wire name.
+    case unrecognized(String)
 
     /// The variant's wire name: "None", …
     public var name: String {
@@ -694,6 +755,7 @@ public enum ToolInput: Codable, Sendable, Equatable {
         case .url: "Url"
         case .query: "Query"
         case .text: "Text"
+        case .unrecognized(let tag): tag
         }
     }
 
@@ -701,7 +763,7 @@ public enum ToolInput: Codable, Sendable, Equatable {
         if let s = try? String(from: decoder) {
             switch s {
             case "None": self = .`none`
-            default: throw unknownVariant(decoder, s)
+            default: self = .unrecognized(s)
             }
             return
         }
@@ -713,7 +775,7 @@ public enum ToolInput: Codable, Sendable, Equatable {
         case "Url": self = .url(try c.decode(String.self, forKey: Key("Url")))
         case "Query": self = .query(try c.decode(String.self, forKey: Key("Query")))
         case "Text": self = .text(try c.decode(String.self, forKey: Key("Text")))
-        default: throw unknownVariant(decoder, c.allKeys.first?.stringValue ?? "{}")
+        default: self = .unrecognized(c.allKeys.first?.stringValue ?? "?")
         }
     }
 
@@ -726,6 +788,7 @@ public enum ToolInput: Codable, Sendable, Equatable {
         case .url(let v): try encoder.tagged("Url", v)
         case .query(let v): try encoder.tagged("Query", v)
         case .text(let v): try encoder.tagged("Text", v)
+        case .unrecognized(let tag): try encoder.raw(tag)
         }
     }
 }
@@ -772,27 +835,37 @@ public enum PlanStatus: String, Codable, Sendable, Equatable {
     case pending = "Pending"
     case inProgress = "InProgress"
     case completed = "Completed"
+    /// A value this package does not know (a newer binary).
+    case unrecognized
+
+    public init(from decoder: Decoder) throws {
+        self = Self(rawValue: try String(from: decoder)) ?? .unrecognized
+    }
 }
 
 /// Something the agent is waiting on the caller for. Answer once with
 public enum Request: Codable, Sendable, Equatable {
     case permission(PermissionRequest)
     case question(QuestionRequest)
+    /// A variant this package does not know (a newer binary): its wire name.
+    case unrecognized(String)
 
     /// The variant's wire name: "Permission", …
     public var name: String {
         switch self {
         case .permission: "Permission"
         case .question: "Question"
+        case .unrecognized(let tag): tag
         }
     }
 
     public init(from decoder: Decoder) throws {
+        if let s = try? String(from: decoder) { self = .unrecognized(s); return }
         let c = try decoder.container(keyedBy: Key.self)
         switch c.allKeys.first?.stringValue {
         case "Permission": self = .permission(try c.decode(PermissionRequest.self, forKey: Key("Permission")))
         case "Question": self = .question(try c.decode(QuestionRequest.self, forKey: Key("Question")))
-        default: throw unknownVariant(decoder, c.allKeys.first?.stringValue ?? "{}")
+        default: self = .unrecognized(c.allKeys.first?.stringValue ?? "?")
         }
     }
 
@@ -800,6 +873,7 @@ public enum Request: Codable, Sendable, Equatable {
         switch self {
         case .permission(let v): try encoder.tagged("Permission", v)
         case .question(let v): try encoder.tagged("Question", v)
+        case .unrecognized(let tag): try encoder.raw(tag)
         }
     }
 }
@@ -934,6 +1008,12 @@ public enum InstallationSource: String, Codable, Sendable, Equatable {
     case versionManager = "VersionManager"
     case knownLocation = "KnownLocation"
     case pinned = "Pinned"
+    /// A value this package does not know (a newer binary).
+    case unrecognized
+
+    public init(from decoder: Decoder) throws {
+        self = Self(rawValue: try String(from: decoder)) ?? .unrecognized
+    }
 }
 
 public struct MissingAgent: Codable, Sendable, Equatable {
@@ -1005,6 +1085,8 @@ public enum AuthStatus: Codable, Sendable, Equatable {
     case unknown
     case authenticated(Authenticated)
     case unauthenticated(Unauthenticated)
+    /// A variant this package does not know (a newer binary): its wire name.
+    case unrecognized(String)
 
     /// The variant's wire name: "Unknown", …
     public var name: String {
@@ -1012,6 +1094,7 @@ public enum AuthStatus: Codable, Sendable, Equatable {
         case .unknown: "Unknown"
         case .authenticated: "Authenticated"
         case .unauthenticated: "Unauthenticated"
+        case .unrecognized(let tag): tag
         }
     }
 
@@ -1019,7 +1102,7 @@ public enum AuthStatus: Codable, Sendable, Equatable {
         if let s = try? String(from: decoder) {
             switch s {
             case "Unknown": self = .unknown
-            default: throw unknownVariant(decoder, s)
+            default: self = .unrecognized(s)
             }
             return
         }
@@ -1027,7 +1110,7 @@ public enum AuthStatus: Codable, Sendable, Equatable {
         switch c.allKeys.first?.stringValue {
         case "Authenticated": self = .authenticated(try c.decode(Authenticated.self, forKey: Key("Authenticated")))
         case "Unauthenticated": self = .unauthenticated(try c.decode(Unauthenticated.self, forKey: Key("Unauthenticated")))
-        default: throw unknownVariant(decoder, c.allKeys.first?.stringValue ?? "{}")
+        default: self = .unrecognized(c.allKeys.first?.stringValue ?? "?")
         }
     }
 
@@ -1036,6 +1119,7 @@ public enum AuthStatus: Codable, Sendable, Equatable {
         case .unknown: try encoder.raw("Unknown")
         case .authenticated(let v): try encoder.tagged("Authenticated", v)
         case .unauthenticated(let v): try encoder.tagged("Unauthenticated", v)
+        case .unrecognized(let tag): try encoder.raw(tag)
         }
     }
 }
@@ -1046,6 +1130,8 @@ public enum AuthKind: Codable, Sendable, Equatable {
     case apiKey
     case cloudProvider
     case other(String)
+    /// A variant this package does not know (a newer binary): its wire name.
+    case unrecognized(String)
 
     /// The variant's wire name: "Subscription", …
     public var name: String {
@@ -1054,6 +1140,7 @@ public enum AuthKind: Codable, Sendable, Equatable {
         case .apiKey: "ApiKey"
         case .cloudProvider: "CloudProvider"
         case .other: "Other"
+        case .unrecognized(let tag): tag
         }
     }
 
@@ -1063,14 +1150,14 @@ public enum AuthKind: Codable, Sendable, Equatable {
             case "Subscription": self = .subscription
             case "ApiKey": self = .apiKey
             case "CloudProvider": self = .cloudProvider
-            default: throw unknownVariant(decoder, s)
+            default: self = .unrecognized(s)
             }
             return
         }
         let c = try decoder.container(keyedBy: Key.self)
         switch c.allKeys.first?.stringValue {
         case "Other": self = .other(try c.decode(String.self, forKey: Key("Other")))
-        default: throw unknownVariant(decoder, c.allKeys.first?.stringValue ?? "{}")
+        default: self = .unrecognized(c.allKeys.first?.stringValue ?? "?")
         }
     }
 
@@ -1080,6 +1167,7 @@ public enum AuthKind: Codable, Sendable, Equatable {
         case .apiKey: try encoder.raw("ApiKey")
         case .cloudProvider: try encoder.raw("CloudProvider")
         case .other(let v): try encoder.tagged("Other", v)
+        case .unrecognized(let tag): try encoder.raw(tag)
         }
     }
 }
@@ -1118,21 +1206,25 @@ public struct EnvVar: Codable, Sendable, Equatable {
 public enum LoginMethod: Codable, Sendable, Equatable {
     case terminal(Terminal)
     case envVar(EnvVar)
+    /// A variant this package does not know (a newer binary): its wire name.
+    case unrecognized(String)
 
     /// The variant's wire name: "Terminal", …
     public var name: String {
         switch self {
         case .terminal: "Terminal"
         case .envVar: "EnvVar"
+        case .unrecognized(let tag): tag
         }
     }
 
     public init(from decoder: Decoder) throws {
+        if let s = try? String(from: decoder) { self = .unrecognized(s); return }
         let c = try decoder.container(keyedBy: Key.self)
         switch c.allKeys.first?.stringValue {
         case "Terminal": self = .terminal(try c.decode(Terminal.self, forKey: Key("Terminal")))
         case "EnvVar": self = .envVar(try c.decode(EnvVar.self, forKey: Key("EnvVar")))
-        default: throw unknownVariant(decoder, c.allKeys.first?.stringValue ?? "{}")
+        default: self = .unrecognized(c.allKeys.first?.stringValue ?? "?")
         }
     }
 
@@ -1140,6 +1232,7 @@ public enum LoginMethod: Codable, Sendable, Equatable {
         switch self {
         case .terminal(let v): try encoder.tagged("Terminal", v)
         case .envVar(let v): try encoder.tagged("EnvVar", v)
+        case .unrecognized(let tag): try encoder.raw(tag)
         }
     }
 }
@@ -1176,12 +1269,24 @@ public enum Capability: String, Codable, Sendable, Equatable {
     case planUsage = "PlanUsage"
     case rollbackFiles = "RollbackFiles"
     case compact = "Compact"
+    /// A value this package does not know (a newer binary).
+    case unrecognized
+
+    public init(from decoder: Decoder) throws {
+        self = Self(rawValue: try String(from: decoder)) ?? .unrecognized
+    }
 }
 
 public enum McpTransport: String, Codable, Sendable, Equatable {
     case stdio = "Stdio"
     case http = "Http"
     case sse = "Sse"
+    /// A value this package does not know (a newer binary).
+    case unrecognized
+
+    public init(from decoder: Decoder) throws {
+        self = Self(rawValue: try String(from: decoder)) ?? .unrecognized
+    }
 }
 
 /// A session setting the agent advertises. Well-known ids: `model`, `effort`,
@@ -1214,12 +1319,15 @@ public struct Select: Codable, Sendable, Equatable {
 public enum ConfigKind: Codable, Sendable, Equatable {
     case boolean
     case select(Select)
+    /// A variant this package does not know (a newer binary): its wire name.
+    case unrecognized(String)
 
     /// The variant's wire name: "Boolean", …
     public var name: String {
         switch self {
         case .boolean: "Boolean"
         case .select: "Select"
+        case .unrecognized(let tag): tag
         }
     }
 
@@ -1227,14 +1335,14 @@ public enum ConfigKind: Codable, Sendable, Equatable {
         if let s = try? String(from: decoder) {
             switch s {
             case "Boolean": self = .boolean
-            default: throw unknownVariant(decoder, s)
+            default: self = .unrecognized(s)
             }
             return
         }
         let c = try decoder.container(keyedBy: Key.self)
         switch c.allKeys.first?.stringValue {
         case "Select": self = .select(try c.decode(Select.self, forKey: Key("Select")))
-        default: throw unknownVariant(decoder, c.allKeys.first?.stringValue ?? "{}")
+        default: self = .unrecognized(c.allKeys.first?.stringValue ?? "?")
         }
     }
 
@@ -1242,6 +1350,7 @@ public enum ConfigKind: Codable, Sendable, Equatable {
         switch self {
         case .boolean: try encoder.raw("Boolean")
         case .select(let v): try encoder.tagged("Select", v)
+        case .unrecognized(let tag): try encoder.raw(tag)
         }
     }
 }
@@ -1289,6 +1398,12 @@ public enum SessionStatus: String, Codable, Sendable, Equatable {
     case idle = "Idle"
     case working = "Working"
     case needsInput = "NeedsInput"
+    /// A value this package does not know (a newer binary).
+    case unrecognized
+
+    public init(from decoder: Decoder) throws {
+        self = Self(rawValue: try String(from: decoder)) ?? .unrecognized
+    }
 }
 
 /// Plan quota windows for the logged-in account.
@@ -1342,6 +1457,12 @@ public enum DiagnosticLevel: String, Codable, Sendable, Equatable {
     case info = "Info"
     case warning = "Warning"
     case error = "Error"
+    /// A value this package does not know (a newer binary).
+    case unrecognized
+
+    public init(from decoder: Decoder) throws {
+        self = Self(rawValue: try String(from: decoder)) ?? .unrecognized
+    }
 }
 
 public struct Completed: Codable, Sendable, Equatable {
@@ -1365,6 +1486,8 @@ public enum StopReason: Codable, Sendable, Equatable {
     case refused
     case completed(Completed)
     case failed(Failed)
+    /// A variant this package does not know (a newer binary): its wire name.
+    case unrecognized(String)
 
     /// The variant's wire name: "Cancelled", …
     public var name: String {
@@ -1373,6 +1496,7 @@ public enum StopReason: Codable, Sendable, Equatable {
         case .refused: "Refused"
         case .completed: "Completed"
         case .failed: "Failed"
+        case .unrecognized(let tag): tag
         }
     }
 
@@ -1381,7 +1505,7 @@ public enum StopReason: Codable, Sendable, Equatable {
             switch s {
             case "Cancelled": self = .cancelled
             case "Refused": self = .refused
-            default: throw unknownVariant(decoder, s)
+            default: self = .unrecognized(s)
             }
             return
         }
@@ -1389,7 +1513,7 @@ public enum StopReason: Codable, Sendable, Equatable {
         switch c.allKeys.first?.stringValue {
         case "Completed": self = .completed(try c.decode(Completed.self, forKey: Key("Completed")))
         case "Failed": self = .failed(try c.decode(Failed.self, forKey: Key("Failed")))
-        default: throw unknownVariant(decoder, c.allKeys.first?.stringValue ?? "{}")
+        default: self = .unrecognized(c.allKeys.first?.stringValue ?? "?")
         }
     }
 
@@ -1399,6 +1523,7 @@ public enum StopReason: Codable, Sendable, Equatable {
         case .refused: try encoder.raw("Refused")
         case .completed(let v): try encoder.tagged("Completed", v)
         case .failed(let v): try encoder.tagged("Failed", v)
+        case .unrecognized(let tag): try encoder.raw(tag)
         }
     }
 }
@@ -1406,6 +1531,12 @@ public enum StopReason: Codable, Sendable, Equatable {
 public enum CompletionSource: String, Codable, Sendable, Equatable {
     case `protocol` = "Protocol"
     case inferred = "Inferred"
+    /// A value this package does not know (a newer binary).
+    case unrecognized
+
+    public init(from decoder: Decoder) throws {
+        self = Self(rawValue: try String(from: decoder)) ?? .unrecognized
+    }
 }
 
 /// What `discover` found and what it could not read.
@@ -1473,6 +1604,8 @@ public enum DeliveryKind: Codable, Sendable, Equatable {
     case started(Started)
     case steered(Steered)
     case queued(Queued)
+    /// A variant this package does not know (a newer binary): its wire name.
+    case unrecognized(String)
 
     /// The variant's wire name: "Started", …
     public var name: String {
@@ -1480,16 +1613,18 @@ public enum DeliveryKind: Codable, Sendable, Equatable {
         case .started: "Started"
         case .steered: "Steered"
         case .queued: "Queued"
+        case .unrecognized(let tag): tag
         }
     }
 
     public init(from decoder: Decoder) throws {
+        if let s = try? String(from: decoder) { self = .unrecognized(s); return }
         let c = try decoder.container(keyedBy: Key.self)
         switch c.allKeys.first?.stringValue {
         case "Started": self = .started(try c.decode(Started.self, forKey: Key("Started")))
         case "Steered": self = .steered(try c.decode(Steered.self, forKey: Key("Steered")))
         case "Queued": self = .queued(try c.decode(Queued.self, forKey: Key("Queued")))
-        default: throw unknownVariant(decoder, c.allKeys.first?.stringValue ?? "{}")
+        default: self = .unrecognized(c.allKeys.first?.stringValue ?? "?")
         }
     }
 
@@ -1498,6 +1633,7 @@ public enum DeliveryKind: Codable, Sendable, Equatable {
         case .started(let v): try encoder.tagged("Started", v)
         case .steered(let v): try encoder.tagged("Steered", v)
         case .queued(let v): try encoder.tagged("Queued", v)
+        case .unrecognized(let tag): try encoder.raw(tag)
         }
     }
 }

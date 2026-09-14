@@ -80,7 +80,3 @@ extension Encoder {
         try c.encode(value)
     }
 }
-
-func unknownVariant(_ decoder: Decoder, _ got: String) -> DecodingError {
-    .dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "unknown variant \(got)"))
-}

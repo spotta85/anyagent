@@ -37,7 +37,9 @@ owns the binary and the package only finds it.
 How enums cross the wire: Rust's externally tagged form, `{"TextDelta": {..}}`
 or a bare `"ContextCompacted"`. Swift decodes that into an enum with one case
 per variant; Go into a struct with one field per variant where exactly one
-is set, plus `Name()`.
+is set, plus `Name()`. A variant the package does not know yet (a newer
+binary) is `.unrecognized(name)` in Swift and `Unrecognized` in Go, so a
+binary update never breaks the app.
 
 The same eleven cases (S1–S11) run in every package over `mock-scripts/`,
 so one behavior is tested four times. Swift runs on macOS and Linux in CI;

@@ -9,8 +9,9 @@ import (
 
 // AgentRef: exactly one field is set. A catalog id like `"claude"`, or an ACP agent the catalog does not know.
 type AgentRef struct {
-	String *string  `json:"-"`
-	Acp    *AcpSpec `json:"acp"`
+	String       *string  `json:"-"`
+	Acp          *AcpSpec `json:"acp"`
+	Unrecognized string   `json:"-"` // a variant this package does not know (a newer binary): its wire name
 }
 
 // Name is the variant's wire name: "string", …
@@ -21,7 +22,7 @@ func (v AgentRef) Name() string {
 	case v.Acp != nil:
 		return "acp"
 	}
-	return ""
+	return v.Unrecognized
 }
 
 func (v AgentRef) MarshalJSON() ([]byte, error) {
@@ -30,6 +31,8 @@ func (v AgentRef) MarshalJSON() ([]byte, error) {
 		return json.Marshal(v.String)
 	case v.Acp != nil:
 		return json.Marshal(map[string]any{"acp": v.Acp})
+	case v.Unrecognized != "":
+		return json.Marshal(v.Unrecognized)
 	}
 	return nil, fmt.Errorf("AgentRef: no variant set")
 }
@@ -41,7 +44,15 @@ func (v *AgentRef) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	type plain AgentRef
-	return json.Unmarshal(b, (*plain)(v))
+	if err := json.Unmarshal(b, (*plain)(v)); err != nil || v.Name() != "" {
+		return err
+	}
+	var m map[string]json.RawMessage
+	json.Unmarshal(b, &m)
+	for tag := range m {
+		v.Unrecognized = tag
+	}
+	return nil
 }
 
 // AcpSpec is a wire type.
@@ -86,9 +97,10 @@ type Sse struct {
 
 // McpConnection: exactly one field is set.
 type McpConnection struct {
-	Stdio *Stdio `json:"Stdio"`
-	Http  *Http  `json:"Http"`
-	Sse   *Sse   `json:"Sse"`
+	Stdio        *Stdio `json:"Stdio"`
+	Http         *Http  `json:"Http"`
+	Sse          *Sse   `json:"Sse"`
+	Unrecognized string `json:"-"` // a variant this package does not know (a newer binary): its wire name
 }
 
 // Name is the variant's wire name: "Stdio", …
@@ -101,7 +113,7 @@ func (v McpConnection) Name() string {
 	case v.Sse != nil:
 		return "Sse"
 	}
-	return ""
+	return v.Unrecognized
 }
 
 func (v McpConnection) MarshalJSON() ([]byte, error) {
@@ -112,14 +124,35 @@ func (v McpConnection) MarshalJSON() ([]byte, error) {
 		return json.Marshal(map[string]any{"Http": v.Http})
 	case v.Sse != nil:
 		return json.Marshal(map[string]any{"Sse": v.Sse})
+	case v.Unrecognized != "":
+		return json.Marshal(v.Unrecognized)
 	}
 	return nil, fmt.Errorf("McpConnection: no variant set")
 }
 
+func (v *McpConnection) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) == nil {
+		v.Unrecognized = s
+		return nil
+	}
+	type plain McpConnection
+	if err := json.Unmarshal(b, (*plain)(v)); err != nil || v.Name() != "" {
+		return err
+	}
+	var m map[string]json.RawMessage
+	json.Unmarshal(b, &m)
+	for tag := range m {
+		v.Unrecognized = tag
+	}
+	return nil
+}
+
 // ConfigValue: exactly one field is set.
 type ConfigValue struct {
-	String *string `json:"-"`
-	Bool   *bool   `json:"-"`
+	String       *string `json:"-"`
+	Bool         *bool   `json:"-"`
+	Unrecognized string  `json:"-"` // a variant this package does not know (a newer binary): its wire name
 }
 
 // Name is the variant's wire name: "string", …
@@ -130,7 +163,7 @@ func (v ConfigValue) Name() string {
 	case v.Bool != nil:
 		return "bool"
 	}
-	return ""
+	return v.Unrecognized
 }
 
 func (v ConfigValue) MarshalJSON() ([]byte, error) {
@@ -139,6 +172,8 @@ func (v ConfigValue) MarshalJSON() ([]byte, error) {
 		return json.Marshal(v.String)
 	case v.Bool != nil:
 		return json.Marshal(v.Bool)
+	case v.Unrecognized != "":
+		return json.Marshal(v.Unrecognized)
 	}
 	return nil, fmt.Errorf("ConfigValue: no variant set")
 }
@@ -154,13 +189,15 @@ func (v *ConfigValue) UnmarshalJSON(b []byte) error {
 		v.Bool = &raw
 		return nil
 	}
-	return fmt.Errorf("ConfigValue: unknown variant %s", b)
+	v.Unrecognized = string(b)
+	return nil
 }
 
 // Answer: exactly one field is set.
 type Answer struct {
-	Permission *PermissionChoice `json:"Permission"`
-	Question   []QuestionAnswer  `json:"Question"`
+	Permission   *PermissionChoice `json:"Permission"`
+	Question     []QuestionAnswer  `json:"Question"`
+	Unrecognized string            `json:"-"` // a variant this package does not know (a newer binary): its wire name
 }
 
 // Name is the variant's wire name: "Permission", …
@@ -171,7 +208,7 @@ func (v Answer) Name() string {
 	case v.Question != nil:
 		return "Question"
 	}
-	return ""
+	return v.Unrecognized
 }
 
 func (v Answer) MarshalJSON() ([]byte, error) {
@@ -180,8 +217,28 @@ func (v Answer) MarshalJSON() ([]byte, error) {
 		return json.Marshal(map[string]any{"Permission": v.Permission})
 	case v.Question != nil:
 		return json.Marshal(map[string]any{"Question": v.Question})
+	case v.Unrecognized != "":
+		return json.Marshal(v.Unrecognized)
 	}
 	return nil, fmt.Errorf("Answer: no variant set")
+}
+
+func (v *Answer) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) == nil {
+		v.Unrecognized = s
+		return nil
+	}
+	type plain Answer
+	if err := json.Unmarshal(b, (*plain)(v)); err != nil || v.Name() != "" {
+		return err
+	}
+	var m map[string]json.RawMessage
+	json.Unmarshal(b, &m)
+	for tag := range m {
+		v.Unrecognized = tag
+	}
+	return nil
 }
 
 // PermissionChoice is a wire type.
@@ -196,8 +253,9 @@ const (
 
 // QuestionAnswer: exactly one field is set.
 type QuestionAnswer struct {
-	Choices []string `json:"Choices"`
-	Text    *string  `json:"Text"`
+	Choices      []string `json:"Choices"`
+	Text         *string  `json:"Text"`
+	Unrecognized string   `json:"-"` // a variant this package does not know (a newer binary): its wire name
 }
 
 // Name is the variant's wire name: "Choices", …
@@ -208,7 +266,7 @@ func (v QuestionAnswer) Name() string {
 	case v.Text != nil:
 		return "Text"
 	}
-	return ""
+	return v.Unrecognized
 }
 
 func (v QuestionAnswer) MarshalJSON() ([]byte, error) {
@@ -217,8 +275,28 @@ func (v QuestionAnswer) MarshalJSON() ([]byte, error) {
 		return json.Marshal(map[string]any{"Choices": v.Choices})
 	case v.Text != nil:
 		return json.Marshal(map[string]any{"Text": v.Text})
+	case v.Unrecognized != "":
+		return json.Marshal(v.Unrecognized)
 	}
 	return nil, fmt.Errorf("QuestionAnswer: no variant set")
+}
+
+func (v *QuestionAnswer) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) == nil {
+		v.Unrecognized = s
+		return nil
+	}
+	type plain QuestionAnswer
+	if err := json.Unmarshal(b, (*plain)(v)); err != nil || v.Name() != "" {
+		return err
+	}
+	var m map[string]json.RawMessage
+	json.Unmarshal(b, &m)
+	for tag := range m {
+		v.Unrecognized = tag
+	}
+	return nil
 }
 
 // RollbackScope: What `rollback` rewinds: conversation context only, or also the files
@@ -327,6 +405,7 @@ type EventKind struct {
 	PlanUsageUpdated *PlanUsage       `json:"PlanUsageUpdated"`
 	Diagnostic       *Diagnostic      `json:"Diagnostic"`
 	TurnEnded        *TurnEnded       `json:"TurnEnded"`
+	Unrecognized     string           `json:"-"` // a variant this package does not know (a newer binary): its wire name
 }
 
 // Name is the variant's wire name: "TurnStarted", …
@@ -367,7 +446,7 @@ func (v EventKind) Name() string {
 	case v.TurnEnded != nil:
 		return "TurnEnded"
 	}
-	return ""
+	return v.Unrecognized
 }
 
 func (v EventKind) MarshalJSON() ([]byte, error) {
@@ -406,6 +485,8 @@ func (v EventKind) MarshalJSON() ([]byte, error) {
 		return json.Marshal(map[string]any{"Diagnostic": v.Diagnostic})
 	case v.TurnEnded != nil:
 		return json.Marshal(map[string]any{"TurnEnded": v.TurnEnded})
+	case v.Unrecognized != "":
+		return json.Marshal(v.Unrecognized)
 	}
 	return nil, fmt.Errorf("EventKind: no variant set")
 }
@@ -418,16 +499,26 @@ func (v *EventKind) UnmarshalJSON(b []byte) error {
 			v.ContextCompacted = true
 			return nil
 		}
-		return fmt.Errorf("EventKind: unknown variant %q", s)
+		v.Unrecognized = s
+		return nil
 	}
 	type plain EventKind
-	return json.Unmarshal(b, (*plain)(v))
+	if err := json.Unmarshal(b, (*plain)(v)); err != nil || v.Name() != "" {
+		return err
+	}
+	var m map[string]json.RawMessage
+	json.Unmarshal(b, &m)
+	for tag := range m {
+		v.Unrecognized = tag
+	}
+	return nil
 }
 
 // TurnOrigin: exactly one field is set.
 type TurnOrigin struct {
-	Agent  bool    `json:"-"`
-	Prompt *string `json:"Prompt"`
+	Agent        bool    `json:"-"`
+	Prompt       *string `json:"Prompt"`
+	Unrecognized string  `json:"-"` // a variant this package does not know (a newer binary): its wire name
 }
 
 // Name is the variant's wire name: "Agent", …
@@ -438,7 +529,7 @@ func (v TurnOrigin) Name() string {
 	case v.Prompt != nil:
 		return "Prompt"
 	}
-	return ""
+	return v.Unrecognized
 }
 
 func (v TurnOrigin) MarshalJSON() ([]byte, error) {
@@ -447,6 +538,8 @@ func (v TurnOrigin) MarshalJSON() ([]byte, error) {
 		return json.Marshal("Agent")
 	case v.Prompt != nil:
 		return json.Marshal(map[string]any{"Prompt": v.Prompt})
+	case v.Unrecognized != "":
+		return json.Marshal(v.Unrecognized)
 	}
 	return nil, fmt.Errorf("TurnOrigin: no variant set")
 }
@@ -459,10 +552,19 @@ func (v *TurnOrigin) UnmarshalJSON(b []byte) error {
 			v.Agent = true
 			return nil
 		}
-		return fmt.Errorf("TurnOrigin: unknown variant %q", s)
+		v.Unrecognized = s
+		return nil
 	}
 	type plain TurnOrigin
-	return json.Unmarshal(b, (*plain)(v))
+	if err := json.Unmarshal(b, (*plain)(v)); err != nil || v.Name() != "" {
+		return err
+	}
+	var m map[string]json.RawMessage
+	json.Unmarshal(b, &m)
+	for tag := range m {
+		v.Unrecognized = tag
+	}
+	return nil
 }
 
 // ToolUpdate: Cumulative snapshot of one tool call.
@@ -486,17 +588,18 @@ type Mcp struct {
 
 // ToolKind: exactly one field is set.
 type ToolKind struct {
-	Read     bool `json:"-"`
-	Edit     bool `json:"-"`
-	Delete   bool `json:"-"`
-	Move     bool `json:"-"`
-	Search   bool `json:"-"`
-	Execute  bool `json:"-"`
-	Fetch    bool `json:"-"`
-	Think    bool `json:"-"`
-	Other    bool `json:"-"`
-	Mcp      *Mcp `json:"Mcp"`
-	Subagent bool `json:"-"`
+	Read         bool   `json:"-"`
+	Edit         bool   `json:"-"`
+	Delete       bool   `json:"-"`
+	Move         bool   `json:"-"`
+	Search       bool   `json:"-"`
+	Execute      bool   `json:"-"`
+	Fetch        bool   `json:"-"`
+	Think        bool   `json:"-"`
+	Other        bool   `json:"-"`
+	Mcp          *Mcp   `json:"Mcp"`
+	Subagent     bool   `json:"-"`
+	Unrecognized string `json:"-"` // a variant this package does not know (a newer binary): its wire name
 }
 
 // Name is the variant's wire name: "Read", …
@@ -525,7 +628,7 @@ func (v ToolKind) Name() string {
 	case v.Subagent:
 		return "Subagent"
 	}
-	return ""
+	return v.Unrecognized
 }
 
 func (v ToolKind) MarshalJSON() ([]byte, error) {
@@ -552,6 +655,8 @@ func (v ToolKind) MarshalJSON() ([]byte, error) {
 		return json.Marshal(map[string]any{"Mcp": v.Mcp})
 	case v.Subagent:
 		return json.Marshal("Subagent")
+	case v.Unrecognized != "":
+		return json.Marshal(v.Unrecognized)
 	}
 	return nil, fmt.Errorf("ToolKind: no variant set")
 }
@@ -591,10 +696,19 @@ func (v *ToolKind) UnmarshalJSON(b []byte) error {
 			v.Subagent = true
 			return nil
 		}
-		return fmt.Errorf("ToolKind: unknown variant %q", s)
+		v.Unrecognized = s
+		return nil
 	}
 	type plain ToolKind
-	return json.Unmarshal(b, (*plain)(v))
+	if err := json.Unmarshal(b, (*plain)(v)); err != nil || v.Name() != "" {
+		return err
+	}
+	var m map[string]json.RawMessage
+	json.Unmarshal(b, &m)
+	for tag := range m {
+		v.Unrecognized = tag
+	}
+	return nil
 }
 
 // ToolStatus is a wire type.
@@ -616,13 +730,14 @@ type Command struct {
 
 // ToolInput: exactly one field is set.
 type ToolInput struct {
-	None    bool     `json:"-"`
-	Path    *string  `json:"Path"`
-	Command *Command `json:"Command"`
-	Pattern *string  `json:"Pattern"`
-	Url     *string  `json:"Url"`
-	Query   *string  `json:"Query"`
-	Text    *string  `json:"Text"`
+	None         bool     `json:"-"`
+	Path         *string  `json:"Path"`
+	Command      *Command `json:"Command"`
+	Pattern      *string  `json:"Pattern"`
+	Url          *string  `json:"Url"`
+	Query        *string  `json:"Query"`
+	Text         *string  `json:"Text"`
+	Unrecognized string   `json:"-"` // a variant this package does not know (a newer binary): its wire name
 }
 
 // Name is the variant's wire name: "None", …
@@ -643,7 +758,7 @@ func (v ToolInput) Name() string {
 	case v.Text != nil:
 		return "Text"
 	}
-	return ""
+	return v.Unrecognized
 }
 
 func (v ToolInput) MarshalJSON() ([]byte, error) {
@@ -662,6 +777,8 @@ func (v ToolInput) MarshalJSON() ([]byte, error) {
 		return json.Marshal(map[string]any{"Query": v.Query})
 	case v.Text != nil:
 		return json.Marshal(map[string]any{"Text": v.Text})
+	case v.Unrecognized != "":
+		return json.Marshal(v.Unrecognized)
 	}
 	return nil, fmt.Errorf("ToolInput: no variant set")
 }
@@ -674,10 +791,19 @@ func (v *ToolInput) UnmarshalJSON(b []byte) error {
 			v.None = true
 			return nil
 		}
-		return fmt.Errorf("ToolInput: unknown variant %q", s)
+		v.Unrecognized = s
+		return nil
 	}
 	type plain ToolInput
-	return json.Unmarshal(b, (*plain)(v))
+	if err := json.Unmarshal(b, (*plain)(v)); err != nil || v.Name() != "" {
+		return err
+	}
+	var m map[string]json.RawMessage
+	json.Unmarshal(b, &m)
+	for tag := range m {
+		v.Unrecognized = tag
+	}
+	return nil
 }
 
 // FileDiff is a wire type.
@@ -710,8 +836,9 @@ const (
 
 // Request: exactly one field is set. Something the agent is waiting on the caller for. Answer once with
 type Request struct {
-	Permission *PermissionRequest `json:"Permission"`
-	Question   *QuestionRequest   `json:"Question"`
+	Permission   *PermissionRequest `json:"Permission"`
+	Question     *QuestionRequest   `json:"Question"`
+	Unrecognized string             `json:"-"` // a variant this package does not know (a newer binary): its wire name
 }
 
 // Name is the variant's wire name: "Permission", …
@@ -722,7 +849,7 @@ func (v Request) Name() string {
 	case v.Question != nil:
 		return "Question"
 	}
-	return ""
+	return v.Unrecognized
 }
 
 func (v Request) MarshalJSON() ([]byte, error) {
@@ -731,8 +858,28 @@ func (v Request) MarshalJSON() ([]byte, error) {
 		return json.Marshal(map[string]any{"Permission": v.Permission})
 	case v.Question != nil:
 		return json.Marshal(map[string]any{"Question": v.Question})
+	case v.Unrecognized != "":
+		return json.Marshal(v.Unrecognized)
 	}
 	return nil, fmt.Errorf("Request: no variant set")
+}
+
+func (v *Request) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) == nil {
+		v.Unrecognized = s
+		return nil
+	}
+	type plain Request
+	if err := json.Unmarshal(b, (*plain)(v)); err != nil || v.Name() != "" {
+		return err
+	}
+	var m map[string]json.RawMessage
+	json.Unmarshal(b, &m)
+	for tag := range m {
+		v.Unrecognized = tag
+	}
+	return nil
 }
 
 // PermissionRequest is a wire type.
@@ -832,6 +979,7 @@ type AuthStatus struct {
 	Unknown         bool             `json:"-"`
 	Authenticated   *Authenticated   `json:"Authenticated"`
 	Unauthenticated *Unauthenticated `json:"Unauthenticated"`
+	Unrecognized    string           `json:"-"` // a variant this package does not know (a newer binary): its wire name
 }
 
 // Name is the variant's wire name: "Unknown", …
@@ -844,7 +992,7 @@ func (v AuthStatus) Name() string {
 	case v.Unauthenticated != nil:
 		return "Unauthenticated"
 	}
-	return ""
+	return v.Unrecognized
 }
 
 func (v AuthStatus) MarshalJSON() ([]byte, error) {
@@ -855,6 +1003,8 @@ func (v AuthStatus) MarshalJSON() ([]byte, error) {
 		return json.Marshal(map[string]any{"Authenticated": v.Authenticated})
 	case v.Unauthenticated != nil:
 		return json.Marshal(map[string]any{"Unauthenticated": v.Unauthenticated})
+	case v.Unrecognized != "":
+		return json.Marshal(v.Unrecognized)
 	}
 	return nil, fmt.Errorf("AuthStatus: no variant set")
 }
@@ -867,10 +1017,19 @@ func (v *AuthStatus) UnmarshalJSON(b []byte) error {
 			v.Unknown = true
 			return nil
 		}
-		return fmt.Errorf("AuthStatus: unknown variant %q", s)
+		v.Unrecognized = s
+		return nil
 	}
 	type plain AuthStatus
-	return json.Unmarshal(b, (*plain)(v))
+	if err := json.Unmarshal(b, (*plain)(v)); err != nil || v.Name() != "" {
+		return err
+	}
+	var m map[string]json.RawMessage
+	json.Unmarshal(b, &m)
+	for tag := range m {
+		v.Unrecognized = tag
+	}
+	return nil
 }
 
 // AuthKind: exactly one field is set. The login kind decides which features exist (plan usage needs a subscription).
@@ -879,6 +1038,7 @@ type AuthKind struct {
 	ApiKey        bool    `json:"-"`
 	CloudProvider bool    `json:"-"`
 	Other         *string `json:"Other"`
+	Unrecognized  string  `json:"-"` // a variant this package does not know (a newer binary): its wire name
 }
 
 // Name is the variant's wire name: "Subscription", …
@@ -893,7 +1053,7 @@ func (v AuthKind) Name() string {
 	case v.Other != nil:
 		return "Other"
 	}
-	return ""
+	return v.Unrecognized
 }
 
 func (v AuthKind) MarshalJSON() ([]byte, error) {
@@ -906,6 +1066,8 @@ func (v AuthKind) MarshalJSON() ([]byte, error) {
 		return json.Marshal("CloudProvider")
 	case v.Other != nil:
 		return json.Marshal(map[string]any{"Other": v.Other})
+	case v.Unrecognized != "":
+		return json.Marshal(v.Unrecognized)
 	}
 	return nil, fmt.Errorf("AuthKind: no variant set")
 }
@@ -924,10 +1086,19 @@ func (v *AuthKind) UnmarshalJSON(b []byte) error {
 			v.CloudProvider = true
 			return nil
 		}
-		return fmt.Errorf("AuthKind: unknown variant %q", s)
+		v.Unrecognized = s
+		return nil
 	}
 	type plain AuthKind
-	return json.Unmarshal(b, (*plain)(v))
+	if err := json.Unmarshal(b, (*plain)(v)); err != nil || v.Name() != "" {
+		return err
+	}
+	var m map[string]json.RawMessage
+	json.Unmarshal(b, &m)
+	for tag := range m {
+		v.Unrecognized = tag
+	}
+	return nil
 }
 
 // AccountInfo is a wire type.
@@ -950,8 +1121,9 @@ type EnvVar struct {
 
 // LoginMethod: exactly one field is set. A login method the application can show to the user.
 type LoginMethod struct {
-	Terminal *Terminal `json:"Terminal"`
-	EnvVar   *EnvVar   `json:"EnvVar"`
+	Terminal     *Terminal `json:"Terminal"`
+	EnvVar       *EnvVar   `json:"EnvVar"`
+	Unrecognized string    `json:"-"` // a variant this package does not know (a newer binary): its wire name
 }
 
 // Name is the variant's wire name: "Terminal", …
@@ -962,7 +1134,7 @@ func (v LoginMethod) Name() string {
 	case v.EnvVar != nil:
 		return "EnvVar"
 	}
-	return ""
+	return v.Unrecognized
 }
 
 func (v LoginMethod) MarshalJSON() ([]byte, error) {
@@ -971,8 +1143,28 @@ func (v LoginMethod) MarshalJSON() ([]byte, error) {
 		return json.Marshal(map[string]any{"Terminal": v.Terminal})
 	case v.EnvVar != nil:
 		return json.Marshal(map[string]any{"EnvVar": v.EnvVar})
+	case v.Unrecognized != "":
+		return json.Marshal(v.Unrecognized)
 	}
 	return nil, fmt.Errorf("LoginMethod: no variant set")
+}
+
+func (v *LoginMethod) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) == nil {
+		v.Unrecognized = s
+		return nil
+	}
+	type plain LoginMethod
+	if err := json.Unmarshal(b, (*plain)(v)); err != nil || v.Name() != "" {
+		return err
+	}
+	var m map[string]json.RawMessage
+	json.Unmarshal(b, &m)
+	for tag := range m {
+		v.Unrecognized = tag
+	}
+	return nil
 }
 
 // Capabilities: Effective caller actions for one agent or session.
@@ -1027,8 +1219,9 @@ type Select struct {
 
 // ConfigKind: exactly one field is set.
 type ConfigKind struct {
-	Boolean bool    `json:"-"`
-	Select  *Select `json:"Select"`
+	Boolean      bool    `json:"-"`
+	Select       *Select `json:"Select"`
+	Unrecognized string  `json:"-"` // a variant this package does not know (a newer binary): its wire name
 }
 
 // Name is the variant's wire name: "Boolean", …
@@ -1039,7 +1232,7 @@ func (v ConfigKind) Name() string {
 	case v.Select != nil:
 		return "Select"
 	}
-	return ""
+	return v.Unrecognized
 }
 
 func (v ConfigKind) MarshalJSON() ([]byte, error) {
@@ -1048,6 +1241,8 @@ func (v ConfigKind) MarshalJSON() ([]byte, error) {
 		return json.Marshal("Boolean")
 	case v.Select != nil:
 		return json.Marshal(map[string]any{"Select": v.Select})
+	case v.Unrecognized != "":
+		return json.Marshal(v.Unrecognized)
 	}
 	return nil, fmt.Errorf("ConfigKind: no variant set")
 }
@@ -1060,10 +1255,19 @@ func (v *ConfigKind) UnmarshalJSON(b []byte) error {
 			v.Boolean = true
 			return nil
 		}
-		return fmt.Errorf("ConfigKind: unknown variant %q", s)
+		v.Unrecognized = s
+		return nil
 	}
 	type plain ConfigKind
-	return json.Unmarshal(b, (*plain)(v))
+	if err := json.Unmarshal(b, (*plain)(v)); err != nil || v.Name() != "" {
+		return err
+	}
+	var m map[string]json.RawMessage
+	json.Unmarshal(b, &m)
+	for tag := range m {
+		v.Unrecognized = tag
+	}
+	return nil
 }
 
 // ConfigChoice is a wire type.
@@ -1135,10 +1339,11 @@ type Failed struct {
 
 // StopReason: exactly one field is set.
 type StopReason struct {
-	Cancelled bool       `json:"-"`
-	Refused   bool       `json:"-"`
-	Completed *Completed `json:"Completed"`
-	Failed    *Failed    `json:"Failed"`
+	Cancelled    bool       `json:"-"`
+	Refused      bool       `json:"-"`
+	Completed    *Completed `json:"Completed"`
+	Failed       *Failed    `json:"Failed"`
+	Unrecognized string     `json:"-"` // a variant this package does not know (a newer binary): its wire name
 }
 
 // Name is the variant's wire name: "Cancelled", …
@@ -1153,7 +1358,7 @@ func (v StopReason) Name() string {
 	case v.Failed != nil:
 		return "Failed"
 	}
-	return ""
+	return v.Unrecognized
 }
 
 func (v StopReason) MarshalJSON() ([]byte, error) {
@@ -1166,6 +1371,8 @@ func (v StopReason) MarshalJSON() ([]byte, error) {
 		return json.Marshal(map[string]any{"Completed": v.Completed})
 	case v.Failed != nil:
 		return json.Marshal(map[string]any{"Failed": v.Failed})
+	case v.Unrecognized != "":
+		return json.Marshal(v.Unrecognized)
 	}
 	return nil, fmt.Errorf("StopReason: no variant set")
 }
@@ -1181,10 +1388,19 @@ func (v *StopReason) UnmarshalJSON(b []byte) error {
 			v.Refused = true
 			return nil
 		}
-		return fmt.Errorf("StopReason: unknown variant %q", s)
+		v.Unrecognized = s
+		return nil
 	}
 	type plain StopReason
-	return json.Unmarshal(b, (*plain)(v))
+	if err := json.Unmarshal(b, (*plain)(v)); err != nil || v.Name() != "" {
+		return err
+	}
+	var m map[string]json.RawMessage
+	json.Unmarshal(b, &m)
+	for tag := range m {
+		v.Unrecognized = tag
+	}
+	return nil
 }
 
 // CompletionSource is a wire type.
@@ -1225,9 +1441,10 @@ type Queued struct {
 
 // DeliveryKind: exactly one field is set.
 type DeliveryKind struct {
-	Started *Started `json:"Started"`
-	Steered *Steered `json:"Steered"`
-	Queued  *Queued  `json:"Queued"`
+	Started      *Started `json:"Started"`
+	Steered      *Steered `json:"Steered"`
+	Queued       *Queued  `json:"Queued"`
+	Unrecognized string   `json:"-"` // a variant this package does not know (a newer binary): its wire name
 }
 
 // Name is the variant's wire name: "Started", …
@@ -1240,7 +1457,7 @@ func (v DeliveryKind) Name() string {
 	case v.Queued != nil:
 		return "Queued"
 	}
-	return ""
+	return v.Unrecognized
 }
 
 func (v DeliveryKind) MarshalJSON() ([]byte, error) {
@@ -1251,6 +1468,26 @@ func (v DeliveryKind) MarshalJSON() ([]byte, error) {
 		return json.Marshal(map[string]any{"Steered": v.Steered})
 	case v.Queued != nil:
 		return json.Marshal(map[string]any{"Queued": v.Queued})
+	case v.Unrecognized != "":
+		return json.Marshal(v.Unrecognized)
 	}
 	return nil, fmt.Errorf("DeliveryKind: no variant set")
+}
+
+func (v *DeliveryKind) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) == nil {
+		v.Unrecognized = s
+		return nil
+	}
+	type plain DeliveryKind
+	if err := json.Unmarshal(b, (*plain)(v)); err != nil || v.Name() != "" {
+		return err
+	}
+	var m map[string]json.RawMessage
+	json.Unmarshal(b, &m)
+	for tag := range m {
+		v.Unrecognized = tag
+	}
+	return nil
 }
