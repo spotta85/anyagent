@@ -11,7 +11,7 @@ documentation = "https://docs.rs/anyagent"
 readme = "README.md"
 keywords = ["agent", "acp", "claude", "codex", "cli"]
 categories = ["api-bindings", "development-tools"]
-exclude = ["docs/", "image.png", "packages/node"]
+exclude = ["docs/", "image.png", "packages/node", "packages/swift", "packages/go", "Package.swift"]
 
 [workspace]
 exclude = ["spikes/s0-acp"]
