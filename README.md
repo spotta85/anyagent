@@ -125,4 +125,4 @@ Contributions are welcome! Please be sure to open an issue first. Upon approval 
 
 ## License
 
-MIT or Apache-2.0.
+MIT
