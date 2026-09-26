@@ -40,7 +40,7 @@ const HARNESSES: &[&str] = &[
     "qwen",
 ];
 const EVENT_TIMEOUT: Duration = Duration::from_secs(120);
-const OPENCODE_MODEL: &str = "opencode/muse-spark-1.2-contributor-free";
+const OPENCODE_MODEL: &str = "opencode/muse-spark-1.3-contributor-free";
 /// qwen models come from the box's `~/.qwen/settings.json`; every box
 /// in the matrix lists this OpenRouter entry (vision-capable, answers in
 /// English).
@@ -833,18 +833,10 @@ async fn an_unknown_slash_prompt_is_plain_text() {
             .await
             .unwrap();
         let text = drain_to_turn_end(&session, &mut events, &format!("{h}: slash text")).await;
-        // claude owns the `/` namespace: since 2.1.261 the CLI answers an
-        // unknown command itself, in a synthetic message we surface as text.
-        if h == "claude" {
-            assert!(text.contains("Unknown command"), "{h}: text was {text:?}");
-            pass(
-                h,
-                "unknown slash command answered by the CLI, text surfaced",
-            );
-        } else {
-            assert!(text.contains("KUMQUAT"), "{h}: text was {text:?}");
-            pass(h, "unknown slash text stayed plain text");
-        }
+        // claude 2.1.261–2.1.2xx answered unknown commands itself; 2.1.281
+        // passes them to the model again.
+        assert!(text.contains("KUMQUAT"), "{h}: text was {text:?}");
+        pass(h, "unknown slash text stayed plain text");
         session.close().await.unwrap();
     }
 }
@@ -1122,7 +1114,7 @@ async fn cancel_ends_the_turn_in_every_queue_shape() {
     }
 }
 
-/// Resume recalls prior codeword without replaying old deltas; without Resume capability it fails typed ResumeFailed.
+/// Resume recalls a prior fact without replaying old deltas; without Resume capability it fails typed ResumeFailed.
 #[tokio::test]
 #[ignore = "live: talks to real agents"]
 async fn resume_recalls_without_replaying() {
@@ -1149,7 +1141,7 @@ async fn resume_recalls_without_replaying() {
             continue;
         }
         session
-            .prompt("Remember this codeword: FALCON42. Just confirm. No tools.")
+            .prompt("Our project is named FALCON42. Just confirm. No tools.")
             .await
             .unwrap();
         drain_to_turn_end(&session, &mut events, &format!("{h}: codeword turn")).await;
@@ -1179,7 +1171,7 @@ async fn resume_recalls_without_replaying() {
             );
         }
         session
-            .prompt("What is the codeword? No tools.")
+            .prompt("What is our project named? No tools.")
             .await
             .unwrap();
         let text = drain_to_turn_end(&session, &mut events, &format!("{h}: recall turn")).await;
