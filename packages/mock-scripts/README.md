@@ -13,6 +13,9 @@ from its start.
 | `die.json` | text, then the agent process dies with status 9 | S7 |
 | `flood.json` | 20 000 text deltas as 400 batches of 50 with a 10 ms pause, end | S8a, S8b |
 | `configure.json` | one live `model` option (sonnet, opus), one text turn | S10 |
+| `queued.json` | a permission turn, then a text turn a queued prompt plays | T3 port |
+| `question.json` | one question request (a choice and a free-text field), end after the answer | T3 port |
+| `resume.json` | advertises `Resume` with token `mock-token`; resuming fails with `ResumeFailed` | T3 port |
 
 The format is the mock's `Script` as JSON; every field is optional.
 Steps: `{"Emit": <EventKind>}`, `"AwaitAnswer"`, `{"End": <StopReason>}`,

@@ -1,0 +1,4 @@
+{"resume": true, "turns": [[
+  {"Emit": {"TextDelta": {"message_id": "m1", "text": "hi"}}},
+  {"End": {"Completed": {"source": "Protocol"}}}
+]]}
