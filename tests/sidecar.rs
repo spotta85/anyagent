@@ -426,7 +426,7 @@ fn every_mock_script_parses() {
             count += 1;
         }
     }
-    assert_eq!(count, 5, "scripts in {SCRIPTS}");
+    assert_eq!(count, 8, "scripts in {SCRIPTS}");
 }
 
 /// S8's script: 20 000 deltas, paced in batches, every one delivered

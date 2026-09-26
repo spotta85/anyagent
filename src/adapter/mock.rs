@@ -15,8 +15,8 @@ use crate::adapter::{
     Adapter, ConnectRequest, DriverCommand, DriverConnection, DriverEvent, DriverInfo,
 };
 use crate::agent::{
-    AgentDetails, AuthKind, AuthStatus, Capabilities, Capability, ConfigOption,
-    SessionConfiguration,
+    AgentDetails, AuthKind, AuthStatus, Capabilities, Capability, ConfigOption, ResumeToken,
+    SessionConfiguration, SessionStart,
 };
 use crate::error::AgentError;
 use crate::event::{
@@ -77,6 +77,8 @@ pub struct Script {
     /// Advertise compaction; `compact` then reports `ContextCompacted`.
     pub compact: bool,
     pub permissions: bool,
+    /// Advertise `Resume` and mint a token; resuming fails, as the mock keeps no history.
+    pub resume: bool,
     /// Advertised config options; `configure` sets one and reports it back.
     pub options: Vec<ConfigOption>,
 }
@@ -95,6 +97,7 @@ impl Default for Script {
             stale_before_ack: None,
             compact: false,
             permissions: true,
+            resume: false,
             options: Vec::new(),
         }
     }
@@ -146,7 +149,10 @@ impl MockAdapter {
 
 #[async_trait]
 impl Adapter for MockAdapter {
-    async fn connect(&self, _request: ConnectRequest) -> Result<DriverConnection, AgentError> {
+    async fn connect(&self, request: ConnectRequest) -> Result<DriverConnection, AgentError> {
+        if self.script.resume && matches!(request.options.start, SessionStart::Resume(_)) {
+            return Err(AgentError::ResumeFailed("the mock keeps no history".into()));
+        }
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (ev_tx, ev_rx) = mpsc::channel(self.script.buffer);
         tokio::spawn(drive(
@@ -297,6 +303,9 @@ fn info(script: &Script, configuration: &SessionConfiguration) -> DriverInfo {
     if script.compact {
         caps.push(Capability::Compact);
     }
+    if script.resume {
+        caps.push(Capability::Resume);
+    }
     // Each option's `current` follows the configuration.
     let config_options = script
         .options
@@ -321,7 +330,7 @@ fn info(script: &Script, configuration: &SessionConfiguration) -> DriverInfo {
             commands: Vec::new(),
         },
         configuration: configuration.clone(),
-        resume_token: None,
+        resume_token: script.resume.then(|| ResumeToken::new("mock-token")),
         title: None,
         deterministic_turn_end: script.deterministic,
         deterministic_agent_turn_end: script.deterministic_agent,
