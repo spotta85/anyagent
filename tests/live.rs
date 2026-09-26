@@ -829,13 +829,13 @@ async fn an_unknown_slash_prompt_is_plain_text() {
     for h in enabled().await {
         let (session, mut events, _dir) = open(h).await;
         session
-            .prompt("/definitely-not-a-command Reply with only the word KUMQUAT.")
+            .prompt("/definitely-not-a-command What is 6 times 7? Answer with the number.")
             .await
             .unwrap();
         let text = drain_to_turn_end(&session, &mut events, &format!("{h}: slash text")).await;
         // claude 2.1.261–2.1.2xx answered unknown commands itself; 2.1.281
         // passes them to the model again.
-        assert!(text.contains("KUMQUAT"), "{h}: text was {text:?}");
+        assert!(text.contains("42"), "{h}: text was {text:?}");
         pass(h, "unknown slash text stayed plain text");
         session.close().await.unwrap();
     }
