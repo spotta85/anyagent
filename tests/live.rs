@@ -1647,7 +1647,9 @@ async fn close_kills_the_agents_background_jobs() {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while !matching_pids(&["-f"], &marker).is_empty() {
             if std::time::Instant::now() > deadline {
-                matching_pids(&["-f"], &marker).iter().for_each(|p| kill_pid(p));
+                matching_pids(&["-f"], &marker)
+                    .iter()
+                    .for_each(|p| kill_pid(p));
                 panic!("{h}: `{marker}` outlived the session");
             }
             tokio::time::sleep(Duration::from_millis(200)).await;

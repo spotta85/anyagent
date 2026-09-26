@@ -202,7 +202,10 @@ fn kill_tagged(tag: &str) {
         .filter_map(|line| line.split_whitespace().next())
         .collect();
     if !pids.is_empty() {
-        let _ = std::process::Command::new("kill").arg("-9").args(&pids).status();
+        let _ = std::process::Command::new("kill")
+            .arg("-9")
+            .args(&pids)
+            .status();
     }
 }
 
@@ -430,7 +433,11 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(40)).await;
         }
-        Command::new("kill").args(["-9", &job]).status().await.unwrap();
+        Command::new("kill")
+            .args(["-9", &job])
+            .status()
+            .await
+            .unwrap();
         panic!("detached job {job} survived shutdown");
     }
 
