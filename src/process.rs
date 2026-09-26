@@ -4,8 +4,9 @@ use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use command_group::{AsyncCommandGroup, AsyncGroupChild};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -16,6 +17,14 @@ use crate::error::AgentError;
 
 const STDERR_TAIL_LINES: usize = 6;
 const LOGIN_SHELL_TIMEOUT: Duration = Duration::from_secs(5);
+/// Env var every agent process and its descendants carry; `shutdown` finds
+/// jobs that left the group by it.
+const SPAWN_TAG_ENV: &str = "ANYAGENT_SPAWN_ID";
+/// `ps` listing every process with its environment appended.
+#[cfg(target_os = "linux")]
+const PS_WITH_ENV: &[&str] = &["-A", "e", "-ww", "-o", "pid=,command="];
+#[cfg(all(unix, not(target_os = "linux")))]
+const PS_WITH_ENV: &[&str] = &["-A", "-E", "-ww", "-o", "pid=,command="];
 
 /// Everything needed to launch one agent process.
 pub(crate) struct Spawn {
@@ -39,6 +48,8 @@ pub(crate) struct Child {
     inner: AsyncGroupChild,
     /// `shutdown` ran; `Drop` has nothing left to kill.
     finished: bool,
+    /// This spawn's `SPAWN_TAG_ENV` value.
+    tag: String,
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
     stderr_task: Option<tokio::task::JoinHandle<()>>,
 }
@@ -68,12 +79,14 @@ pub(crate) async fn spawn(spec: Spawn) -> Result<Child, AgentError> {
         std::env::var("PATH").ok().as_deref(),
         login_shell_path().await.as_deref(),
     );
+    let tag = spawn_tag();
     let mut command = Command::new(&spec.exec_path);
     command
         .args(&spec.args)
         .current_dir(&spec.cwd)
         .env("PATH", path)
         .envs(spec.env)
+        .env(SPAWN_TAG_ENV, &tag)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -103,6 +116,7 @@ pub(crate) async fn spawn(spec: Spawn) -> Result<Child, AgentError> {
         stdin: Arc::new(tokio::sync::Mutex::new(child.inner().stdin.take())),
         stdout: child.inner().stdout.take(),
         finished: false,
+        tag,
         inner: child,
         stderr_tail,
         stderr_task,
@@ -162,6 +176,40 @@ impl Child {
     }
 }
 
+/// A tag no other live process carries: our pid, the clock, a counter.
+fn spawn_tag() -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    format!("{}-{nanos}-{n}", std::process::id())
+}
+
+/// SIGKILLs every process whose environment holds `tag`. Descendants
+/// inherit it even after leaving the group; macOS hides the environment
+/// of its own system binaries (`/bin/sleep`), so those slip through.
+#[cfg(unix)]
+fn kill_tagged(tag: &str) {
+    let needle = format!("{SPAWN_TAG_ENV}={tag}");
+    let Ok(out) = std::process::Command::new("ps").args(PS_WITH_ENV).output() else {
+        return;
+    };
+    let listing = String::from_utf8_lossy(&out.stdout);
+    let pids: Vec<&str> = listing
+        .lines()
+        .filter(|line| line.split_whitespace().any(|word| word == needle))
+        .filter_map(|line| line.split_whitespace().next())
+        .collect();
+    if !pids.is_empty() {
+        let _ = std::process::Command::new("kill").arg("-9").args(&pids).status();
+    }
+}
+
+/// The Job Object already holds detached jobs on windows.
+#[cfg(windows)]
+fn kill_tagged(_tag: &str) {}
+
 /// "exit status: N" on every platform; signals and abnormal windows codes
 /// keep std's own wording.
 fn status_text(status: std::process::ExitStatus) -> String {
@@ -172,9 +220,11 @@ fn status_text(status: std::process::ExitStatus) -> String {
 }
 
 impl Child {
-    /// Kills the whole group; harmless when it is already gone.
+    /// Kills the whole group, then every process still carrying this
+    /// spawn's tag (jobs the agent detached). Harmless when all are gone.
     fn kill_group(&mut self) {
         let _ = self.inner.start_kill();
+        kill_tagged(&self.tag);
     }
 
     /// Closes stdin (EOF ends every stdio agent's read loop), adds SIGTERM
@@ -355,6 +405,33 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(40)).await;
         }
         panic!("worker {worker} survived shutdown");
+    }
+
+    /// Shutdown kills a job the agent detached into a group of its own (what
+    /// opencode, pi, and grok do for backgrounded shell commands): the group
+    /// kill misses it, the spawn tag does not.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_kills_a_detached_job() {
+        let mut child = spawn(node(
+            "const job = require('child_process').spawn(process.execPath, \
+             ['-e', 'setTimeout(() => {}, 30000)'], { detached: true, stdio: 'ignore' }); \
+             job.unref(); console.log(job.pid); setTimeout(() => {}, 30000)",
+        ))
+        .await
+        .unwrap();
+        let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+        let job = lines.next_line().await.unwrap().unwrap();
+        child.shutdown(Duration::from_millis(200)).await;
+        for _ in 0..50 {
+            let alive = Command::new("kill").args(["-0", &job]).status().await;
+            if !alive.unwrap().success() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        }
+        Command::new("kill").args(["-9", &job]).status().await.unwrap();
+        panic!("detached job {job} survived shutdown");
     }
 
     /// stderr_tail retains last 6 lines for ProcessExited reports.
