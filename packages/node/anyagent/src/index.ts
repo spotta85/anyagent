@@ -61,7 +61,8 @@ export class Runtime {
   private pending = new Map<number, Pending>();
   private sessions = new Map<string, Session>();
   private dead?: AnyagentError;
-  private exited!: Promise<number | null>;
+  /** Settles with the exit code once the process is gone: closed, killed, or crashed. */
+  exited!: Promise<number | null>;
   private onHello?: () => void;
 
   /** Spawns the binary; resolves after its hello line. */
