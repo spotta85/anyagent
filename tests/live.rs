@@ -40,7 +40,7 @@ const HARNESSES: &[&str] = &[
     "qwen",
 ];
 const EVENT_TIMEOUT: Duration = Duration::from_secs(120);
-const OPENCODE_MODEL: &str = "opencode/muse-spark-1.2-contributor-free";
+const OPENCODE_MODEL: &str = "opencode/muse-spark-1.3-contributor-free";
 /// qwen models come from the box's `~/.qwen/settings.json`; every box
 /// in the matrix lists this OpenRouter entry (vision-capable, answers in
 /// English).
@@ -829,22 +829,14 @@ async fn an_unknown_slash_prompt_is_plain_text() {
     for h in enabled().await {
         let (session, mut events, _dir) = open(h).await;
         session
-            .prompt("/definitely-not-a-command Reply with only the word KUMQUAT.")
+            .prompt("/definitely-not-a-command What is 6 times 7? Answer with the number.")
             .await
             .unwrap();
         let text = drain_to_turn_end(&session, &mut events, &format!("{h}: slash text")).await;
-        // claude owns the `/` namespace: since 2.1.261 the CLI answers an
-        // unknown command itself, in a synthetic message we surface as text.
-        if h == "claude" {
-            assert!(text.contains("Unknown command"), "{h}: text was {text:?}");
-            pass(
-                h,
-                "unknown slash command answered by the CLI, text surfaced",
-            );
-        } else {
-            assert!(text.contains("KUMQUAT"), "{h}: text was {text:?}");
-            pass(h, "unknown slash text stayed plain text");
-        }
+        // claude 2.1.261–2.1.2xx answered unknown commands itself; 2.1.281
+        // passes them to the model again.
+        assert!(text.contains("42"), "{h}: text was {text:?}");
+        pass(h, "unknown slash text stayed plain text");
         session.close().await.unwrap();
     }
 }
@@ -1122,7 +1114,7 @@ async fn cancel_ends_the_turn_in_every_queue_shape() {
     }
 }
 
-/// Resume recalls prior codeword without replaying old deltas; without Resume capability it fails typed ResumeFailed.
+/// Resume recalls a prior fact without replaying old deltas; without Resume capability it fails typed ResumeFailed.
 #[tokio::test]
 #[ignore = "live: talks to real agents"]
 async fn resume_recalls_without_replaying() {
@@ -1149,7 +1141,7 @@ async fn resume_recalls_without_replaying() {
             continue;
         }
         session
-            .prompt("Remember this codeword: FALCON42. Just confirm. No tools.")
+            .prompt("Our project is named FALCON42. Just confirm. No tools.")
             .await
             .unwrap();
         drain_to_turn_end(&session, &mut events, &format!("{h}: codeword turn")).await;
@@ -1179,7 +1171,7 @@ async fn resume_recalls_without_replaying() {
             );
         }
         session
-            .prompt("What is the codeword? No tools.")
+            .prompt("What is our project named? No tools.")
             .await
             .unwrap();
         let text = drain_to_turn_end(&session, &mut events, &format!("{h}: recall turn")).await;
@@ -1615,6 +1607,54 @@ async fn close_returns_promptly_and_ends_the_stream() {
             }
         }
         pass(h, "close is prompt and the stream ends");
+    }
+}
+
+/// A background job the agent starts dies with the session: close takes
+/// down the agent's whole process group, not just the agent.
+#[tokio::test]
+#[ignore = "live: talks to real agents"]
+async fn close_kills_the_agents_background_jobs() {
+    for h in enabled().await {
+        if cfg!(windows) {
+            println!("SKIP {h}: background jobs checked on unix");
+            continue;
+        }
+        let (session, mut events, _dir) = open(h).await;
+        // A unique argument is the marker pgrep finds. node, not sleep:
+        // macOS hides the environment of its system binaries.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos();
+        let marker = format!("anyagent-leak-{nanos}");
+        session
+            .prompt(format!(
+                "I'm testing that closing this session stops background jobs. Use your \
+                 shell tool to run exactly this command, then reply OK: \
+                 `node -e 'setTimeout(() => {{}}, 600000)' {marker} > /dev/null 2>&1 &`"
+            ))
+            .await
+            .unwrap();
+        drain_to_turn_end(&session, &mut events, &format!("{h}: background job")).await;
+        if matching_pids(&["-f"], &marker).is_empty() {
+            println!("SKIP {h}: the agent did not leave the job running");
+            session.close().await.unwrap();
+            continue;
+        }
+        session.close().await.unwrap();
+        // Poll briefly: the kills land, then the OS reaps.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !matching_pids(&["-f"], &marker).is_empty() {
+            if std::time::Instant::now() > deadline {
+                matching_pids(&["-f"], &marker)
+                    .iter()
+                    .for_each(|p| kill_pid(p));
+                panic!("{h}: `{marker}` outlived the session");
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        pass(h, "close killed the agent's background job");
     }
 }
 
