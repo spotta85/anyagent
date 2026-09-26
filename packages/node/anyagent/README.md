@@ -31,6 +31,9 @@ await rt.close();
 `is(ev, "TextDelta")` narrows `ev.kind` to that variant; `kindOf(ev)` gives
 the variant name for a `switch` or a log line.
 
+`rt.exited` settles with the exit code when `anyagent serve` is gone, so an
+app can start a new runtime after a crash.
+
 `session.info` and `session.status` stay current. A session error
 (`AuthRequired`, `ProcessExited`) throws from the `for await`; a reader that
 falls 4096 events behind gets `ConsumerLagged` and its session is closed.
