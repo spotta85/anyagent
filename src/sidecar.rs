@@ -351,15 +351,22 @@ enum Cmd {
     },
 }
 
-/// A catalog id like `"claude"`, a catalog agent at an exact path, or an
-/// ACP agent the catalog does not know.
+/// A catalog id like `"claude"`, a catalog agent at an exact path, or an unknown ACP agent.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(untagged)]
 enum AgentRef {
     Id(String),
     Acp { acp: AcpSpec },
-    At { id: String, path: PathBuf },
+    At(AgentAt),
+}
+
+/// A catalog agent run from one executable: `{"id": "claude", "path": "/opt/claude"}`.
+#[derive(Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+struct AgentAt {
+    id: String,
+    path: PathBuf,
 }
 
 #[derive(Deserialize)]
@@ -553,7 +560,7 @@ impl State {
             AgentRef::Acp { acp } => {
                 return Ok(AgentInstallation::acp(acp.name, acp.path, acp.args));
             }
-            AgentRef::At { id, path } => return Ok(AgentInstallation::at(id, path)),
+            AgentRef::At(at) => return Ok(AgentInstallation::at(at.id, at.path)),
             AgentRef::Id(id) => id,
         };
         let cached = self
