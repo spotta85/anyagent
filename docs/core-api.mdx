@@ -141,7 +141,7 @@ two events bracket everything else.
 | Variant | Payload | Notes |
 |---|---|---|
 | `TurnStarted` | `origin` | `Prompt(id)` for yours, `Agent` when the agent woke itself (background work finishing) |
-| `TurnEnded` | `stop`, `background`, `usage` | Exactly once per turn. `background` lists tools still running. `usage` is the turn's `input_tokens`, `cached_input_tokens`, `output_tokens` (Claude, Codex, opencode, pi; absent elsewhere) |
+| `TurnEnded` | `stop`, `background`, `usage` | Exactly once per turn. `background` lists tools still running. `usage` is the turn's `input_tokens`, `cached_input_tokens`, `output_tokens` (Claude, Codex, opencode, pi, Antigravity over `agy`; absent elsewhere) |
 
 `StopReason`:
 
