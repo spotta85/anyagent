@@ -9,9 +9,9 @@ use futures::StreamExt;
 
 use anyagent::{
     AgentError, AgentInstallation, Answer, AuthKind, AuthStatus, Capability, ConfigId, ConfigKind,
-    ConfigValue, DeliveryKind, Event, EventKind, Events, Input, LoginMethod, McpServer,
-    PermissionChoice, PermissionRequest, PlanStatus, QuestionAnswer, Request, Runtime, Session,
-    SessionOptions, StopReason, ToolInput, ToolKind, ToolStatus, ToolUpdate, TurnUsage,
+    ConfigValue, DeliveryKind, DiagnosticLevel, Event, EventKind, Events, Input, LoginMethod,
+    McpServer, PermissionChoice, PermissionRequest, PlanStatus, QuestionAnswer, Request, Runtime,
+    Session, SessionOptions, StopReason, ToolInput, ToolKind, ToolStatus, ToolUpdate, TurnUsage,
 };
 
 mod common;
@@ -1255,7 +1255,7 @@ async fn rollback_drops_turns_and_confirms_with_session_updated() {
 }
 
 /// Our launch flag, a revert's echo of the session's own model, and the
-/// settings, revert, hook and summary-part notifications stay quiet; a real
+/// settings, revert, completed-hook and summary-part notifications stay quiet; a real
 /// model change or a host-enabled feature still surfaces.
 #[tokio::test]
 async fn warnings_about_our_own_flag_and_revert_stay_quiet() {
@@ -1294,6 +1294,24 @@ async fn warnings_about_our_own_flag_and_revert_stay_quiet() {
         "{seen:?}"
     );
     session.close().await.unwrap();
+}
+
+/// A user hook that blocks the prompt is a warning carrying its own text; a
+/// completed hook stays quiet (see the test above).
+#[tokio::test]
+async fn a_blocked_hook_is_a_warning() {
+    let (session, mut events) = open("hook", "").await;
+    session.prompt("hook-blocked").await.unwrap();
+    let mut diagnostics = Vec::new();
+    loop {
+        match next(&mut events).await.kind {
+            EventKind::Diagnostic(d) => diagnostics.push((d.level, d.message)),
+            EventKind::TurnEnded { .. } => break,
+            _ => {}
+        }
+    }
+    let blocked = "hook userPromptSubmit blocked: no secrets in prompts".to_owned();
+    assert_eq!(diagnostics, [(DiagnosticLevel::Warning, blocked)]);
 }
 
 /// The server's own rename lands as the session title.

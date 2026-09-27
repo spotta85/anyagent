@@ -1146,7 +1146,16 @@ impl Drive {
                     _ => Ok(()),
                 }
             }
-            // Session-state echoes, hook runs and login bookkeeping the engine
+            // A user hook that failed, blocked or stopped the prompt; a completed one is noise.
+            "hook/completed" => match params["run"]["status"].as_str() {
+                Some("completed") => Ok(()),
+                _ => {
+                    self.events
+                        .diagnostic(DiagnosticLevel::Warning, hook_text(&params["run"]))
+                        .await
+                }
+            },
+            // Session-state echoes, hook starts and login bookkeeping the engine
             // owns or does not need; plan deltas repeat the completed plan item.
             "thread/started"
             | "item/plan/delta"
@@ -1154,7 +1163,6 @@ impl Drive {
             | "thread/settings/updated"
             | "thread/reverted"
             | "hook/started"
-            | "hook/completed"
             | "item/reasoning/summaryPartAdded"
             | "serverRequest/resolved"
             | "remoteControl/status/changed"
@@ -1815,6 +1823,29 @@ fn notice_text(params: &Value) -> String {
         .or_else(|| params["summary"].as_str())
         .map(str::to_owned)
         .unwrap_or_else(|| params.to_string())
+}
+
+/// A hook run as one line (0.154.0 `HookRunSummary`): event, status, then the
+/// hook's own output entries, or its `statusMessage` when it has none.
+fn hook_text(run: &Value) -> String {
+    let mut own: Vec<&str> = run["entries"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e["text"].as_str())
+        .collect();
+    if own.is_empty() {
+        own.extend(run["statusMessage"].as_str());
+    }
+    let event = run["eventName"].as_str().unwrap_or("unknown");
+    let head = format!(
+        "hook {event} {}",
+        run["status"].as_str().unwrap_or("unknown")
+    );
+    match own.is_empty() {
+        true => head,
+        false => format!("{head}: {}", own.join("; ")),
+    }
 }
 
 /// `account/rateLimits/read` result or `/updated` params → the plan's two
