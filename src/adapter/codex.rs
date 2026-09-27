@@ -145,9 +145,14 @@ fn initialize_params() -> Value {
     })
 }
 
-/// The MCP servers as `-c mcp_servers.<name>.<key>=<toml>` launch overrides,
-/// the wire having no per-thread declaration. SSE is not a codex transport.
-fn mcp_overrides(servers: &[McpServer]) -> Result<Vec<String>, AgentError> {
+/// Environment pairs handed to the spawned server.
+type Env = Vec<(String, String)>;
+
+/// The MCP servers as `-c mcp_servers.<name>.<key>=<toml>` launch overrides
+/// plus the env pairs they need, the wire having no per-thread declaration.
+/// A bearer `Authorization` header travels as `bearer_token_env_var` so the
+/// token stays out of argv. SSE is not a codex transport.
+fn mcp_overrides(servers: &[McpServer]) -> Result<(Vec<String>, Env), AgentError> {
     let quote = |s: &str| serde_json::to_string(s).unwrap_or_default();
     let table = |map: &std::collections::BTreeMap<String, String>| {
         let pairs: Vec<String> = map
@@ -157,6 +162,7 @@ fn mcp_overrides(servers: &[McpServer]) -> Result<Vec<String>, AgentError> {
         format!("{{{}}}", pairs.join(", "))
     };
     let mut args = Vec::new();
+    let mut env = Vec::new();
     for server in servers {
         // The name is a bare TOML key segment; anything else would split or
         // break the override.
@@ -182,8 +188,17 @@ fn mcp_overrides(servers: &[McpServer]) -> Result<Vec<String>, AgentError> {
             }
             McpConnection::Http { url, headers } => {
                 push("url", quote(url));
-                if !headers.is_empty() {
-                    push("http_headers", table(headers));
+                let (bearer, rest) = split_bearer(headers);
+                if let Some(token) = bearer {
+                    let var = format!(
+                        "ANYAGENT_MCP_{}_TOKEN",
+                        server.name.to_uppercase().replace('-', "_")
+                    );
+                    push("bearer_token_env_var", quote(&var));
+                    env.push((var, token));
+                }
+                if !rest.is_empty() {
+                    push("http_headers", table(&rest));
                 }
             }
             McpConnection::Sse { .. } => {
@@ -191,7 +206,23 @@ fn mcp_overrides(servers: &[McpServer]) -> Result<Vec<String>, AgentError> {
             }
         }
     }
-    Ok(args)
+    Ok((args, env))
+}
+
+/// Pulls a `Authorization: Bearer <token>` header out; the rest stay headers.
+fn split_bearer(
+    headers: &std::collections::BTreeMap<String, String>,
+) -> (Option<String>, std::collections::BTreeMap<String, String>) {
+    let mut rest = headers.clone();
+    let key = headers
+        .keys()
+        .find(|k| k.eq_ignore_ascii_case("authorization"));
+    let token = key.and_then(|k| {
+        let value = rest.get(k)?.strip_prefix("Bearer ")?.to_owned();
+        rest.remove(k);
+        Some(value)
+    });
+    (token, rest)
 }
 
 /// Spawns the server and handshakes within the timeout.
@@ -199,7 +230,7 @@ async fn launch(
     request: &ConnectRequest,
     recorder: Option<WireRecorder>,
 ) -> Result<(process::Child, Wire, DriverInfo, Value, String, Vec<String>), AgentError> {
-    let env = crate::adapter::config_home_env(&request.installation, &request.options)?;
+    let mut env = crate::adapter::config_home_env(&request.installation, &request.options)?;
     // CODEX_HOME must already exist or the server exits at startup
     // (probed 2026-08-27).
     if let Some((_, dir)) = env.first() {
@@ -207,8 +238,12 @@ async fn launch(
             .await
             .map_err(|e| AgentError::SpawnFailed(format!("could not create config home: {e}")))?;
     }
-    let mut args = mcp_overrides(&request.options.mcp_servers)?;
-    args.push("app-server".into());
+    // Overrides must follow the subcommand: before it, app-server 0.154.0
+    // accepts them and starts no server (live-verified 2026-09-27).
+    let (overrides, mcp_env) = mcp_overrides(&request.options.mcp_servers)?;
+    let mut args = vec!["app-server".to_owned()];
+    args.extend(overrides);
+    env.extend(mcp_env);
     // Lets `request_user_input` fire outside plan mode (live-verified 0.152.0).
     args.extend([
         "-c".to_owned(),
@@ -1922,5 +1957,35 @@ mod tests {
         assert_eq!(window_label(10080), "Week");
         assert_eq!(window_label(43200), "Month");
         assert_eq!(window_label(20160), "336h");
+    }
+
+    #[test]
+    fn mcp_bearer_header_becomes_an_env_var() {
+        let mut headers = std::collections::BTreeMap::new();
+        headers.insert("Authorization".to_owned(), "Bearer s3cret".to_owned());
+        headers.insert("X-Team".to_owned(), "t3".to_owned());
+        let server = McpServer {
+            name: "t3-code".to_owned(),
+            connection: McpConnection::Http {
+                url: "http://127.0.0.1:1/mcp".to_owned(),
+                headers,
+            },
+        };
+        let (args, env) = mcp_overrides(&[server]).unwrap();
+        let joined = args.join(" ");
+        assert!(
+            joined.contains(
+                "mcp_servers.t3-code.bearer_token_env_var=\"ANYAGENT_MCP_T3_CODE_TOKEN\""
+            )
+        );
+        assert!(joined.contains("http_headers={\"X-Team\"=\"t3\"}"));
+        assert!(
+            !joined.contains("s3cret"),
+            "token must stay out of argv: {joined}"
+        );
+        assert_eq!(
+            env,
+            vec![("ANYAGENT_MCP_T3_CODE_TOKEN".to_owned(), "s3cret".to_owned())]
+        );
     }
 }
