@@ -229,13 +229,20 @@ fn map_resume(start: &SessionStart, e: AgentError) -> AgentError {
     }
 }
 
-/// `initialize` then `get_binary_version`, both over the control channel.
+/// `initialize` (carrying the instructions) then `get_binary_version`, both
+/// over the control channel.
 async fn handshake(
     wire: &mut Wire,
     request: &ConnectRequest,
 ) -> Result<(DriverInfo, Value), AgentError> {
+    let mut params = json!({ "subtype": "initialize", "hooks": {} });
+    // On the control channel, not argv: out of `ps` and the OS argument
+    // limit (live-verified 2026-09-27, 2.1.283).
+    if let Some(text) = &request.options.instructions {
+        params["appendSystemPrompt"] = json!(text);
+    }
     let init = wire
-        .roundtrip(json!({ "subtype": "initialize", "hooks": {} }))
+        .roundtrip(params)
         .await
         .map_err(WireError::into_error)?;
     let version = wire
@@ -257,18 +264,14 @@ async fn handshake(
     Ok((info, init["models"].clone()))
 }
 
-/// MCP declarations, instructions, throwaway isolation and creation-time
-/// config as launch flags. Flag settings share one `--settings` value.
+/// MCP declarations, throwaway isolation and creation-time config as launch
+/// flags. Flag settings share one `--settings` value.
 fn option_args(options: &crate::agent::SessionOptions) -> Result<Vec<String>, AgentError> {
     let mut args = Vec::new();
     let mut settings = serde_json::Map::new();
     if !options.mcp_servers.is_empty() {
         args.push("--mcp-config".into());
         args.push(mcp_config(&options.mcp_servers).to_string());
-    }
-    if let Some(text) = &options.instructions {
-        args.push("--append-system-prompt".into());
-        args.push(text.clone());
     }
     // A throwaway session (probe, generate) runs no user hooks or MCP servers.
     if options.throwaway {
