@@ -1,0 +1,10 @@
+{"turns": [[
+  {"Emit": {"ToolUpdated": {"id": "tool-1", "kind": {"Mcp": {"server": "docs", "tool": "search"}}, "title": "search",
+            "status": "Running", "input": "None", "output": null, "diffs": [], "locations": [], "raw": null}}},
+  {"Emit": {"ToolProgress": {"tool_id": "tool-1", "message": "searching", "elapsed_ms": 1500}}},
+  {"Emit": {"TurnDiff": {"unified": "--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n"}}},
+  {"Emit": {"ModelRerouted": {"from": "gpt-5.5", "to": "gpt-5.5-mini", "reason": "highRiskCyberActivity"}}},
+  {"Emit": {"ToolUpdated": {"id": "tool-1", "kind": {"Mcp": {"server": "docs", "tool": "search"}}, "title": "search",
+            "status": "Completed", "input": "None", "output": "3 hits", "diffs": [], "locations": [], "raw": null}}},
+  {"End": {"Completed": {"source": "Protocol"}}}
+]]}

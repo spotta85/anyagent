@@ -1,0 +1,10 @@
+{"turns": [[
+  {"Emit": {"ToolUpdated": {"id": "task-1", "kind": "Subagent", "title": "list the files", "status": "Running",
+            "input": "None", "output": null, "diffs": [], "locations": [], "raw": null,
+            "subagent": {"role": "Explore", "model": "haiku", "summary": "Reading src", "tokens": 1200}}}},
+  {"Nested": ["task-1", {"ToolProgress": {"tool_id": "tool-9", "message": "ls src", "elapsed_ms": 200}}]},
+  {"Emit": {"ToolUpdated": {"id": "task-1", "kind": "Subagent", "title": "list the files", "status": "Completed",
+            "input": "None", "output": "3 files", "diffs": [], "locations": [], "raw": null,
+            "subagent": {"role": "Explore", "model": "haiku", "summary": "Done", "tokens": 2400}}}},
+  {"End": {"Completed": {"source": "Protocol"}}}
+]]}
