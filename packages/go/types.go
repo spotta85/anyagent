@@ -369,6 +369,11 @@ type PlanUpdated struct {
 	Entries []PlanEntry `json:"entries"`
 }
 
+// PlanProposed is a wire type.
+type PlanProposed struct {
+	Markdown string `json:"markdown"`
+}
+
 // RequestClosed is a wire type.
 type RequestClosed struct {
 	RequestID string `json:"request_id"`
@@ -398,6 +403,7 @@ type EventKind struct {
 	ToolUpdated      *ToolUpdate      `json:"ToolUpdated"`
 	ToolOutputDelta  *ToolOutputDelta `json:"ToolOutputDelta"`
 	PlanUpdated      *PlanUpdated     `json:"PlanUpdated"`
+	PlanProposed     *PlanProposed    `json:"PlanProposed"`
 	RequestOpened    *Request         `json:"RequestOpened"`
 	RequestClosed    *RequestClosed   `json:"RequestClosed"`
 	SessionUpdated   *SessionInfo     `json:"SessionUpdated"`
@@ -429,6 +435,8 @@ func (v EventKind) Name() string {
 		return "ToolOutputDelta"
 	case v.PlanUpdated != nil:
 		return "PlanUpdated"
+	case v.PlanProposed != nil:
+		return "PlanProposed"
 	case v.RequestOpened != nil:
 		return "RequestOpened"
 	case v.RequestClosed != nil:
@@ -469,6 +477,8 @@ func (v EventKind) MarshalJSON() ([]byte, error) {
 		return json.Marshal(map[string]any{"ToolOutputDelta": v.ToolOutputDelta})
 	case v.PlanUpdated != nil:
 		return json.Marshal(map[string]any{"PlanUpdated": v.PlanUpdated})
+	case v.PlanProposed != nil:
+		return json.Marshal(map[string]any{"PlanProposed": v.PlanProposed})
 	case v.RequestOpened != nil:
 		return json.Marshal(map[string]any{"RequestOpened": v.RequestOpened})
 	case v.RequestClosed != nil:

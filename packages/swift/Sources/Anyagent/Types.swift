@@ -423,6 +423,14 @@ public struct PlanUpdated: Codable, Sendable, Equatable {
     }
 }
 
+public struct PlanProposed: Codable, Sendable, Equatable {
+    public var markdown: String
+
+    public init(markdown: String) {
+        self.markdown = markdown
+    }
+}
+
 public struct RequestClosed: Codable, Sendable, Equatable {
     public var requestId: String
 
@@ -474,6 +482,7 @@ public enum EventKind: Codable, Sendable, Equatable {
     case toolUpdated(ToolUpdate)
     case toolOutputDelta(ToolOutputDelta)
     case planUpdated(PlanUpdated)
+    case planProposed(PlanProposed)
     case requestOpened(Request)
     case requestClosed(RequestClosed)
     case sessionUpdated(SessionInfo)
@@ -497,6 +506,7 @@ public enum EventKind: Codable, Sendable, Equatable {
         case .toolUpdated: "ToolUpdated"
         case .toolOutputDelta: "ToolOutputDelta"
         case .planUpdated: "PlanUpdated"
+        case .planProposed: "PlanProposed"
         case .requestOpened: "RequestOpened"
         case .requestClosed: "RequestClosed"
         case .sessionUpdated: "SessionUpdated"
@@ -528,6 +538,7 @@ public enum EventKind: Codable, Sendable, Equatable {
         case "ToolUpdated": self = .toolUpdated(try c.decode(ToolUpdate.self, forKey: Key("ToolUpdated")))
         case "ToolOutputDelta": self = .toolOutputDelta(try c.decode(ToolOutputDelta.self, forKey: Key("ToolOutputDelta")))
         case "PlanUpdated": self = .planUpdated(try c.decode(PlanUpdated.self, forKey: Key("PlanUpdated")))
+        case "PlanProposed": self = .planProposed(try c.decode(PlanProposed.self, forKey: Key("PlanProposed")))
         case "RequestOpened": self = .requestOpened(try c.decode(Request.self, forKey: Key("RequestOpened")))
         case "RequestClosed": self = .requestClosed(try c.decode(RequestClosed.self, forKey: Key("RequestClosed")))
         case "SessionUpdated": self = .sessionUpdated(try c.decode(SessionInfo.self, forKey: Key("SessionUpdated")))
@@ -550,6 +561,7 @@ public enum EventKind: Codable, Sendable, Equatable {
         case .toolUpdated(let v): try encoder.tagged("ToolUpdated", v)
         case .toolOutputDelta(let v): try encoder.tagged("ToolOutputDelta", v)
         case .planUpdated(let v): try encoder.tagged("PlanUpdated", v)
+        case .planProposed(let v): try encoder.tagged("PlanProposed", v)
         case .requestOpened(let v): try encoder.tagged("RequestOpened", v)
         case .requestClosed(let v): try encoder.tagged("RequestClosed", v)
         case .sessionUpdated(let v): try encoder.tagged("SessionUpdated", v)

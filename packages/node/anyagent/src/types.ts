@@ -220,6 +220,11 @@ export type EventKind =
       };
     }
   | {
+      PlanProposed: {
+        markdown: string;
+      };
+    }
+  | {
       RequestOpened: Request;
     }
   | {
@@ -625,6 +630,7 @@ export interface Capabilities {
 /**
  * A session setting the agent advertises. Well-known ids: `model`, `effort`,
  * `mode`, `sandbox`, `fast` (boolean, lower latency with increased usage).
+ * The `mode` choice `plan` is plan mode on every agent that has one.
  */
 export interface ConfigOption {
   id: string;

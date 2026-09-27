@@ -92,6 +92,10 @@ pub enum EventKind {
     PlanUpdated {
         entries: Vec<PlanEntry>,
     },
+    /// The agent proposes this plan and waits for a go-ahead.
+    PlanProposed {
+        markdown: String,
+    },
     RequestOpened(Request),
     RequestClosed {
         request_id: RequestId,

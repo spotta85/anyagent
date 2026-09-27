@@ -313,6 +313,7 @@ impl Capabilities {
 
 /// A session setting the agent advertises. Well-known ids: `model`, `effort`,
 /// `mode`, `sandbox`, `fast` (boolean, lower latency with increased usage).
+/// The `mode` choice `plan` is plan mode on every agent that has one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ConfigOption {
