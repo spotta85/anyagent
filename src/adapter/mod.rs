@@ -480,6 +480,18 @@ pub(crate) fn launch_env(
     Ok(env)
 }
 
+/// Whether the child sees `name` set and not blank: the session's `env`
+/// first, then the process env.
+pub(crate) fn child_env_set(options: &SessionOptions, name: &str) -> bool {
+    options
+        .env
+        .0
+        .get(name)
+        .cloned()
+        .or_else(|| std::env::var(name).ok())
+        .is_some_and(|v| !v.trim().is_empty())
+}
+
 /// Instructions owed to the first prompt, for agents with no system-prompt
 /// field: a new session's only; a resumed or forked one already has them.
 pub(crate) fn first_prompt_instructions(options: &SessionOptions) -> Option<String> {

@@ -16,8 +16,8 @@ use tokio::sync::mpsc;
 use crate::adapter::{
     Adapter, CLOSE_GRACE, ConnectRequest, DriverCommand, DriverConnection, DriverEvent, DriverInfo,
     Emitter, FRAME_BUFFER, Gone, HANDSHAKE_TIMEOUT, LineWire, OUTPUT_CAP, WireRecorder, attach,
-    cap, level_choices, login_methods, model_options, plan_entries, selected, set_effort_option,
-    set_fast_option, with_stderr,
+    cap, child_env_set, level_choices, login_methods, model_options, plan_entries, selected,
+    set_effort_option, set_fast_option, with_stderr,
 };
 use crate::agent::{
     AccountInfo, AgentDetails, AuthKind, AuthStatus, Capabilities, Capability, ConfigChoice,
@@ -425,7 +425,7 @@ fn account_status(account: &Value, request: &ConnectRequest) -> AuthStatus {
     if account["tokenSource"].as_str() == Some("none") {
         // A gateway token is invisible on this wire (the account object
         // reads logged out); the env var is reported, never validated.
-        if std::env::var(GATEWAY_TOKEN_ENV).is_ok_and(|v| !v.trim().is_empty()) {
+        if child_env_set(&request.options, GATEWAY_TOKEN_ENV) {
             return AuthStatus::Authenticated {
                 kind: AuthKind::ApiKey,
                 account: None,

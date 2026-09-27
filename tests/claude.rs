@@ -677,6 +677,27 @@ async fn a_logged_out_handshake_reports_unauthenticated_with_login_methods() {
     ));
 }
 
+/// A gateway token given in the session's `env` reads as an API-key login,
+/// though the account object reads logged out.
+#[tokio::test]
+async fn a_gateway_token_in_the_session_env_reads_as_a_login() {
+    let agent = AgentInstallation::at("claude", wrapper("gateway", "--logged-out"));
+    let options =
+        SessionOptions::in_dir(std::env::temp_dir()).env("ANTHROPIC_AUTH_TOKEN", "gateway-token");
+    let details = Runtime::new().probe_with(&agent, options).await.unwrap();
+    assert!(
+        matches!(
+            details.auth,
+            AuthStatus::Authenticated {
+                kind: AuthKind::ApiKey,
+                ..
+            }
+        ),
+        "got {:?}",
+        details.auth
+    );
+}
+
 /// Cancel mid-permission reaches agent and ends turn as Cancelled.
 #[tokio::test]
 async fn cancel_reaches_the_agent_and_ends_the_turn() {
