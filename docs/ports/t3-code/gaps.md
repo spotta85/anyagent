@@ -3,7 +3,7 @@
 Things T3 Code's server needed from its agent layer that anyagent did not have. Each row is one feature of T3 and what anyagent does about it today.
 
 ```
-31 gaps found  ──►  20 fixed  ·  3 partly fixed  ·  8 open
+33 gaps found  ──►  20 fixed  ·  3 partly fixed  ·  10 open
 ```
 
 How they were fixed: [gaps-plan.md](gaps-plan.md).
@@ -53,6 +53,8 @@ How they were fixed: [gaps-plan.md](gaps-plan.md).
 | Subagent progress | `task.progress`, role and model on `task.started` | A subagent is a tool with a title and status | `ToolUpdate.subagent: Option<SubagentInfo>` | ~50 |
 | Live events: turn diff, tool progress, model rerouted | `turn.diff.updated`, `tool.progress`, `model.rerouted` | Not mapped; the app still gets the final diff, the tool's end state, and a warning | One event kind or field each | ~60 |
 | MCP on antigravity; codex MCP env in argv | T3's MCP server | `agy` has no per-session MCP config. codex passes stdio env and non-bearer headers as `-c` overrides | None known for `agy`; a config file for codex | ~50 |
+| Deny with a message | T3 stops claude at its plan by declining the exit request | A deny carries no text, so claude is told "User denied this action" and the tool row reads failed. claude still stops and the next turn runs | `Answer::Permission` with an optional message, passed where the wire takes one | ~20 |
+| MCP tool kind on ACP agents | tool rows for T3's MCP tools | An ACP agent's MCP call is `ToolKind::Other` although its `_meta.mcp` names the server and tool (seen on antigravity's ACP server) | Map `_meta.mcp` to `ToolKind::Mcp` | ~15 |
 
 ## Known small limits
 
@@ -65,3 +67,4 @@ Found by the reviews, not worth a row each. They are listed with file and line i
 | ACP steer does not carry owed instructions | First prompt `/cmd`, then a steered message: the instructions arrive one prompt later |
 | Two identical MCP calls in flight on codex | The approval is shown on one of the two |
 | claude `mode` lists 4 choices | The CLI can report `dontAsk` or `auto`, which are not in the list |
+| cursor asks no permission for edits | An approval-required app still sees files written unasked; commands do ask |
