@@ -1331,6 +1331,10 @@ async fn a_conflicting_stdio_env_name_is_refused() {
                 .mcp_server(server("b", "TOOL_KEY", "v-one"))
                 .mcp_server(server("a", "TOOL_KEY", "v-two")),
         ),
+        (
+            "HOME",
+            base.clone().mcp_server(server("a", "HOME", "v-two")),
+        ),
         ("PATH", base.clone().mcp_server(server("a", "PATH", &path))),
     ] {
         let err = open_with("mcp-conflict", "", options).await.err().unwrap();
