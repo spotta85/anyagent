@@ -33,7 +33,7 @@ use crate::error::AgentError;
 use crate::event::{
     Answer, Choice, ChoiceId, CompletionSource, Diagnostic, DiagnosticLevel, EventKind, Extensions,
     MessageId, Question, QuestionAnswer, QuestionId, QuestionRequest, RawTool, Request, RequestId,
-    StopReason, ToolId, ToolInput, ToolKind, ToolStatus, ToolUpdate,
+    StopReason, ToolId, ToolInput, ToolKind, ToolStatus, ToolUpdate, TurnUsage,
 };
 use crate::process::{self, Spawn};
 
@@ -76,6 +76,7 @@ impl Adapter for PiAdapter {
                 stop: None,
                 aborting: false,
                 cost: 0.0,
+                turn_usage: TurnUsage::default(),
                 next_message: 0,
                 next_request: 0,
             }
@@ -447,6 +448,8 @@ struct Drive {
     aborting: bool,
     /// Session cost so far, summed over assistant messages.
     cost: f64,
+    /// What the running turn has spent, summed over its assistant messages.
+    turn_usage: TurnUsage,
     next_message: u64,
     next_request: u64,
 }
@@ -490,6 +493,7 @@ impl Drive {
                 // A cancel that raced the previous turn's natural end must
                 // not bleed into this one.
                 self.aborting = false;
+                self.turn_usage = TurnUsage::default();
                 let id = self.send_input("prompt", &input).await?;
                 self.pending.insert(id, Pending::Prompt);
             }
@@ -719,6 +723,7 @@ impl Drive {
         }
         let usage = &message["usage"];
         self.cost += usage["cost"]["total"].as_f64().unwrap_or_default();
+        self.add_turn_usage(usage).await?;
         let Some(used_tokens) = usage["totalTokens"].as_u64().filter(|t| *t > 0) else {
             return Ok(());
         };
@@ -728,6 +733,19 @@ impl Drive {
                 window_tokens: self.window,
                 cost_usd: (self.cost > 0.0).then_some(self.cost),
             })
+            .await
+    }
+
+    /// Adds one assistant message's tokens to the turn and reports the sum.
+    /// pi's `input` leaves the cache out; its `output` already holds reasoning.
+    async fn add_turn_usage(&mut self, usage: &Value) -> Result<(), Gone> {
+        let count = |key: &str| usage[key].as_u64().unwrap_or(0);
+        let cached = count("cacheRead");
+        self.turn_usage.input_tokens += count("input") + cached + count("cacheWrite");
+        self.turn_usage.cached_input_tokens += cached;
+        self.turn_usage.output_tokens += count("output");
+        self.events
+            .send(DriverEvent::TurnUsage(self.turn_usage))
             .await
     }
 

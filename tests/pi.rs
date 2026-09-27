@@ -11,6 +11,7 @@ use anyagent::{
     AgentError, AgentInstallation, Answer, AuthKind, AuthStatus, Capability, ConfigKind,
     ConfigValue, DeliveryKind, Event, EventKind, Events, McpServer, QuestionAnswer, Request,
     ResumeToken, Runtime, Session, SessionOptions, StopReason, ToolInput, ToolKind, ToolStatus,
+    TurnUsage,
 };
 
 mod common;
@@ -66,6 +67,15 @@ fn text_of(kinds: &[EventKind]) -> String {
             _ => None,
         })
         .collect()
+}
+
+/// `calls` fixture model calls summed: cache counts as input, reasoning is already in output.
+fn usage_of(calls: u64) -> TurnUsage {
+    TurnUsage {
+        input_tokens: 1200 * calls,
+        cached_input_tokens: 150 * calls,
+        output_tokens: 34 * calls,
+    }
 }
 
 #[tokio::test]
@@ -262,10 +272,25 @@ async fn a_turn_streams_text_reasoning_tools_and_usage_then_settles() {
                 source: anyagent::CompletionSource::Protocol,
             },
             background: Vec::new(),
-            usage: None,
+            usage: Some(usage_of(2)),
         },
-        "agent_settled ends the turn deterministically"
+        "agent_settled ends the turn deterministically, carrying both model calls"
     );
+    session.close().await.unwrap();
+}
+
+/// A second prompt sums its own model calls only.
+#[tokio::test]
+async fn a_second_turn_never_inherits_the_first_turn_s_usage() {
+    let (session, mut events) = open("usage-reset", "").await;
+    for _ in 0..2 {
+        session.prompt("run the tool").await.unwrap();
+        let kinds = drain_turn(&mut events).await;
+        assert!(
+            matches!(kinds.last(), Some(EventKind::TurnEnded { usage: Some(u), .. }) if *u == usage_of(2)),
+            "{kinds:?}"
+        );
+    }
     session.close().await.unwrap();
 }
 
@@ -479,7 +504,7 @@ async fn a_failed_model_turn_ends_the_turn_as_failed() {
                 message: "the provider refused".into(),
             },
             background: Vec::new(),
-            usage: None,
+            usage: Some(usage_of(1)),
         }
     );
 }

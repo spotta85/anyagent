@@ -179,6 +179,9 @@ async function turn(message) {
   if ((!flag('--no-tools') || flag('--ignore-no-tools')) && (scenario.includes('tool') || scenario.includes('sleep'))) {
     await toolCall(scenario.includes('sleep'));
     if (aborting) return end('error', 'This operation was aborted');
+    // The tool call ends one LLM call; the answer is a second assistant message.
+    end('toolUse');
+    send({ type: 'message_start', message: { role: 'assistant', content: [], stopReason: 'pending' } });
   }
   if (scenario.includes('fail')) return end('error', 'the provider refused');
 
@@ -244,4 +247,5 @@ const message_ = (role, content) => {
   send({ type: 'message_end', message: { role, content } });
 };
 
-const usage = () => ({ input: 1200, output: 34, cacheRead: 0, cacheWrite: 0, totalTokens: 1234, cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0, total: 0.03 } });
+// pi-ai's shape: `input` excludes the cache, `reasoning` is part of `output`.
+const usage = () => ({ input: 1000, output: 34, cacheRead: 150, cacheWrite: 50, reasoning: 10, totalTokens: 1234, cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0, total: 0.03 } });
