@@ -1263,6 +1263,21 @@ impl Drive {
                     .send(DriverEvent::event(EventKind::ToolUpdated(tool)))
                     .await
             }
+            // A deny rule or the CLI's mode refused a tool (probed 2026-09-27,
+            // 2.1.283); untracking it drops the error `tool_result` that trails.
+            "permission_denied" => {
+                let Some(mut tool) = frame["tool_use_id"]
+                    .as_str()
+                    .and_then(|id| self.tools.remove(id))
+                else {
+                    return Ok(());
+                };
+                tool.status = ToolStatus::Denied;
+                tool.output = text(&frame["message"]);
+                self.events
+                    .send(DriverEvent::event(EventKind::ToolUpdated(tool)))
+                    .await
+            }
             // Hooks, task bookkeeping, statuses: nothing the engine needs.
             _ => Ok(()),
         }

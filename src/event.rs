@@ -189,6 +189,7 @@ pub enum ToolKind {
     Other,
 }
 
+/// `Denied`: refused by the agent's permission rules or mode without asking the caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -198,6 +199,7 @@ pub enum ToolStatus {
     Completed,
     Failed,
     Cancelled,
+    Denied,
 }
 
 impl ToolStatus {

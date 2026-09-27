@@ -976,6 +976,34 @@ async fn a_background_task_wakes_an_agent_originated_turn() {
     session.close().await.unwrap();
 }
 
+/// A rule-refused tool ends `Denied` with the CLI's reason; the error
+/// `tool_result` that trails does not turn it `Failed`.
+#[tokio::test]
+async fn a_rule_refused_tool_ends_denied() {
+    let (session, mut events) = open("denied", "--denied").await;
+    session.prompt("hi").await.unwrap();
+    let mut states = Vec::new();
+    loop {
+        match next(&mut events).await.kind {
+            EventKind::ToolUpdated(tool) => states.push((tool.status, tool.output)),
+            EventKind::TurnEnded { background, .. } => {
+                assert!(background.is_empty(), "a denied tool is not running");
+                break;
+            }
+            _ => {}
+        }
+    }
+    let reason = "Permission to use Bash with command echo probe-denied has been denied.";
+    assert_eq!(
+        states,
+        [
+            (ToolStatus::Running, None),
+            (ToolStatus::Denied, Some(reason.to_owned())),
+        ]
+    );
+    session.close().await.unwrap();
+}
+
 /// Subagent Task spawn and nested text/user messages carry parent_tool_id.
 #[tokio::test]
 async fn subagent_events_carry_the_parent_tool_id() {

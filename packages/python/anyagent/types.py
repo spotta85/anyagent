@@ -225,7 +225,7 @@ class ToolKind1(TypedDict):
 ToolKind: TypeAlias = Literal['Read', 'Edit', 'Delete', 'Move', 'Search', 'Execute', 'Fetch', 'Think', 'Other'] | ToolKind1 | Literal['Subagent']
 
 
-ToolStatus: TypeAlias = Literal['Pending', 'Running', 'Completed', 'Failed', 'Cancelled']
+ToolStatus: TypeAlias = Literal['Pending', 'Running', 'Completed', 'Failed', 'Cancelled', 'Denied']
 
 
 class ToolInput1(TypedDict):
