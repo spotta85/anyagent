@@ -371,9 +371,8 @@ async function runSubagent(fails) {
   await sleep(10);
 }
 
-// A spawned subagent in the order 0.154.0 sends it live (recording 13): the spawn
-// is a `subAgentActivity` item, a `wait` collab call blocks on it, and the child's
-// finish arrives as a second activity item under a new id around its turn/completed.
+// A subagent in the live 0.154.0 order (recording 13): a spawn activity item, a `wait`
+// collab call, and the child's finish as a second activity item under a new id.
 async function runLiveSubagent() {
   const CHILD = 'th-child-2', CHILD_TURN = 'turn-child-2';
   const child = (method, params) => notify(method, { threadId: CHILD, turnId: CHILD_TURN, ...params });
