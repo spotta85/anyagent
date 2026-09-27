@@ -712,6 +712,32 @@ async fn mcp_servers_are_added_through_post_mcp() {
     session.close().await.unwrap();
 }
 
+/// `POST /mcp` carries the real MCP header and env values; the wire
+/// recording keeps their names with `<redacted>` values.
+#[tokio::test]
+async fn mcp_secrets_are_redacted_in_the_recording() {
+    let dir = tempfile::tempdir().unwrap();
+    let wire = dir.path().join("wire.jsonl");
+    let received = dir.path().join("mcp.jsonl");
+    let exe = std::env::current_exe().unwrap();
+    let options = SessionOptions::in_dir(dir.path())
+        .mcp_server(
+            McpServer::http("voice", "http://127.0.0.1:1/mcp")
+                .with("Authorization", "Bearer HTTP-SECRET"),
+        )
+        .mcp_server(McpServer::stdio("tool", &exe, ["--serve"]).with("TOKEN", "ENV-SECRET"))
+        .record_wire(&wire)
+        .env("FIXTURE_MCP_LOG", received.to_string_lossy());
+    let (session, _events) = open_with("mcp-redact", "", options).await.unwrap();
+    common::sent_frames(&wire, 2, |f| f["path"] == "/mcp").await;
+    let secrets = [
+        ("Authorization", "Bearer HTTP-SECRET"),
+        ("TOKEN", "ENV-SECRET"),
+    ];
+    common::assert_mcp_redacted(&wire, &received, &secrets);
+    session.close().await.unwrap();
+}
+
 /// A server opencode refuses fails the open typed, with the agent's reason.
 #[tokio::test]
 async fn a_refused_mcp_server_fails_the_open() {

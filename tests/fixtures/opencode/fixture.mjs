@@ -170,6 +170,8 @@ createServer(async (req, res) => {
     const missing = cmd !== undefined && !existsSync(cmd);
     mcpStatus[body.name] = missing ? { status: 'failed', error: `ENOENT: no such file or directory, posix_spawn '${cmd}'` } : { status: 'connected' };
     if (!missing) mcpAdds.push(body);
+    // FIXTURE_MCP_LOG: log the body as received, secrets included.
+    if (process.env.FIXTURE_MCP_LOG) appendFileSync(process.env.FIXTURE_MCP_LOG, JSON.stringify(body) + '\n');
     return json(res, 200, mcpStatus);
   }
   if (req.method === 'GET' && url.pathname === '/mcp') { mcpGets++; return json(res, 200, mcpStatus); }

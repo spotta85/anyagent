@@ -1038,12 +1038,13 @@ async fn switching_the_model_round_trips_and_updates_the_session() {
 }
 
 /// Declared MCP servers of every transport ride `mcp_set_servers`, never argv,
-/// and the rollback respawn declares them again.
+/// and the rollback respawn declares them again. The recording redacts them.
 #[tokio::test]
 async fn mcp_servers_ride_the_control_channel() {
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("argv.jsonl");
     let wire = dir.path().join("wire.jsonl");
+    let received = dir.path().join("mcp.jsonl");
     let agent = AgentInstallation::at("claude", wrapper("mcp", ""));
     let options = SessionOptions::in_dir(dir.path())
         .mcp_server(
@@ -1053,7 +1054,8 @@ async fn mcp_servers_ride_the_control_channel() {
         .mcp_server(McpServer::sse("feed", "http://127.0.0.1:1/sse").with("X-Key", "SSE-SECRET"))
         .mcp_server(McpServer::stdio("tool", "/bin/echo", ["hi"]).with("TOKEN", "ENV-SECRET"))
         .record_wire(&wire)
-        .env("FIXTURE_ARGV_LOG", log.to_string_lossy());
+        .env("FIXTURE_ARGV_LOG", log.to_string_lossy())
+        .env("FIXTURE_MCP_LOG", received.to_string_lossy());
     let (session, mut events) = Runtime::new().open(&agent, options).await.unwrap();
     for prompt in ["one", "two"] {
         session.prompt(prompt).await.unwrap();
@@ -1074,15 +1076,13 @@ async fn mcp_servers_ride_the_control_channel() {
             "{decl} lost after the respawn: {text:?}"
         );
     }
-    let sent =
-        common::sent_frames(&wire, 2, |f| f["request"]["subtype"] == "mcp_set_servers").await;
-    let servers = &sent[1]["request"]["servers"];
-    assert_eq!(
-        servers["voice"]["headers"]["Authorization"],
-        "Bearer HTTP-SECRET"
-    );
-    assert_eq!(servers["feed"]["headers"]["X-Key"], "SSE-SECRET");
-    assert_eq!(servers["tool"]["env"]["TOKEN"], "ENV-SECRET");
+    common::sent_frames(&wire, 2, |f| f["request"]["subtype"] == "mcp_set_servers").await;
+    let secrets = [
+        ("Authorization", "Bearer HTTP-SECRET"),
+        ("X-Key", "SSE-SECRET"),
+        ("TOKEN", "ENV-SECRET"),
+    ];
+    common::assert_mcp_redacted(&wire, &received, &secrets);
     let launches = common::logged_args(&log);
     assert_eq!(launches.len(), 2, "{launches:?}");
     for argv in &launches {

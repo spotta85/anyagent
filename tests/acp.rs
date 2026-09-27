@@ -602,6 +602,31 @@ async fn mcp_servers_forward_when_the_transport_is_supported() {
     session.close().await.unwrap();
 }
 
+/// `session/new` carries the real MCP header and env values; the wire
+/// recording keeps their names with `<redacted>` values.
+#[tokio::test]
+async fn mcp_secrets_are_redacted_in_the_recording() {
+    let dir = tempfile::tempdir().unwrap();
+    let wire = dir.path().join("wire.jsonl");
+    let received = dir.path().join("mcp.jsonl");
+    let options = SessionOptions::in_dir(dir.path())
+        .mcp_server(
+            McpServer::http("voice", "http://127.0.0.1:1/mcp")
+                .with("Authorization", "Bearer HTTP-SECRET"),
+        )
+        .mcp_server(McpServer::stdio("tool", "/bin/echo", ["hi"]).with("TOKEN", "ENV-SECRET"))
+        .record_wire(&wire)
+        .env("FIXTURE_MCP_LOG", received.to_string_lossy());
+    let (session, _events) = Runtime::new().open(&fixture(&[]), options).await.unwrap();
+    common::sent_frames(&wire, 1, |f| f["method"] == "session/new").await;
+    let secrets = [
+        ("Authorization", "Bearer HTTP-SECRET"),
+        ("TOKEN", "ENV-SECRET"),
+    ];
+    common::assert_mcp_redacted(&wire, &received, &secrets);
+    session.close().await.unwrap();
+}
+
 /// Unsupported SSE transport refused typed UnsupportedFeature at open.
 #[tokio::test]
 async fn an_unsupported_mcp_transport_is_refused() {

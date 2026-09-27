@@ -79,7 +79,7 @@ can change later goes through `Session::configure` instead.
 | `arg(arg)` | One extra launch argument, after anyagent's own. Passed as is; a bad one fails `open` with the agent's error |
 | `quiet_window(dur)` | How long silence may run before completion is inferred |
 | `stall_after(dur)` | Silence before a stall `Diagnostic` (default 120 s). Never ends the turn |
-| `record_wire(path)` | Dump the raw protocol traffic to a JSONL file. Unredacted, treat as sensitive |
+| `record_wire(path)` | Dump the raw protocol traffic to a JSONL file. Unredacted except MCP server header and env values; treat as sensitive |
 
 ## Session
 
