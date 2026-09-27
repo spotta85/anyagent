@@ -1431,7 +1431,14 @@ impl Drive {
                 PermissionChoice::AllowAlways => "acceptForSession",
                 _ => "decline",
             }}),
-            (Reply::Action, Answer::Permission(choice)) => elicitation_response(choice),
+            // An MCP tool-call approval; the session form rides `_meta.persist`.
+            (Reply::Action, Answer::Permission(choice)) => match choice {
+                PermissionChoice::AllowOnce => json!({ "action": "accept" }),
+                PermissionChoice::AllowAlways => {
+                    json!({ "action": "accept", "_meta": { "persist": "session" } })
+                }
+                _ => json!({ "action": "decline" }),
+            },
             (Reply::Answers(questions), Answer::Question(answers)) => {
                 question_response(questions, &answers)
             }
@@ -1781,17 +1788,6 @@ fn question_response(questions: &[Question], answers: &[QuestionAnswer]) -> Valu
         map.insert(question.id.to_string(), json!({ "answers": values }));
     }
     json!({ "answers": map })
-}
-
-/// An MCP tool-call approval reply; the session form rides `_meta.persist`.
-fn elicitation_response(choice: PermissionChoice) -> Value {
-    match choice {
-        PermissionChoice::AllowOnce => json!({ "action": "accept" }),
-        PermissionChoice::AllowAlways => {
-            json!({ "action": "accept", "_meta": { "persist": "session" } })
-        }
-        _ => json!({ "action": "decline" }),
-    }
 }
 
 /// A running stand-in for an approval's tool when no tracked item matches.
