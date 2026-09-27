@@ -1048,10 +1048,8 @@ impl Drive {
         self.request.options.configure.push((id, value));
     }
 
-    /// Emulated rollback: respawn forked at the last kept turn's assistant
-    /// message. The resume token clears until the fork names itself on the
-    /// next `system/init`; the old session stays on disk. A failed respawn
-    /// refuses the rollback and closes the session.
+    /// Emulated rollback: respawn forked at the last kept turn's assistant message.
+    /// The token clears until the fork names itself; a failed respawn closes the session.
     async fn rollback(
         &mut self,
         turns: std::num::NonZeroU32,

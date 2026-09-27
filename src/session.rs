@@ -173,10 +173,8 @@ impl Session {
             .await
     }
 
-    /// Rewinds provider-owned conversation context by completed turns; the
-    /// files scope also restores agent-changed files to the cut point.
-    /// Requires an idle session and rollback support. Resolves once the
-    /// agent reports the outcome; a refusal is `InvalidRequest(reason)`.
+    /// Rewinds whole turns (and their file changes with the files scope) on an idle session.
+    /// Resolves once the agent answers; a refusal is `InvalidRequest(reason)`.
     pub async fn rollback(
         &self,
         turns: NonZeroU32,

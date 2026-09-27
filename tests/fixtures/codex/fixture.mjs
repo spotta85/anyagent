@@ -24,8 +24,7 @@ const MCP_NAMES = [...new Set(process.argv
   .flatMap((a, i) => (a === '-c' ? [process.argv[i + 1] ?? ''] : []))
   .map((kv) => kv.match(/^mcp_servers\.([^.]+)\./)?.[1])
   .filter(Boolean))];
-// `-c features.<name>=true` overrides, plus one from the host config
-// (--host-feature); the server warns about them on every thread load.
+// `-c features.<name>=true` overrides plus --host-feature; the server warns about them.
 const FEATURES = [...process.argv
   .flatMap((a, i) => (a === '-c' ? [process.argv[i + 1] ?? ''] : []))
   .map((kv) => kv.match(/^features\.([^=]+)=true$/)?.[1])
@@ -171,8 +170,7 @@ async function onRequest(m) {
       const at = turnIds.indexOf(m.params.beforeTurnId);
       if (at < 0) return refuse(`unknown turn \`${m.params.beforeTurnId}\``);
       rolled += turnIds.splice(at).length;
-      // The reloaded thread warns before the reply (0.154.0), naming the
-      // last turn's model against the config default.
+      // The reloaded thread warns before the reply, naming the last turn's model (0.154.0).
       featureWarning();
       if (lastModel && lastModel !== 'gpt-6') notify('warning', { threadId: THREAD.id, message: `This session was recorded with model \`${lastModel}\` but is resuming with \`gpt-6\`. Consider switching back to \`${lastModel}\` as it may affect Codex performance.` });
       return reply({ thread: THREAD, turnsBackwardsCursor: null, itemsBackwardsCursor: null });

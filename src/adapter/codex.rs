@@ -468,8 +468,7 @@ async fn open_thread(
             "thread/fork"
         }
     };
-    // Only an unknown thread means a dead token (0.154.0: -32600 "no rollout
-    // found for thread id …"); a malformed id or anything else stays itself.
+    // Only an unknown thread is a dead token (0.154.0: "no rollout found …").
     wire.roundtrip(method, params).await.map_err(|e| match e {
         WireError::Rpc(m) if method == "thread/resume" && m.starts_with("no rollout found") => {
             AgentError::ResumeFailed(m)
@@ -924,8 +923,7 @@ impl Drive {
                         .await?;
                 }
             }
-            // Nothing advertised changes, but `SessionUpdated` still marks
-            // the rewind before `RolledBack` settles the call.
+            // `SessionUpdated` marks the rewind; `RolledBack` then settles the call.
             Pending::Rollback(keep) => match error {
                 Some(message) => {
                     self.events
