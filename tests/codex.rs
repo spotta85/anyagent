@@ -11,7 +11,7 @@ use anyagent::{
     AgentError, AgentInstallation, Answer, AuthKind, AuthStatus, Capability, ConfigId, ConfigKind,
     ConfigValue, DeliveryKind, Event, EventKind, Events, Input, LoginMethod, McpServer,
     PermissionChoice, PermissionRequest, PlanStatus, QuestionAnswer, Request, Runtime, Session,
-    SessionOptions, StopReason, ToolInput, ToolKind, ToolStatus, ToolUpdate,
+    SessionOptions, StopReason, ToolInput, ToolKind, ToolStatus, ToolUpdate, TurnUsage,
 };
 
 mod common;
@@ -49,6 +49,15 @@ async fn next(events: &mut Events) -> Event {
 /// Drives one turn to its end: answers permissions with `answer`, collects
 /// text, and returns it.
 async fn complete_turn(session: &Session, events: &mut Events, answer: PermissionChoice) -> String {
+    complete_turn_usage(session, events, answer).await.0
+}
+
+/// `complete_turn`, also returning the usage the turn ended with.
+async fn complete_turn_usage(
+    session: &Session,
+    events: &mut Events,
+    answer: PermissionChoice,
+) -> (String, Option<TurnUsage>) {
     let mut text = String::new();
     loop {
         match next(events).await.kind {
@@ -59,11 +68,18 @@ async fn complete_turn(session: &Session, events: &mut Events, answer: Permissio
                     .await
                     .unwrap();
             }
-            EventKind::TurnEnded { .. } => return text,
+            EventKind::TurnEnded { usage, .. } => return (text, usage),
             _ => {}
         }
     }
 }
+
+/// The fixture turn's one model call.
+const TURN_USAGE: TurnUsage = TurnUsage {
+    input_tokens: 1100,
+    cached_input_tokens: 600,
+    output_tokens: 100,
+};
 
 /// Drains events through the first one `stop` matches, returning the text
 /// of every diagnostic on the way.
@@ -1002,7 +1018,8 @@ async fn logged_out_is_reported_and_the_first_turn_surfaces_auth_required() {
 }
 
 /// Resume keeps the thread id and its turn history (a rollback can cut into
-/// it); fork at fork_point creates a new id with the right anchor.
+/// it); fork at fork_point creates a new id with the right anchor. The usage
+/// frame each bind replays counts toward no turn.
 #[tokio::test]
 async fn resume_keeps_the_thread_and_fork_cuts_at_the_anchor() {
     let (session, mut events) = open("resume-src", "").await;
@@ -1032,8 +1049,10 @@ async fn resume_keeps_the_thread_and_fork_cuts_at_the_anchor() {
         }
     }
     resumed.prompt("hi").await.unwrap();
-    let text = complete_turn(&resumed, &mut events, PermissionChoice::AllowOnce).await;
+    let (text, usage) =
+        complete_turn_usage(&resumed, &mut events, PermissionChoice::AllowOnce).await;
     assert!(text.contains("rolled=1"), "{text}");
+    assert_eq!(usage, Some(TURN_USAGE));
     // The thread may have been left in plan mode; its first turn says which.
     assert!(text.contains(r#"collab={"mode":"default""#), "{text}");
     resumed.close().await.unwrap();
@@ -1049,8 +1068,9 @@ async fn resume_keeps_the_thread_and_fork_cuts_at_the_anchor() {
     .unwrap();
     assert_eq!(fork.info().resume_token.unwrap().as_str(), "th-fork-1");
     fork.prompt("hi").await.unwrap();
-    let text = complete_turn(&fork, &mut events, PermissionChoice::AllowOnce).await;
+    let (text, usage) = complete_turn_usage(&fork, &mut events, PermissionChoice::AllowOnce).await;
     assert!(text.contains("fork=turn-0"), "{text}");
+    assert_eq!(usage, Some(TURN_USAGE));
     assert!(text.contains(r#"collab={"mode":"default""#), "{text}");
     fork.close().await.unwrap();
 }
