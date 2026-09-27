@@ -14,7 +14,8 @@
 // --rename: the server renames the thread after the first turn.
 // --host-feature: the host config enables an under-development feature too.
 // "hook-blocked": the user's prompt hook completes as `blocked`.
-// "rerouted": the server reroutes the turn to another model.
+// "rerouted": the server reroutes the turn to another model; "late-events":
+// a diff and a reroute arrive after the turn ended.
 // A turn/start in the `plan` collaboration mode also yields a `plan` item
 // ("no-plan": one with empty text).
 import { createInterface } from 'node:readline';
@@ -350,7 +351,13 @@ async function runTurn(params) {
   notify('thread/tokenUsage/updated', { threadId: THREAD.id, turnId: turn.id, tokenUsage: { total: { totalTokens: 2400 }, last: { totalTokens: 1200, inputTokens: 1100, cachedInputTokens: 600, outputTokens: 100 }, modelContextWindow: 258400 } });
   notify('account/rateLimits/updated', { rateLimits: RATE_LIMITS });
   if (turn.interrupted) return endTurn('interrupted');
+  const ended = turn.id;
   endTurn('completed');
+  // "late-events": a diff and a reroute trailing turn/completed, as a replay would.
+  if (prompt.includes('late-events')) {
+    notify('turn/diff/updated', { threadId: THREAD.id, turnId: ended, diff: FRUIT_DIFF });
+    notify('model/rerouted', { threadId: THREAD.id, turnId: ended, fromModel: 'gpt-6', toModel: 'gpt-6-mini', reason: 'highRiskCyberActivity' });
+  }
   if (flag('--rename') && THREAD.name === null) {
     THREAD.name = 'Pear talk';
     notify('thread/name/updated', { threadId: THREAD.id, name: THREAD.name });
