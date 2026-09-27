@@ -1863,8 +1863,7 @@ impl Drive {
         answer: crate::event::Answer,
     ) -> Result<(), Gone> {
         if let Some(pending) = self.permissions.remove(&request) {
-            // The reject option carries no message; `Cancel` falls to the
-            // `cancelled` outcome (agent-client-protocol-schema 1.7).
+            // A reject option has no message; `Cancel` sends `cancelled` (ACP schema 1.7).
             let choice = match answer {
                 crate::event::Answer::Permission(choice) => Some(choice),
                 crate::event::Answer::Deny { .. } => Some(PermissionChoice::DenyOnce),
