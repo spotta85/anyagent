@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::adapter::{Adapter, ConnectRequest};
 use crate::agent::{
-    AgentDetails, AgentId, AgentInstallation, AuthStatus, Capabilities, Capability, Input,
+    AgentDetails, AgentId, AgentInstallation, AuthStatus, Capabilities, Capability, EnvVars, Input,
     InstallationSource, PermissionMode, SessionOptions, SessionStart,
 };
 use crate::error::AgentError;
@@ -40,13 +40,7 @@ pub struct Runtime {
 }
 
 /// One cached login: agent, executable, config home, env, args.
-type UsageKey = (
-    AgentId,
-    PathBuf,
-    Option<PathBuf>,
-    crate::agent::EnvVars,
-    Vec<String>,
-);
+type UsageKey = (AgentId, PathBuf, Option<PathBuf>, EnvVars, Vec<String>);
 
 impl Default for Runtime {
     fn default() -> Self {
