@@ -618,51 +618,38 @@ async fn the_handshake_fills_details() {
     session.close().await.unwrap();
 }
 
-/// A command list the CLI pushes mid-session is sourced from fresh `/skills` rows.
+/// A command list the CLI pushes mid-session is sourced from fresh `/skills` rows. A CLI
+/// that refuses `get_skills_dialog` leaves every command `Builtin`, at the handshake and after.
 #[tokio::test]
-async fn a_skill_found_mid_session_is_a_skill() {
-    let (session, mut events) = open("new-skill", "").await;
-    session.prompt("new-skill").await.unwrap();
-    let fresh = loop {
-        next(&mut events).await;
-        let commands = session.info().details.commands;
-        if let Some(fresh) = commands.into_iter().find(|c| c.name == "fresh") {
-            break fresh;
-        }
+async fn a_pushed_command_list_is_sourced_from_skills() {
+    let user = CommandSource::Skill {
+        path: None,
+        scope: Some("user".into()),
     };
-    assert_eq!(
-        fresh.source,
-        CommandSource::Skill {
-            path: None,
-            scope: Some("user".into())
-        }
-    );
-    session.close().await.unwrap();
-}
-
-/// A CLI that refuses `get_skills_dialog` leaves every command `Builtin`, at
-/// the handshake and after a pushed command list.
-#[tokio::test]
-async fn a_refused_skills_dialog_leaves_every_command_builtin() {
-    let (session, mut events) = open("skills-refused", "--skills-refused").await;
-    let all_builtin = |session: &Session| {
-        let commands = session.info().details.commands;
-        assert!(!commands.is_empty());
-        commands.iter().all(|c| c.source == CommandSource::Builtin)
-    };
-    assert!(all_builtin(&session));
-    session.prompt("new-skill").await.unwrap();
-    while !session
-        .info()
-        .details
-        .commands
-        .iter()
-        .any(|c| c.name == "fresh")
-    {
-        next(&mut events).await;
+    for (name, flags, source) in [
+        ("new-skill", "", user),
+        ("skills-refused", "--skills-refused", CommandSource::Builtin),
+    ] {
+        let (session, mut events) = open(name, flags).await;
+        let refused = source == CommandSource::Builtin;
+        let all_builtin = |session: &Session| {
+            let commands = session.info().details.commands;
+            assert!(!commands.is_empty());
+            commands.iter().all(|c| c.source == CommandSource::Builtin)
+        };
+        assert_eq!(all_builtin(&session), refused, "{name}");
+        session.prompt("new-skill").await.unwrap();
+        let fresh = loop {
+            next(&mut events).await;
+            let commands = session.info().details.commands;
+            if let Some(fresh) = commands.into_iter().find(|c| c.name == "fresh") {
+                break fresh;
+            }
+        };
+        assert_eq!(fresh.source, source, "{name}");
+        assert_eq!(all_builtin(&session), refused, "{name}");
+        session.close().await.unwrap();
     }
-    assert!(all_builtin(&session));
-    session.close().await.unwrap();
 }
 
 /// Probe reports identical details to open for explorer use.
