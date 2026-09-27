@@ -1413,8 +1413,7 @@ impl Drive {
             (Some(questions), Answer::Question(answers)) => {
                 question_response(&pending, questions, &answers)
             }
-            // The message replaces the tool's result; `interrupt` ends the turn
-            // (live-probed 2026-09-27, 2.1.283). A question is a tool request too.
+            // The message becomes the tool result; `interrupt` ends the turn (probed 2026-09-27, 2.1.283).
             (_, Answer::Deny { message }) => json!({ "behavior": "deny", "message": message }),
             (_, Answer::Cancel) => {
                 json!({ "behavior": "deny", "message": "cancelled", "interrupt": true })

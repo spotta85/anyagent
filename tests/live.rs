@@ -1032,11 +1032,8 @@ async fn permissions_gate_the_write_and_deny_holds() {
     }
 }
 
-/// A deny's message reaches the model in place of the fixed text. claude
-/// only: opencode carries it too (wire-recorded 2026-09-27), but its free
-/// model ignored it in 2 of 3 runs. The message is a fact to repeat, not a
-/// style request: haiku ignored "use the word PINEAPPLE" it had received
-/// (wire-recorded 2026-09-27).
+/// A deny's message reaches the model in place of the fixed text. claude only: opencode's
+/// route takes one too (OpenAPI `/doc`, 1.18.29), but its free model often ignores it.
 #[tokio::test]
 #[ignore = "live: talks to real agents"]
 async fn deny_with_a_message_reaches_the_agent() {
@@ -1062,6 +1059,7 @@ async fn deny_with_a_message_reaches_the_agent() {
             {
                 EventKind::TextDelta { text: t, .. } => text.push_str(&t),
                 EventKind::RequestOpened(request) => {
+                    // A fact to repeat, not a style request: haiku ignored one of those.
                     let deny = Answer::Deny {
                         message: "Denied by the reviewer. The secret word is PINEAPPLE.".into(),
                     };
