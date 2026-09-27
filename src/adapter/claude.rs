@@ -1210,13 +1210,19 @@ impl Drive {
                 // In-flight state died with the old wire; the new one reuses
                 // its control ids, so stale ones would mis-match receipts.
                 self.messages.clear();
-                self.tools.clear();
                 self.requests.clear();
                 self.usage_request = None;
                 self.skills_request = None;
                 self.configs.clear();
                 self.interrupt_id = None;
                 self.info.resume_token = None;
+                // The old process took its running tools with it: settle them.
+                for (_, mut tool) in std::mem::take(&mut self.tools) {
+                    if tool.status.is_active() {
+                        tool.status = ToolStatus::Cancelled;
+                        self.events.event(EventKind::ToolUpdated(tool)).await?;
+                    }
+                }
                 // The fork is a new process: it needs the servers again.
                 self.declare_mcp_servers().await?;
                 self.events

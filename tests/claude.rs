@@ -1513,6 +1513,41 @@ async fn a_background_subagent_runs_past_its_turn() {
     session.close().await.unwrap();
 }
 
+/// A rollback kills a background Agent that never reported: it settles
+/// `Cancelled` outside any turn.
+#[tokio::test]
+async fn a_rollback_cancels_a_background_tool() {
+    let (session, mut events) = open("bg-rollback", "").await;
+    session.prompt("one").await.unwrap();
+    complete_turn(&session, &mut events).await;
+    session.prompt("bg-never-reports").await.unwrap();
+    complete_turn(&session, &mut events).await;
+    session
+        .rollback(
+            std::num::NonZeroU32::new(1).unwrap(),
+            RollbackScope::Conversation,
+        )
+        .await
+        .unwrap();
+    let mut last = None;
+    loop {
+        let event = next(&mut events).await;
+        match event.kind {
+            EventKind::ToolUpdated(tool) => {
+                assert!(event.turn_info.is_none(), "opened a turn: {tool:?}");
+                last = Some(tool);
+            }
+            EventKind::TurnStarted { .. } => panic!("the settle opened a turn"),
+            EventKind::SessionUpdated(_) => break,
+            _ => {}
+        }
+    }
+    let last = last.unwrap();
+    assert_eq!(last.id.as_str(), "toolu_bga");
+    assert_eq!(last.status, ToolStatus::Cancelled);
+    session.close().await.unwrap();
+}
+
 /// Losing auth mid-session fails turn and closes with AuthRequired + EnvVar method.
 #[tokio::test]
 async fn losing_auth_mid_session_fails_the_turn_and_closes() {

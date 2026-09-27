@@ -322,7 +322,8 @@ async function runTurn(m) {
 
   // A background Agent (probed 2026-09-27, 2.1.283): the tool_result says `async_launched` and the
   // notification arrived after the turn ended; progress is moved after it to act out a long agent.
-  if (flag('--bg-subagent')) {
+  // "bg-never-reports" launches the same Agent, and nothing more arrives for it.
+  if (flag('--bg-subagent') || prompt.includes('bg-never-reports')) {
     msgStart('msg_1');
     assistantTool('toolu_bga', 'Agent', { description: 'pong check', subagent_type: 'general-purpose', model: 'haiku', run_in_background: true, prompt: 'Reply PONG.' });
     task('task_started', { description: 'pong check', subagent_type: 'general-purpose', is_backgrounded: true, task_type: 'local_agent' }, 'toolu_bga');
@@ -332,6 +333,7 @@ async function runTurn(m) {
     resultFrame({ user_message_uuid: u });
     life(u, 'completed');
     turn = null;
+    if (prompt.includes('bg-never-reports')) return;
     await sleep(150);
     task('task_progress', { description: 'Running Echo the word hi', subagent_type: 'general-purpose', usage: { total_tokens: 20584, tool_uses: 1, duration_ms: 1610 }, last_tool_name: 'Bash' }, 'toolu_bga');
     task('task_notification', { status: 'completed', summary: 'PONG', usage: { total_tokens: 21582, tool_uses: 1, duration_ms: 2716 } }, 'toolu_bga');
