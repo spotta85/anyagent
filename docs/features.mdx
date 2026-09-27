@@ -325,9 +325,10 @@ the parent's turn; anyagent consumes the child's turn bookkeeping.
 |---|---|---|
 | Context usage | `EventKind::ContextUsage { used_tokens, window_tokens, cost_usd }` | How full this session's window is |
 | Plan usage | `runtime.plan_usage(&agent)`, `EventKind::PlanUsageUpdated` | How much of the account's subscription is used, per window |
+| Banked resets | `PlanUsage::reset_credits` | Limit resets the account can use now, and when the next one expires |
 
 ```rust
-let usage = runtime.plan_usage(&agent).await?;        // plan name, 5-hour and weekly windows
+let usage = runtime.plan_usage(&agent).await?;        // plan name, 5-hour and weekly windows, banked resets
 for entry in runtime.plan_usage_all().await {          // every installed agent, for a dashboard
     ui.card(&entry.agent.name, entry.usage);
 }
@@ -337,6 +338,11 @@ for entry in runtime.plan_usage_all().await {          // every installed agent,
 agent itself: no HTTP endpoints, no token handling.
 **Gates:** `ContextUsage` and `PlanUsage`. Plan usage also needs a
 subscription login (`AuthKind::Subscription`).
+
+| Agent | `reset_credits` |
+|---|---|
+| codex | From `plan_usage`. `None` on pushed updates: the notification carries no credits |
+| claude | Known limit: CLI 2.1.283 returns `cedar_ember: null` on `get_usage`, so claude reports `None` until the CLI passes the block through |
 
 ## MCP servers
 

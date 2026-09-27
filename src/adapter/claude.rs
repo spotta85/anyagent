@@ -28,8 +28,8 @@ use crate::error::AgentError;
 use crate::event::{
     Answer, Choice, ChoiceId, CompletionSource, Diagnostic, DiagnosticLevel, EventKind, Extensions,
     FileDiff, MessageId, PermissionChoice, PermissionRequest, PlanUsage, Question, QuestionAnswer,
-    QuestionId, QuestionRequest, RawTool, Request, RequestId, StopReason, ToolId, ToolInput,
-    ToolKind, ToolStatus, ToolUpdate, TurnUsage, UsageWindow,
+    QuestionId, QuestionRequest, RawTool, Request, RequestId, ResetCredits, StopReason, ToolId,
+    ToolInput, ToolKind, ToolStatus, ToolUpdate, TurnUsage, UsageWindow,
 };
 use crate::process::{self, Spawn};
 
@@ -1688,7 +1688,39 @@ fn parse_plan_usage(response: &Value) -> Option<PlanUsage> {
     (!windows.is_empty()).then(|| PlanUsage {
         plan: response["subscription_type"].as_str().map(str::to_owned),
         windows,
+        reset_credits: reset_credits(&rate_limits["cedar_ember"]),
         fetched_at: std::time::SystemTime::now(),
+    })
+}
+
+/// `cedar_ember` → banked resets: the live grants' `resets_left` summed, and
+/// the next grant's expiry. `None` when the block is null or not eligible.
+fn reset_credits(block: &Value) -> Option<ResetCredits> {
+    if block["eligible"] != true {
+        return None;
+    }
+    let now = std::time::SystemTime::now();
+    // Live: not paused, usable now, and `ends_at` null or in the future.
+    let live: Vec<&Value> = block["grants"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|grant| grant["paused"] != true && grant["usable_now"] == true)
+        .filter(|grant| match grant["ends_at"].as_str() {
+            Some(ends_at) => parse_rfc3339(ends_at).is_some_and(|t| t > now),
+            None => true,
+        })
+        .collect();
+    // Without a live next grant nothing can be used: count 0.
+    let next = block["next_grant_id"]
+        .as_str()
+        .and_then(|id| live.iter().find(|grant| grant["id"] == id));
+    let left: u64 = live.iter().filter_map(|g| g["resets_left"].as_u64()).sum();
+    Some(ResetCredits {
+        available: next.map_or(0, |_| u32::try_from(left).unwrap_or(u32::MAX)),
+        next_expires_at: next
+            .and_then(|g| g["ends_at"].as_str())
+            .and_then(parse_rfc3339),
     })
 }
 
@@ -1886,5 +1918,49 @@ mod tests {
         assert_eq!(usage.cached_input_tokens, 100);
         assert_eq!(usage.output_tokens, 7);
         assert_eq!(turn_usage(&Value::Null), None);
+    }
+
+    #[test]
+    fn plan_usage_has_no_credits_when_cedar_ember_is_null() {
+        // Live 2.1.283 reply.
+        assert_eq!(credits_of(Value::Null), None);
+    }
+
+    #[test]
+    fn reset_credits_sum_the_live_grants() {
+        let credits = credits_of(json!({
+            "eligible": true,
+            "next_grant_id": "a",
+            "grants": [
+                { "id": "a", "resets_left": 2, "ends_at": "2099-01-01T00:00:00Z", "paused": false, "usable_now": true },
+                { "id": "b", "resets_left": 3, "ends_at": null, "paused": false, "usable_now": true },
+                { "id": "old", "resets_left": 7, "ends_at": "2020-01-01T00:00:00Z", "paused": false, "usable_now": true },
+            ],
+        }))
+        .unwrap();
+        assert_eq!(credits.available, 5);
+        let ends = std::time::UNIX_EPOCH + Duration::from_secs(4_070_908_800);
+        assert_eq!(credits.next_expires_at, Some(ends));
+    }
+
+    #[test]
+    fn a_paused_next_grant_leaves_nothing_usable() {
+        let credits = credits_of(json!({
+            "eligible": true,
+            "next_grant_id": "a",
+            "grants": [{ "id": "a", "resets_left": 1, "ends_at": null, "paused": true, "usable_now": true }],
+        }))
+        .unwrap();
+        assert_eq!(credits.available, 0);
+        assert_eq!(credits.next_expires_at, None);
+    }
+
+    /// `get_usage` reply with one session window and this `cedar_ember` block.
+    fn credits_of(cedar_ember: Value) -> Option<ResetCredits> {
+        let reply = json!({ "rate_limits": {
+            "five_hour": { "utilization": 5, "resets_at": "2099-01-01T00:00:00Z" },
+            "cedar_ember": cedar_ember,
+        }});
+        parse_plan_usage(&reply).unwrap().reset_credits
     }
 }

@@ -354,6 +354,11 @@ class UsageWindow(TypedDict):
     resets_at: NotRequired[SystemTime | None]
 
 
+class ResetCredits(TypedDict):
+    available: int
+    next_expires_at: NotRequired[SystemTime | None]
+
+
 DiagnosticLevel: TypeAlias = Literal['Info', 'Warning', 'Error']
 
 
@@ -542,6 +547,7 @@ ConfigKind: TypeAlias = Literal['Boolean'] | ConfigKind1
 class PlanUsage(TypedDict):
     plan: NotRequired[str | None]
     windows: list[UsageWindow]
+    reset_credits: NotRequired[ResetCredits | None]
     fetched_at: SystemTime
 
 

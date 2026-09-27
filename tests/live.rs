@@ -1546,7 +1546,7 @@ async fn fork_from_branches_at_a_point_and_at_the_tip() {
     }
 }
 
-/// Runtime plan_usage probes quota without a session, caches within TTL, or returns UnsupportedFeature typed.
+/// Runtime plan_usage probes quota without a session, caches within TTL, prints reset credits, or returns UnsupportedFeature typed.
 #[tokio::test]
 #[ignore = "live: talks to real agents"]
 async fn runtime_plan_usage_probes_without_a_session() {
@@ -1561,7 +1561,11 @@ async fn runtime_plan_usage_probes_without_a_session() {
                 assert_eq!(cached.fetched_at, usage.fetched_at, "{h}: cache missed");
                 pass(
                     h,
-                    &format!("probe returned {} windows, cached", usage.windows.len()),
+                    &format!(
+                        "probe returned {} windows, cached; reset credits {:?}",
+                        usage.windows.len(),
+                        usage.reset_credits
+                    ),
                 );
             }
             Err(AgentError::UnsupportedFeature(_)) => {

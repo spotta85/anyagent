@@ -657,6 +657,10 @@ export interface PlanUsage {
    */
   plan?: string | null;
   windows: UsageWindow[];
+  /**
+   * Banked limit resets on the account. `None` when this report does not carry them.
+   */
+  reset_credits?: ResetCredits | null;
   fetched_at: SystemTime;
 }
 export interface UsageWindow {
@@ -666,6 +670,16 @@ export interface UsageWindow {
   label: string;
   used_percent: number;
   resets_at?: SystemTime | null;
+}
+/**
+ * Limit resets the account can use now.
+ */
+export interface ResetCredits {
+  available: number;
+  /**
+   * When the next one to be used expires.
+   */
+  next_expires_at?: SystemTime | null;
 }
 export interface Diagnostic {
   level: DiagnosticLevel;
