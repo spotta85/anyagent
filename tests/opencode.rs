@@ -693,29 +693,35 @@ async fn a_refused_mcp_server_fails_the_open() {
     );
 }
 
-/// An MCP tool call is `ToolKind::Mcp`: its `<server>_<tool>` name is matched
-/// against every server opencode lists (the user's "my docs" too), longest
-/// sanitized name first, so declared "my" does not claim it.
+/// MCP calls are `ToolKind::Mcp`, longest server name first (user "my docs"
+/// over declared "my"); one `GET /mcp`, on the first such call, none at open.
 #[tokio::test]
 async fn mcp_tool_calls_name_their_server() {
     let options = SessionOptions::in_dir(std::env::temp_dir())
         .mcp_server(McpServer::http("my", "http://127.0.0.1:1/mcp"));
     let (session, mut events) = open_with("mcp-kind", "", options).await.unwrap();
     session.prompt("mcp-call").await.unwrap();
+    let mut text = String::new();
     let mut kinds = Vec::new();
     loop {
         match next(&mut events).await.kind {
+            EventKind::TextDelta { text: t, .. } => text.push_str(&t),
             EventKind::ToolUpdated(tool) => kinds.push(tool.kind),
             EventKind::TurnEnded { .. } => break,
             _ => {}
         }
     }
-    let lookup = ToolKind::Mcp {
+    assert!(text.contains("mcp-gets=0"), "open read the list: {text}");
+    let mcp = |tool: &str| ToolKind::Mcp {
         server: "my docs".into(),
-        tool: "lookup".into(),
+        tool: tool.into(),
     };
-    assert!(kinds.contains(&lookup), "{kinds:?}");
+    assert!(kinds.contains(&mcp("lookup")), "{kinds:?}");
+    assert!(kinds.contains(&mcp("search")), "{kinds:?}");
     assert!(kinds.contains(&ToolKind::Execute), "{kinds:?}");
+    session.prompt("mcp count").await.unwrap();
+    let text = complete_turn(&session, &mut events, PermissionChoice::AllowOnce).await;
+    assert!(text.contains("mcp-gets=1"), "two calls, one read: {text}");
     session.close().await.unwrap();
 }
 

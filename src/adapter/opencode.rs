@@ -86,7 +86,7 @@ impl Adapter for OpencodeAdapter {
                 throwaway: request.options.throwaway,
                 windows: launched.windows,
                 variants: launched.variants,
-                mcp_servers: launched.mcp_servers,
+                mcp_servers: None,
                 login: login_methods(&request.installation, Some(&request.options)),
                 scratch: TurnScratch::default(),
                 tide: String::new(),
@@ -122,7 +122,6 @@ struct Launched {
     session_id: String,
     windows: HashMap<String, u64>,
     variants: HashMap<String, Vec<String>>,
-    mcp_servers: Vec<String>,
 }
 
 /// Spawns the server, waits for health, subscribes to the event bus, binds
@@ -165,10 +164,10 @@ async fn launch_once(
         let version = await_health(&http).await?;
         let frames = open_bus(&http, recorder.clone()).await?;
         // Before the session exists, so a refused server leaves none behind.
-        let mcp_servers = add_mcp_servers(&http, &request.options.mcp_servers).await?;
+        add_mcp_servers(&http, &request.options.mcp_servers).await?;
         let (info, session_id, windows, variants) =
             handshake(&http, request, recorder, version).await?;
-        Ok((frames, info, session_id, windows, variants, mcp_servers))
+        Ok((frames, info, session_id, windows, variants))
     };
     // A squatter on the picked port (the pick-then-bind race) makes opencode
     // exit at once: the boot races that death so it costs no handshake
@@ -183,7 +182,7 @@ async fn launch_once(
         return Err(AgentError::ProcessExited { status, stderr });
     }
     match outcome {
-        Some(Ok(Ok((frames, info, session_id, windows, variants, mcp_servers)))) => Ok(Launched {
+        Some(Ok(Ok((frames, info, session_id, windows, variants)))) => Ok(Launched {
             server,
             http,
             frames,
@@ -191,7 +190,6 @@ async fn launch_once(
             session_id,
             windows,
             variants,
-            mcp_servers,
         }),
         Some(Ok(Err(e))) => {
             let e = crate::adapter::with_stderr(e, &server);
@@ -319,14 +317,12 @@ async fn await_health(http: &Http) -> Result<Option<String>, AgentError> {
     }
 }
 
-/// Adds each declared MCP server with `POST /mcp` (opencode keeps them per
-/// server process, one per session here), then returns every server name
-/// opencode knows, the user's own included. A refused one fails the open.
-async fn add_mcp_servers(http: &Http, servers: &[McpServer]) -> Result<Vec<String>, AgentError> {
+/// Adds each declared MCP server with `POST /mcp`; opencode keeps them per
+/// server process (one per session here). A refused one fails the open.
+async fn add_mcp_servers(http: &Http, servers: &[McpServer]) -> Result<(), AgentError> {
     for server in servers {
         let body = json!({ "name": server.name, "config": mcp_config(&server.connection) });
-        // The reply maps every server name to its status; a refusal is
-        // `{ status: "failed", error }` (probed 1.18.29).
+        // Every server's status comes back; a refusal is `failed` + `error`.
         let statuses = http.post("/mcp", body).await?;
         let status = &statuses[server.name.as_str()];
         if status["status"] != "connected" {
@@ -338,11 +334,7 @@ async fn add_mcp_servers(http: &Http, servers: &[McpServer]) -> Result<Vec<Strin
             )));
         }
     }
-    let statuses = http.get("/mcp").await?;
-    Ok(statuses
-        .as_object()
-        .map(|all| all.keys().cloned().collect())
-        .unwrap_or_default())
+    Ok(())
 }
 
 /// One server as opencode's `local` or `remote` config. A remote server is
@@ -679,8 +671,9 @@ struct Drive {
     windows: HashMap<String, u64>,
     /// Reasoning variants per model, behind the `effort` option.
     variants: HashMap<String, Vec<String>>,
-    /// Every MCP server name opencode knows, to type their tool calls.
-    mcp_servers: Vec<String>,
+    /// Every MCP server name opencode knows (the user's own too), read on
+    /// the first tool that may be MCP; types those calls.
+    mcp_servers: Option<Vec<String>>,
     /// Everything that lives for one turn; reset at idle.
     scratch: TurnScratch,
     /// Highest assistant `msg_…` id ever minted. Ids sort by creation time,
@@ -1225,11 +1218,18 @@ impl Drive {
         let call_id = part["callID"].as_str().unwrap_or_default().to_owned();
         let name = part["tool"].as_str().unwrap_or_default();
         let state = &part["state"];
-        let mut tool = self.scratch.tools.remove(&call_id).unwrap_or_else(|| {
-            let mut tool = fresh_tool(&call_id, name);
-            tool.kind = mcp_kind(name, &self.mcp_servers).unwrap_or(tool.kind);
-            tool
-        });
+        let mut tool = match self.scratch.tools.remove(&call_id) {
+            Some(tool) => tool,
+            None => {
+                let mut tool = fresh_tool(&call_id, name);
+                // Built-ins win; an unknown `<server>_<tool>` may be MCP.
+                if tool.kind == ToolKind::Other && name.contains('_') {
+                    let servers = self.mcp_servers().await;
+                    tool.kind = mcp_kind(name, servers).unwrap_or(ToolKind::Other);
+                }
+                tool
+            }
+        };
         apply_state(&mut tool, name, state);
         let done = matches!(tool.status, ToolStatus::Completed | ToolStatus::Failed);
         if parent.is_none()
@@ -1249,6 +1249,19 @@ impl Drive {
                 extensions: Extensions::new(),
             })
             .await
+    }
+
+    /// Every MCP server name, from `GET /mcp` once per session. A failed
+    /// read counts as none, so it never fails the turn.
+    async fn mcp_servers(&mut self) -> &[String] {
+        if self.mcp_servers.is_none() {
+            let statuses = self.http.get_quick("/mcp").await.unwrap_or_default();
+            let names = statuses
+                .as_object()
+                .map(|all| all.keys().cloned().collect());
+            self.mcp_servers = Some(names.unwrap_or_default());
+        }
+        self.mcp_servers.as_deref().unwrap_or_default()
     }
 
     /// The agent's task list is a plan, not a tool call: one snapshot per
