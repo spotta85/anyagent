@@ -279,8 +279,11 @@ async function runTurn(params) {
     calls.forEach(itemStarted);
     const resps = [];
     for (const call of calls) {
-      resps.push(await ask('mcpServer/elicitation/request', { serverName: 'probe', mode: 'form', _meta: { codex_approval_kind: 'mcp_tool_call', persist, tool_description: 'Returns the secret word.', tool_params: call.arguments, tool_params_display: [] }, message: 'Allow the probe MCP server to run tool "secret_word"?', requestedSchema: { type: 'object', properties: {} } }));
-      if (turn.interrupted) return endTurn('interrupted');
+      const resp = await ask('mcpServer/elicitation/request', { serverName: 'probe', mode: 'form', _meta: { codex_approval_kind: 'mcp_tool_call', persist, tool_description: 'Returns the secret word.', tool_params: call.arguments, tool_params_display: [] }, message: 'Allow the probe MCP server to run tool "secret_word"?', requestedSchema: { type: 'object', properties: {} } });
+      // A cancel reply comes just before the interrupt: record the action it carried.
+      while (resp?.action === 'cancel' && !turn.interrupted) await sleep(10);
+      if (turn.interrupted) { delta(msg.id, `mcpcall=${resp?.action} `); return endTurn('interrupted'); }
+      resps.push(resp);
       notify('serverRequest/resolved', { threadId: THREAD.id, requestId: serverReqN - 1 });
     }
     calls.forEach((call, i) => {

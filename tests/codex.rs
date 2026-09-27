@@ -80,13 +80,13 @@ async fn diagnostics_until(events: &mut Events, stop: impl Fn(&EventKind) -> boo
     }
 }
 
-/// Runs one MCP-approval turn, answering each permission with `choice`.
-/// Returns the text, the requests, the MCP tool snapshots, and the stop.
+/// Runs one MCP-approval turn, answering each permission with `choice` (`None`
+/// cancels the turn). Returns the text, the requests, the MCP tool snapshots, and the stop.
 async fn mcp_turn(
     session: &Session,
     events: &mut Events,
     prompt: &str,
-    choice: PermissionChoice,
+    choice: Option<PermissionChoice>,
 ) -> (String, Vec<PermissionRequest>, Vec<ToolUpdate>, StopReason) {
     session.prompt(prompt).await.unwrap();
     let (mut text, mut requests, mut states) = (String::new(), Vec::new(), Vec::new());
@@ -99,10 +99,11 @@ async fn mcp_turn(
             EventKind::RequestOpened(Request::Permission(request)) => {
                 let id = request.id.clone();
                 requests.push(request);
-                session
-                    .answer(id, Answer::Permission(choice))
-                    .await
-                    .unwrap();
+                match choice {
+                    Some(choice) => session.answer(id, Answer::Permission(choice)).await,
+                    None => session.cancel(false).await,
+                }
+                .unwrap();
             }
             EventKind::TurnEnded { stop, .. } => return (text, requests, states, stop),
             _ => {}
@@ -808,7 +809,7 @@ async fn an_mcp_tool_approval_maps_to_a_permission() {
         ),
     ] {
         let (text, requests, states, stop) =
-            mcp_turn(&session, &mut events, "mcp-tool please", choice).await;
+            mcp_turn(&session, &mut events, "mcp-tool please", Some(choice)).await;
         // The request names no item; its tool is the call `item/started` opened.
         assert_eq!(requests[0].tool.id, states[0].id);
         assert_eq!(requests[0].tool.kind, mcp);
@@ -833,7 +834,7 @@ async fn an_mcp_tool_approval_maps_to_a_permission() {
         &session,
         &mut events,
         "mcp-always please",
-        PermissionChoice::AllowOnce,
+        Some(PermissionChoice::AllowOnce),
     )
     .await;
     assert_eq!(
@@ -852,11 +853,22 @@ async fn an_mcp_approval_picks_the_call_by_its_arguments() {
         &session,
         &mut events,
         "mcp-two please",
-        PermissionChoice::AllowOnce,
+        Some(PermissionChoice::AllowOnce),
     )
     .await;
     let asked: Vec<_> = requests.iter().map(|r| &r.tool.id).collect();
     assert_eq!(asked, vec![&states[0].id, &states[1].id]);
+    session.close().await.unwrap();
+}
+
+/// Cancel with an MCP approval open replies `{action: cancel}` and the turn ends Cancelled.
+#[tokio::test]
+async fn cancel_with_an_mcp_approval_open_replies_cancel() {
+    let (session, mut events) = open("mcp-cancel", "").await;
+    let (text, requests, _, stop) = mcp_turn(&session, &mut events, "mcp-tool please", None).await;
+    assert_eq!(requests.len(), 1);
+    assert!(text.contains("mcpcall=cancel "), "{text}");
+    assert_eq!(stop, StopReason::Cancelled);
     session.close().await.unwrap();
 }
 
