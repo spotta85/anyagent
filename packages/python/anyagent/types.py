@@ -57,6 +57,11 @@ class AcpSpec(TypedDict):
     args: NotRequired[list[str]]
 
 
+class AgentAt(TypedDict):
+    id: str
+    path: str
+
+
 PermissionMode: TypeAlias = Literal['Ask', 'AcceptEdits', 'AutoApprove']
 
 
@@ -434,7 +439,7 @@ class AgentRef1(TypedDict):
     acp: AcpSpec
 
 
-AgentRef: TypeAlias = str | AgentRef1
+AgentRef: TypeAlias = str | AgentRef1 | AgentAt
 
 
 class McpServer(TypedDict):
@@ -573,12 +578,35 @@ class Delivery(TypedDict):
 class Frame2(TypedDict):
     id: int
     agent: AgentRef
+    dir: NotRequired[str | None]
+    resume: NotRequired[str | None]
+    fork: NotRequired[str | None]
+    fork_at: NotRequired[str | None]
+    permission_mode: NotRequired[PermissionMode | None]
+    mcp_servers: NotRequired[list[McpServer]]
+    configure: NotRequired[dict[str, ConfigValue]]
+    instructions: NotRequired[str | None]
+    env: NotRequired[dict[str, str]]
+    args: NotRequired[list[str]]
+    config_home: NotRequired[str | None]
+    record_wire: NotRequired[str | None]
     cmd: Literal['probe']
 
 
 class Frame3(TypedDict):
     id: int
     agent: AgentRef
+    resume: NotRequired[str | None]
+    fork: NotRequired[str | None]
+    fork_at: NotRequired[str | None]
+    permission_mode: NotRequired[PermissionMode | None]
+    mcp_servers: NotRequired[list[McpServer]]
+    configure: NotRequired[dict[str, ConfigValue]]
+    instructions: NotRequired[str | None]
+    env: NotRequired[dict[str, str]]
+    args: NotRequired[list[str]]
+    config_home: NotRequired[str | None]
+    record_wire: NotRequired[str | None]
     cmd: Literal['plan_usage']
 
 
@@ -587,12 +615,18 @@ class Frame4(TypedDict):
     agent: AgentRef
     dir: str
     prompt: str
+    attachments: NotRequired[list[str]]
     resume: NotRequired[str | None]
     fork: NotRequired[str | None]
     fork_at: NotRequired[str | None]
     permission_mode: NotRequired[PermissionMode | None]
     mcp_servers: NotRequired[list[McpServer]]
     configure: NotRequired[dict[str, ConfigValue]]
+    instructions: NotRequired[str | None]
+    env: NotRequired[dict[str, str]]
+    args: NotRequired[list[str]]
+    config_home: NotRequired[str | None]
+    record_wire: NotRequired[str | None]
     cmd: Literal['generate']
 
 
@@ -606,6 +640,11 @@ class Frame5(TypedDict):
     permission_mode: NotRequired[PermissionMode | None]
     mcp_servers: NotRequired[list[McpServer]]
     configure: NotRequired[dict[str, ConfigValue]]
+    instructions: NotRequired[str | None]
+    env: NotRequired[dict[str, str]]
+    args: NotRequired[list[str]]
+    config_home: NotRequired[str | None]
+    record_wire: NotRequired[str | None]
     cmd: Literal['open']
 
 

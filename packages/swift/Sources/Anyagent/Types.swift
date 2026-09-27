@@ -2,10 +2,11 @@
 
 import Foundation
 
-/// A catalog id like `"claude"`, or an ACP agent the catalog does not know.
+/// A catalog id like `"claude"`, a catalog agent at an exact path, or an unknown ACP agent.
 public enum AgentRef: Codable, Sendable, Equatable {
     case string(String)
     case acp(AcpSpec)
+    case agentAt(AgentAt)
     /// A variant this package does not know (a newer binary): its wire name.
     case unrecognized(String)
 
@@ -14,12 +15,14 @@ public enum AgentRef: Codable, Sendable, Equatable {
         switch self {
         case .string: "string"
         case .acp: "acp"
+        case .agentAt: "AgentAt"
         case .unrecognized(let tag): tag
         }
     }
 
     public init(from decoder: Decoder) throws {
         if let s = try? String(from: decoder) { self = .string(s); return }
+        if let v = try? AgentAt(from: decoder) { self = .agentAt(v); return }
         let c = try decoder.container(keyedBy: Key.self)
         switch c.allKeys.first?.stringValue {
         case "acp": self = .acp(try c.decode(AcpSpec.self, forKey: Key("acp")))
@@ -31,6 +34,7 @@ public enum AgentRef: Codable, Sendable, Equatable {
         switch self {
         case .string(let v): try encoder.raw(v)
         case .acp(let v): try encoder.tagged("acp", v)
+        case .agentAt(let v): try encoder.raw(v)
         case .unrecognized(let tag): try encoder.raw(tag)
         }
     }
@@ -49,6 +53,17 @@ public struct AcpSpec: Codable, Sendable, Equatable {
         self.name = name
         self.path = path
         self.args = args
+    }
+}
+
+/// A catalog agent run from one executable: `{"id": "claude", "path": "/opt/claude"}`.
+public struct AgentAt: Codable, Sendable, Equatable {
+    public var id: String
+    public var path: String
+
+    public init(id: String, path: String) {
+        self.id = id
+        self.path = path
     }
 }
 
