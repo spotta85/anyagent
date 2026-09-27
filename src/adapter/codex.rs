@@ -343,7 +343,10 @@ async fn handshake(
     let config = start_config(request, &models)?;
     // A probe stops short of `thread/start`, which starts the user's MCP servers and hooks.
     let (thread, thread_id) = if request.options.details_only {
-        (effective_config(wire, request).await?, String::new())
+        (
+            effective_config(wire, request, &config).await?,
+            String::new(),
+        )
     } else {
         let thread = open_thread(wire, request, &config).await?;
         let id = thread["thread"]["id"]
@@ -533,9 +536,13 @@ async fn open_thread(
     })
 }
 
-/// The effective config (`config/read`, 0.154.0) in `thread/start`'s response shape. Unset
-/// values read as codex's defaults; a trusted dir's thread would say workspace-write.
-async fn effective_config(wire: &mut Wire, request: &ConnectRequest) -> Result<Value, AgentError> {
+/// The effective config (`config/read`, 0.154.0) under the `configure` choices, shaped like the
+/// `thread/start` reply. Unset values read as codex's defaults (a trusted dir's thread: workspace-write).
+async fn effective_config(
+    wire: &mut Wire,
+    request: &ConnectRequest,
+    start: &StartConfig,
+) -> Result<Value, AgentError> {
     let params = json!({ "cwd": request.options.cwd() });
     let response = match wire.roundtrip("config/read", params).await {
         // A codex without the request: every value reads as its default.
@@ -543,13 +550,15 @@ async fn effective_config(wire: &mut Wire, request: &ConnectRequest) -> Result<V
         other => other.map_err(WireError::into_error)?,
     };
     let config = &response["config"];
-    let sandbox = config["sandbox_mode"].as_str().unwrap_or("read-only");
+    let sandbox = start.sandbox.as_deref().or(config["sandbox_mode"].as_str());
+    // Like `open_thread`: `plan` is no approval policy.
+    let policy = start.mode.as_deref().filter(|mode| *mode != "plan");
     Ok(json!({
         "model": config["model"],
         "reasoningEffort": config["model_reasoning_effort"],
         "serviceTier": config["service_tier"],
-        "approvalPolicy": config["approval_policy"],
-        "sandbox": { "type": sandbox_policy(sandbox) },
+        "approvalPolicy": policy.map_or(config["approval_policy"].clone(), Value::from),
+        "sandbox": { "type": sandbox_policy(sandbox.unwrap_or("read-only")) },
     }))
 }
 
