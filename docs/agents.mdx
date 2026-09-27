@@ -67,8 +67,8 @@ pi, which reports no model call for it.
 
 | Agent | `model` | `effort` | `fast` | `mode` | other |
 |---|:-:|:-:|:-:|:-:|---|
-| claude | live | live, from the model | live, when the model supports it | | |
-| codex | live | live, from its catalog | live | | `sandbox`, approval policy |
+| claude | live | live, from the model | live, when the model supports it | live (`plan`, `acceptEdits`, …) | |
+| codex | live | live, from its catalog | live | live (approval policy, or `plan`) | `sandbox` |
 | opencode | live (`provider/id`) | live, as the model's `variant` | | | |
 | pi | live | live, thinking levels | | | |
 | antigravity (agy) | at open only | | | at open only (`accept-edits`, `plan`) | reopen with the resume token to change |
@@ -95,7 +95,8 @@ refusal still shows as `Failed` (the CLI sends no denial frame for it).
 
 <Accordion title="Codex">
 Opts into the app-server's experimental API. Approval policy and sandbox
-switch live. Images ride as `localImage` items. Client MCP servers ride as
+switch live. `mode: plan` is codex's plan collaboration mode and keeps the
+last approval policy. Images ride as `localImage` items. Client MCP servers ride as
 launch overrides (stdio and HTTP; no SSE). `rollback` maps to
 `thread/revert`; files are never restored. Questions are translated
 defensively but the capability stays off until observed live.
