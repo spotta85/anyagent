@@ -1066,49 +1066,41 @@ async fn permissions_gate_the_write_and_deny_holds() {
 #[tokio::test]
 #[ignore = "live: talks to real agents"]
 async fn deny_with_a_message_reaches_the_agent() {
-    for h in enabled().await {
-        if h != "claude" {
-            println!("SKIP {h}: checked on claude only");
-            continue;
-        }
-        let (session, mut events, dir) = open(h).await;
-        session
-            .prompt(
-                "Create a file named note.txt containing exactly the word HELLO. Use your \
-                 file tools. If the tool is refused, do not retry: reply with the reason \
-                 you were given, word for word.",
-            )
-            .await
-            .unwrap();
-        let mut text = String::new();
-        let stop = loop {
-            match next(&mut events, &format!("{h}: deny with a message"))
-                .await
-                .kind
-            {
-                EventKind::TextDelta { text: t, .. } => text.push_str(&t),
-                EventKind::RequestOpened(request) => {
-                    // A fact to repeat, not a style request: haiku ignored one of those.
-                    let deny = Answer::Deny {
-                        message: "Denied by the reviewer. The secret word is PINEAPPLE.".into(),
-                    };
-                    session.answer(request.id(), deny).await.unwrap();
-                }
-                EventKind::TurnEnded { stop, .. } => break stop,
-                _ => {}
-            }
-        };
-        assert!(
-            !dir.path().join("note.txt").exists(),
-            "{h}: file after deny"
-        );
-        assert!(
-            text.to_uppercase().contains("PINEAPPLE"),
-            "{h}: turn ended {stop:?}, text was {text:?}"
-        );
-        session.close().await.unwrap();
-        pass(h, "a deny's message reached the model");
+    if !enabled().await.contains(&"claude") {
+        println!("SKIP: claude not enabled");
+        return;
     }
+    let (session, mut events, dir) = open("claude").await;
+    session
+        .prompt(
+            "Create a file named note.txt containing exactly the word HELLO. Use your \
+             file tools. If the tool is refused, do not retry: reply with the reason \
+             you were given, word for word.",
+        )
+        .await
+        .unwrap();
+    let mut text = String::new();
+    let stop = loop {
+        match next(&mut events, "claude: deny with a message").await.kind {
+            EventKind::TextDelta { text: t, .. } => text.push_str(&t),
+            EventKind::RequestOpened(request) => {
+                // A fact to repeat, not a style request: haiku ignored one of those.
+                let deny = Answer::Deny {
+                    message: "Denied by the reviewer. The secret word is PINEAPPLE.".into(),
+                };
+                session.answer(request.id(), deny).await.unwrap();
+            }
+            EventKind::TurnEnded { stop, .. } => break stop,
+            _ => {}
+        }
+    };
+    assert!(!dir.path().join("note.txt").exists(), "file after deny");
+    assert!(
+        text.to_uppercase().contains("PINEAPPLE"),
+        "turn ended {stop:?}, text was {text:?}"
+    );
+    session.close().await.unwrap();
+    pass("claude", "a deny's message reached the model");
 }
 
 /// AcceptEdits: the file edit lands without a request reaching the caller;
