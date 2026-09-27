@@ -640,21 +640,23 @@ async fn plan_mode_rides_turn_start_and_proposes_the_plan_item() {
         )
     };
 
-    let (text, plans) = plan_turn(&session, &mut events).await;
+    let (text, plans) = plan_turn(&session, &mut events, "plan a README").await;
     assert!(text.contains("policy=unset"), "{text}");
     assert!(text.contains(&collab("plan")), "{text}");
     assert_eq!(plans, vec!["# Plan\n\n1. Add README.md"]);
+    let (_, plans) = plan_turn(&session, &mut events, "no-plan").await;
+    assert!(plans.is_empty(), "an empty plan item proposed {plans:?}");
 
     // A policy ends plan mode: it rides again, and `default` goes out once.
     session.configure("mode", "never").await.unwrap();
     while text_option(&session.info(), "mode").as_deref() != Some("never") {
         next(&mut events).await;
     }
-    let (text, plans) = plan_turn(&session, &mut events).await;
+    let (text, plans) = plan_turn(&session, &mut events, "plan a README").await;
     assert!(text.contains("policy=never"), "{text}");
     assert!(text.contains(&collab("default")), "{text}");
     assert!(plans.is_empty());
-    let (text, _) = plan_turn(&session, &mut events).await;
+    let (text, _) = plan_turn(&session, &mut events, "plan a README").await;
     assert!(text.contains("collab=null"), "{text}");
 
     // Selected live, plan drops the policy again.
@@ -662,7 +664,7 @@ async fn plan_mode_rides_turn_start_and_proposes_the_plan_item() {
     while text_option(&session.info(), "mode").as_deref() != Some("plan") {
         next(&mut events).await;
     }
-    let (text, plans) = plan_turn(&session, &mut events).await;
+    let (text, plans) = plan_turn(&session, &mut events, "plan a README").await;
     assert!(text.contains("policy=unset"), "{text}");
     assert!(text.contains(&collab("plan")), "{text}");
     assert_eq!(plans.len(), 1);
@@ -671,8 +673,8 @@ async fn plan_mode_rides_turn_start_and_proposes_the_plan_item() {
 
 /// Runs one turn and returns its text and proposed plans; plan deltas must
 /// not surface as diagnostics.
-async fn plan_turn(session: &Session, events: &mut Events) -> (String, Vec<String>) {
-    session.prompt("plan a README").await.unwrap();
+async fn plan_turn(session: &Session, events: &mut Events, prompt: &str) -> (String, Vec<String>) {
+    session.prompt(prompt).await.unwrap();
     let (mut text, mut plans) = (String::new(), Vec::new());
     loop {
         match next(events).await.kind {

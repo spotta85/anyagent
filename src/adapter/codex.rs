@@ -1200,13 +1200,18 @@ impl Drive {
                 Ok(())
             }
             // Plan mode's proposal; the completed item's text is authoritative.
-            "plan" => {
-                if completed {
-                    let markdown = item["text"].as_str().unwrap_or_default().to_owned();
-                    return self.content(EventKind::PlanProposed { markdown }).await;
+            "plan" => match item["text"]
+                .as_str()
+                .filter(|text| completed && !text.is_empty())
+            {
+                Some(text) => {
+                    self.content(EventKind::PlanProposed {
+                        markdown: text.to_owned(),
+                    })
+                    .await
                 }
-                Ok(())
-            }
+                None => Ok(()),
+            },
             // The subagent's own thread; its frames route to this tool.
             "subAgentActivity" => {
                 if let Some(child) = item["agentThreadId"].as_str() {
