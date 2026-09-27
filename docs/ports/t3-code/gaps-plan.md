@@ -20,6 +20,8 @@ anyagent repo (tasks 1-8)  ──►  new `anyagent` binary + types  ──►  
 | 8 | Client MCP servers on opencode | anyagent | 1 row (opencode half) | ~50 |
 | 9 | T3 adapter uses tasks 1-8 | t3code | wiring | ~200 |
 | 10 | T3 live check on all six kinds, docs | t3code + anyagent | verification | ~100 |
+| 11 | codex asks before an MCP tool call | anyagent | found by Task 8's live test | ~60 |
+| 12 | claude MCP server secrets stay out of argv; the wire recording redacts them | anyagent | found by the final review | ~80 |
 
 Left out on purpose (stay open in gaps.md, with the reason):
 
@@ -31,6 +33,23 @@ Left out on purpose (stay open in gaps.md, with the reason):
 | Output schema for `generate` | Free-text JSON works today |
 | Session-free probe for codex and ACP | Their details come from the thread/session reply |
 | MCP on antigravity | `agy` has no per-session MCP config |
+
+## What changed while building
+
+The live checks and reviews corrected the plan in these places. The task text below is the original; this table wins.
+
+| Task | Plan said | What the real agent does, and what was built |
+|---|---|---|
+| 1 | claude reports banked resets in `get_usage` | The field is `null` on CLI 2.1.283. The parser is in place; claude shows none until the CLI passes it through |
+| 2 | opencode and pi | antigravity too: a live probe showed how its thinking and cache tokens are counted |
+| 3a | a `configWarning` names our flag | It arrives as a `warning` frame; the filter matches the text in either frame |
+| 3d | `cancel_turn(turn)` | `cancel_turn(turn, clear_queue)`; a stale turn id does nothing at all |
+| 4b | claude's frame has `decision_reason`; rules and hooks | The frame has `message`; it is sent for deny rules and the CLI's own mode. A hook refusal stays `Failed` |
+| 5 | `mode` is what the caller set | claude leaves plan mode by itself after an allowed plan, and the adapter follows it. A resumed codex thread states its mode on its first turn |
+| 5 | permission modes unchanged | The request that approves a proposed plan always reaches the caller, even under `AutoApprove` |
+| 6 | claude `--append-system-prompt` | Instructions ride claude's `initialize` request, off the command line |
+| 6 | prepend to the first prompt | A first prompt that starts with `/` is sent untouched; the instructions go with the next one |
+| 8 | reuse the MCP live test server | None existed. A stdio fixture server and the live test `mcp_server_tools_are_called` were added |
 
 ## Global Constraints
 
@@ -344,6 +363,68 @@ If opencode keeps MCP servers per server process and not per session, register a
 **Tests:** fixture test with the recorded request. Live: `mcp_server_tools_are_called` for opencode, reusing the MCP test server the claude and codex live tests use.
 
 **Files:** `src/adapter/opencode.rs`, `tests/opencode.rs`, `tests/live.rs`, `docs/agents.mdx`.
+
+No wire type changes in this task.
+
+---
+
+## Task 11: codex asks before an MCP tool call
+
+**Found by:** the live test `mcp_server_tools_are_called` (added in Task 8). It passes on claude and opencode and fails on codex.
+
+**Goal:** an MCP tool call on codex reaches the caller as a permission request, like every other tool, and runs when allowed.
+
+**Today:** codex 0.154.0 asks for approval of an MCP tool call with the server request `mcpServer/elicitation/request`. The codex adapter declines it, so the tool fails before it reaches the server.
+
+**New behavior:**
+
+| Piece | Rule |
+|---|---|
+| The request | `mcpServer/elicitation/request` for a tool call becomes `RequestOpened(Request::Permission)`. `tool` is the pending MCP tool call as the caller already saw it (`ToolKind::Mcp { server, tool }`). `options` lists only the choices the codex request can express |
+| The answer | `Answer::Permission` maps back to the elicitation reply codex expects (accept / decline, and the for-session form only if the wire has one) |
+| Permission modes | Nothing new. The engine already answers for `AutoApprove`, and `AcceptEdits` forwards it because the kind is `Mcp` |
+| Cancel | A pending request is dropped on cancel like the adapter's other requests |
+| Other elicitations | An elicitation that is not a tool-call approval (a server asking the user for form input) keeps today's behavior |
+
+Confirm the request and reply shapes live first (constraint 5): record the wire of a codex session with the stdio MCP fixture (`tests/fixtures/mcp/server.mjs`), and check codex's generated schema (`codex app-server generate-json-schema`). If the request carries no link to the tool call item, say so in the report and build the `tool` from what the request does carry.
+
+**Tests:** a fixture test in `tests/codex.rs` with the recorded frames: request opened, allow → the tool completes; deny → the tool ends not completed and the turn goes on. Live: `just live codex mcp_server_tools_are_called` passes.
+
+**Files:** `src/adapter/codex.rs`, `tests/codex.rs`, `tests/fixtures/codex/fixture.mjs`, `docs/agents.mdx` (one line, only if the page lists what codex asks permission for).
+
+No wire type changes in this task.
+
+---
+
+## Task 12: claude MCP server secrets stay out of argv
+
+**Found by:** the final review. It is the same exposure that moved claude's instructions off the command line.
+
+**Today:** the claude adapter passes the app's declared MCP servers as inline JSON in `--mcp-config` (`mcp_config` and `option_args` in `src/adapter/claude.rs`). That JSON holds stdio `env` values and http/sse header values (bearer tokens). Any local user can read them with `ps`.
+
+**Goal:** declared MCP servers reach claude without their secrets appearing in the process arguments.
+
+**How, in order of preference. Probe first (constraint 5), then pick the first one that works:**
+
+| Option | What | Accept when |
+|---|---|---|
+| A | Send the servers on the control channel after `initialize`. The CLI lists a `mcp_set_servers` control request | A live session shows the declared server connected and its tool callable, the server is present before the first prompt, and it survives the rollback respawn (which relaunches the process) |
+| B | Write the config to a file only the user can read (mode 0600, in the system temp dir) and pass its path to `--mcp-config`. Delete the file when the session closes and when launch fails | Option A does not work |
+
+If option A works only partly (for example it cannot express one transport), say so in the report and use B for everything. Do not mix.
+
+**Rules:**
+
+1. The three transports (stdio, http, sse) keep working exactly as today, including `--strict-mcp-config` for throwaway sessions.
+2. No secret in argv, in an error message, in a `Diagnostic`, or in `Debug` output. The opt-in wire recording (`record_wire`) may contain them; that file is already documented as unredacted.
+3. No new dependency.
+4. Stay inside how MCP config is passed. Do not touch other launch options.
+
+**Tests:** a fixture test asserting the child's argv holds no header or env value (the claude fixture already logs its argv when `FIXTURE_ARGV_LOG` is set) and that the fixture received the servers. Live: `just live claude mcp_server_tools_are_called` passes.
+
+**Docs:** one line in the claude section of `docs/agents.mdx` saying how MCP servers are passed. The codex section gets one line stating its known limit: stdio `env` and non-bearer headers of declared MCP servers travel as `-c` overrides in argv (the bearer token does not).
+
+**Files:** `src/adapter/claude.rs`, `tests/claude.rs`, `tests/fixtures/claude/fixture.mjs`, `docs/agents.mdx`.
 
 No wire type changes in this task.
 
