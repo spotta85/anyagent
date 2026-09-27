@@ -38,8 +38,8 @@ use crate::process::{self, Spawn};
 const CLIENT_MSG_PREFIX: &str = "anyagent-m";
 
 /// `approvalPolicy` values observed live ("on-request" is the default the
-/// wire reports; the others were probed).
-const MODES: [&str; 3] = ["untrusted", "on-request", "never"];
+/// wire reports; the others were probed), plus `plan`, a collaboration mode.
+const MODES: [&str; 4] = ["untrusted", "on-request", "never", "plan"];
 /// `sandbox` values, matching the `permissionProfile/list` ids.
 const SANDBOXES: [&str; 3] = ["read-only", "workspace-write", "danger-full-access"];
 /// The under-development feature anyagent turns on at launch: it lets
@@ -87,6 +87,7 @@ impl Adapter for CodexAdapter {
                 requests: HashMap::new(),
                 open_reasoning: std::collections::HashSet::new(),
                 auth_lost: false,
+                in_plan: false,
                 next_msg: 1,
                 request,
             }
@@ -436,7 +437,8 @@ async fn open_thread(
     config: &StartConfig,
 ) -> Result<Value, AgentError> {
     let mut params = json!({ "cwd": request.options.cwd() });
-    if let Some(mode) = &config.mode {
+    // `plan` is no approval policy: the thread keeps codex's default.
+    if let Some(mode) = config.mode.as_ref().filter(|mode| *mode != "plan") {
         params["approvalPolicy"] = json!(mode);
     }
     if let Some(sandbox) = &config.sandbox {
@@ -532,7 +534,10 @@ fn driver_info(
         .clone()
         .or_else(|| thread["reasoningEffort"].as_str().map(str::to_owned))
         .or_else(|| model.as_deref().and_then(|m| default_effort(models, m)));
-    let mode = thread["approvalPolicy"].as_str().unwrap_or("on-request");
+    let mode = match config.mode.as_deref() {
+        Some("plan") => "plan",
+        _ => thread["approvalPolicy"].as_str().unwrap_or("on-request"),
+    };
     let sandbox = sandbox_name(&thread["sandbox"]);
     // Every option rides `turn/start` (model, effort, serviceTier,
     // approvalPolicy, sandboxPolicy), so all switch live with no wire call.
@@ -720,6 +725,8 @@ struct Drive {
     open_reasoning: std::collections::HashSet<String>,
     /// The first 401 already surfaced `AuthLost`; the retries stay quiet.
     auth_lost: bool,
+    /// The thread's collaboration mode is `plan`; it sticks until changed.
+    in_plan: bool,
     next_msg: u64,
     request: ConnectRequest,
 }
@@ -1110,8 +1117,9 @@ impl Drive {
                 }
             }
             // Session-state echoes and login bookkeeping the engine owns or
-            // does not need.
+            // does not need; plan deltas repeat the completed plan item.
             "thread/started"
+            | "item/plan/delta"
             | "thread/status/changed"
             | "serverRequest/resolved"
             | "remoteControl/status/changed"
@@ -1187,6 +1195,14 @@ impl Drive {
             "contextCompaction" => {
                 if completed {
                     return self.content(EventKind::ContextCompacted).await;
+                }
+                Ok(())
+            }
+            // Plan mode's proposal; the completed item's text is authoritative.
+            "plan" => {
+                if completed {
+                    let markdown = item["text"].as_str().unwrap_or_default().to_owned();
+                    return self.content(EventKind::PlanProposed { markdown }).await;
                 }
                 Ok(())
             }
@@ -1461,15 +1477,29 @@ impl Drive {
             "summary": "auto",
         });
         let option = |key: &str| selected(&self.info, key);
-        for (key, param) in [
-            ("model", "model"),
-            ("effort", "effort"),
-            ("mode", "approvalPolicy"),
-        ] {
+        for (key, param) in [("model", "model"), ("effort", "effort")] {
             if let Some(value) = option(key) {
                 params[param] = json!(value);
             }
         }
+        // Policy and collaboration mode both stick to the thread: plan keeps the
+        // last policy, and leaving plan sends `default` once (probed 0.154.0).
+        let mode = option("mode");
+        let plan = mode.as_deref() == Some("plan");
+        if let Some(policy) = mode.filter(|_| !plan) {
+            params["approvalPolicy"] = json!(policy);
+        }
+        if plan || self.in_plan {
+            params["collaborationMode"] = json!({
+                "mode": if plan { "plan" } else { "default" },
+                "settings": {
+                    "model": option("model"),
+                    "reasoning_effort": option("effort"),
+                    "developer_instructions": null, // codex's own prompt for the mode
+                },
+            });
+        }
+        self.in_plan = plan;
         if let Some(sandbox) = option("sandbox") {
             params["sandboxPolicy"] = json!({ "type": sandbox_policy(&sandbox) });
         }
