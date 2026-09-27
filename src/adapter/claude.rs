@@ -730,6 +730,7 @@ impl Drive {
             "control_response" => self.on_control_response(&frame).await,
             "result" => self.on_result(&frame).await,
             "system" => self.on_system(&frame).await,
+            "tool_progress" => self.on_tool_progress(&frame).await,
             // Rate pushes are dropped (`get_usage` after each turn covers
             // quota); lifecycle frames only narrate the CLI's own queue.
             "rate_limit_event" | "control_cancel_request" | "command_lifecycle" => Ok(()),
@@ -1401,6 +1402,21 @@ impl Drive {
             // Hooks, task bookkeeping, statuses: nothing the engine needs.
             _ => Ok(()),
         }
+    }
+
+    /// A running tool's elapsed seconds. 2.1.283 names the tool in `parent_tool_use_id`
+    /// (`tool_use_id` is `bash-progress-N`; probed 2026-09-27); untracked ones are dropped.
+    async fn on_tool_progress(&mut self, frame: &Value) -> Result<(), Gone> {
+        let Some(id) = parent_of(frame).filter(|id| self.tools.contains_key(id)) else {
+            return Ok(());
+        };
+        self.events
+            .event(EventKind::ToolProgress {
+                tool_id: ToolId::new(id),
+                message: None,
+                elapsed_ms: frame["elapsed_time_seconds"].as_u64().map(|s| s * 1000),
+            })
+            .await
     }
 
     /// Answers one stored `can_use_tool` request on the control channel.
