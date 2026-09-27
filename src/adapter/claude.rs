@@ -1407,7 +1407,8 @@ impl Drive {
     /// A running tool's elapsed seconds. 2.1.283 names the tool in `parent_tool_use_id`
     /// (`tool_use_id` is `bash-progress-N`; probed 2026-09-27); untracked ones are dropped.
     async fn on_tool_progress(&mut self, frame: &Value) -> Result<(), Gone> {
-        let Some(id) = parent_of(frame).filter(|id| self.tools.contains_key(id)) else {
+        let id = frame["parent_tool_use_id"].as_str();
+        let Some(id) = id.filter(|id| self.tools.contains_key(*id)) else {
             return Ok(());
         };
         self.events
