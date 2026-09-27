@@ -200,7 +200,9 @@ fn mcp_overrides(servers: &[McpServer], base: &Env) -> Result<(Vec<String>, Env)
                     let held = held
                         .map(|(_, v)| v.clone())
                         .or_else(|| std::env::var(name).ok());
-                    if held.is_some_and(|v| v != *value) {
+                    if process::OWN_VARS.contains(&name.as_str())
+                        || held.is_some_and(|v| v != *value)
+                    {
                         return Err(AgentError::InvalidConfiguration(format!(
                             "codex MCP server `{}` sets `{name}`, already set to another value",
                             server.name
