@@ -75,6 +75,10 @@ a custom ACP agent is `{"acp": {"name": "..", "path": "..", "args": [..]}}`.
 | `compact`, `close` | session | null |
 | `info` | session | `SessionInfo` |
 
+`answer` is one of `{"Permission": "AllowOnce"}`, `{"Question": [..]}`,
+`{"Deny": {"message": ".."}}` (deny once with a reason), or `"Cancel"`
+(withdraw the request).
+
 An error body is `kind`, `message`, and the variant's own fields: `agent`
 for `NotInstalled`, `login` for `AuthRequired`, `status` and `stderr` for
 `ProcessExited`, `detail` for the rest. Two kinds are the sidecar's own:
