@@ -878,9 +878,8 @@ impl Drive {
                         message_id: message_id.clone(),
                         text,
                     };
-                    let parent_tool = parent.clone().map(ToolId::new);
                     self.events
-                        .content(kind, parent_tool, Extensions::new())
+                        .content(kind, parent.clone().map(ToolId::new), Extensions::new())
                         .await?;
                     EventKind::MessageEnded { message_id }
                 }
