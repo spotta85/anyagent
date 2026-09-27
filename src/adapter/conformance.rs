@@ -285,14 +285,15 @@ async fn trailing_content_beats_a_queued_prompt_to_the_next_turn() {
     ));
 }
 
-/// Background bookkeeping after end (progress, then completion) carries no turn;
-/// extra stop becomes Diagnostic.
+/// Background bookkeeping after end (progress, a nested tool, completion) carries
+/// no turn; extra stop becomes Diagnostic.
 #[tokio::test]
 async fn bookkeeping_after_turn_end_is_not_a_turn_and_late_stops_are_diagnostics() {
     let script = Script::default().turn(vec![
         Step::Emit(tool("bg", ToolStatus::Running)),
         Step::End(completed()),
         Step::Emit(tool("bg", ToolStatus::Running)),
+        Step::Nested(ToolId::new("bg"), tool("sub", ToolStatus::Running)),
         Step::Emit(tool("bg", ToolStatus::Completed)),
         Step::End(completed()),
     ]);
@@ -306,9 +307,17 @@ async fn bookkeeping_after_turn_end_is_not_a_turn_and_late_stops_are_diagnostics
         &ended.kind,
         EventKind::TurnEnded { background, .. } if *background == vec![ToolId::new("bg")]
     ));
-    for status in [ToolStatus::Running, ToolStatus::Completed] {
+    let late = [
+        ("bg", ToolStatus::Running),
+        ("sub", ToolStatus::Running),
+        ("bg", ToolStatus::Completed),
+    ];
+    for (id, status) in late {
         let late_tool = next(&mut events).await;
-        assert!(matches!(&late_tool.kind, EventKind::ToolUpdated(t) if t.status == status));
+        assert!(
+            matches!(&late_tool.kind, EventKind::ToolUpdated(t) if t.id.as_str() == id && t.status == status),
+            "{late_tool:?}"
+        );
         assert!(late_tool.turn_info.is_none(), "bookkeeping carries no turn");
     }
     let late_stop = next(&mut events).await;
