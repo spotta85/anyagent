@@ -335,7 +335,10 @@ async fn a_live_shaped_subagent_ends_completed_once() {
     loop {
         match next(&mut events).await.kind {
             EventKind::ToolUpdated(tool)
-                if tool.raw.as_ref().unwrap().name == "subAgentActivity" =>
+                if tool
+                    .raw
+                    .as_ref()
+                    .is_some_and(|r| r.name == "subAgentActivity") =>
             {
                 let tokens = tool.subagent.and_then(|s| s.tokens);
                 activity.push((tool.id.as_str().to_owned(), tool.status, tokens));
