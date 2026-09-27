@@ -7,7 +7,8 @@
 // AWS cloud-provider login, no Anthropic identity at all),
 // --token-source-key (the credential named in tokenSource itself),
 // --echo-config-home (echo the CLAUDE_CONFIG_DIR the child received),
-// --rewind-fails (rewind_files answers with an error envelope).
+// --rewind-fails (rewind_files answers with an error envelope),
+// --denied (a settings rule refuses a Bash call).
 import { createInterface } from 'node:readline';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 
@@ -239,6 +240,22 @@ async function runTurn(m) {
     delta({ type: 'text_delta', text: 'BG-DONE' });
     ev({ type: 'message_stop' });
     resultFrame({ user_message_uuid: null, result: 'BG-DONE' });
+    turn = null;
+    return;
+  }
+
+  // A `permissions.deny` rule refuses the call (probed 2026-09-27, 2.1.283):
+  // `system/permission_denied`, then the error tool_result, no can_use_tool.
+  if (flag('--denied')) {
+    const message = 'Permission to use Bash with command echo probe-denied has been denied.';
+    msgStart('msg_1');
+    assistantTool('toolu_d1', 'Bash', { command: 'echo probe-denied', description: 'Echo' });
+    send({ type: 'system', subtype: 'permission_denied', tool_name: 'Bash', tool_use_id: 'toolu_d1', decision_reason_type: 'subcommandResults', message, uuid: uid(), session_id: S });
+    send({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', content: message, is_error: true, tool_use_id: 'toolu_d1' }] }, parent_tool_use_id: null, session_id: S, uuid: uid(), tool_use_result: `Error: ${message}`, tool_result_meta: [{ id: 'toolu_d1', non_execution_kind: 'permission-rule' }] });
+    delta({ type: 'text_delta', text: 'refused' });
+    ev({ type: 'message_stop' });
+    resultFrame({ user_message_uuid: u, permission_denials: [{ tool_name: 'Bash', tool_use_id: 'toolu_d1', tool_input: { command: 'echo probe-denied' } }] });
+    life(u, 'completed');
     turn = null;
     return;
   }

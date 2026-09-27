@@ -1344,13 +1344,15 @@
       ]
     },
     "ToolStatus": {
+      "description": "`Denied`: refused by the agent's permission rules or mode without asking the caller.",
       "type": "string",
       "enum": [
         "Pending",
         "Running",
         "Completed",
         "Failed",
-        "Cancelled"
+        "Cancelled",
+        "Denied"
       ]
     },
     "ToolInput": {

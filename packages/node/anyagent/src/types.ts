@@ -270,7 +270,10 @@ export type ToolKind =
       };
     }
   | "Subagent";
-export type ToolStatus = "Pending" | "Running" | "Completed" | "Failed" | "Cancelled";
+/**
+ * `Denied`: refused by the agent's permission rules or mode without asking the caller.
+ */
+export type ToolStatus = "Pending" | "Running" | "Completed" | "Failed" | "Cancelled" | "Denied";
 export type ToolInput =
   | "None"
   | {

@@ -713,12 +713,14 @@ public enum ToolKind: Codable, Sendable, Equatable {
     }
 }
 
+/// `Denied`: refused by the agent's permission rules or mode without asking the caller.
 public enum ToolStatus: String, Codable, Sendable, Equatable {
     case pending = "Pending"
     case running = "Running"
     case completed = "Completed"
     case failed = "Failed"
     case cancelled = "Cancelled"
+    case denied = "Denied"
     /// A value this package does not know (a newer binary).
     case unrecognized
 

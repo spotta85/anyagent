@@ -713,7 +713,7 @@ func (v *ToolKind) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// ToolStatus is a wire type.
+// ToolStatus: `Denied`: refused by the agent's permission rules or mode without asking the caller.
 type ToolStatus string
 
 const (
@@ -722,6 +722,7 @@ const (
 	ToolStatusCompleted ToolStatus = "Completed"
 	ToolStatusFailed    ToolStatus = "Failed"
 	ToolStatusCancelled ToolStatus = "Cancelled"
+	ToolStatusDenied    ToolStatus = "Denied"
 )
 
 // Command is a wire type.

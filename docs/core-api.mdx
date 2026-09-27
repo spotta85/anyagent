@@ -181,7 +181,7 @@ pub struct ToolUpdate {
     pub id: ToolId,
     pub kind: ToolKind,          // Read, Edit, Execute, Mcp { server, tool }, Subagent, …
     pub title: String,           // ready to display
-    pub status: ToolStatus,
+    pub status: ToolStatus,      // Pending, Running, Completed, Failed, Cancelled, Denied
     pub input: ToolInput,
     pub output: Option<String>,
     pub diffs: Vec<FileDiff>,    // typed, for edits
@@ -192,6 +192,9 @@ pub struct ToolUpdate {
 
 When `kind` is `Subagent`, every event the child produces carries that tool's
 id in `turn_info.parent_tool_id`. That is how you nest it in a UI.
+
+`Denied` means the agent's permission rules or mode refused the tool without
+asking you; `output` holds the reason.
 
 ### Requests
 

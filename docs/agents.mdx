@@ -84,7 +84,9 @@ pi, which reports no model call for it.
 <Accordion title="Claude Code">
 The fullest native adapter. `fast` appears when the selected model reports
 `supportsFastMode`; switching it resumes the process under the hood with the
-same `Session` handle and conversation. Rollback can restore files.
+same `Session` handle and conversation. Rollback can restore files. A tool a
+`permissions.deny` rule or the CLI's own mode refuses ends `Denied`; a hook's
+refusal still shows as `Failed` (the CLI sends no denial frame for it).
 </Accordion>
 
 <Accordion title="Codex">
