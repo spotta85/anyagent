@@ -874,6 +874,51 @@ async fn approvals_map_accept_and_decline() {
     session.close().await.unwrap();
 }
 
+/// `Deny` declines (the wire takes no message); `Cancel` sends `cancel`, which
+/// ends the turn interrupted, and a cancelled question sends no answers.
+#[tokio::test]
+async fn deny_declines_and_cancel_withdraws() {
+    let deny = Answer::Deny {
+        message: "not now".into(),
+    };
+    for (name, flags, prompt, answer, reply, cancelled) in [
+        ("deny-why", "", "write-file", deny, "write=decline ", false),
+        (
+            "cancel-write",
+            "",
+            "write-file",
+            Answer::Cancel,
+            "write=cancel ",
+            true,
+        ),
+        (
+            "cancel-q",
+            "--question",
+            "hi",
+            Answer::Cancel,
+            "answer=none ",
+            false,
+        ),
+    ] {
+        let (session, mut events) = open(name, flags).await;
+        session.prompt(prompt).await.unwrap();
+        let mut text = String::new();
+        let stop = loop {
+            match next(&mut events).await.kind {
+                EventKind::TextDelta { text: t, .. } => text.push_str(&t),
+                EventKind::RequestOpened(request) => {
+                    session.answer(request.id(), answer.clone()).await.unwrap()
+                }
+                EventKind::TurnEnded { stop, .. } => break stop,
+                _ => {}
+            }
+        };
+        assert!(text.contains(reply), "{name}: {text}");
+        assert_eq!(stop == StopReason::Cancelled, cancelled, "{name}: {stop:?}");
+        session.close().await.unwrap();
+    }
+}
+
 /// An MCP tool-call elicitation asks on the tracked MCP tool: allow completes
 /// it (the session form rides `persist`), deny fails it and the turn goes on.
 #[tokio::test]

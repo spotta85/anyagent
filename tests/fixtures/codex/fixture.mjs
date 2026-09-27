@@ -301,6 +301,8 @@ async function runTurn(params) {
     const accepted = resp?.decision === 'accept' || resp?.decision === 'acceptForSession';
     itemCompleted({ ...change, status: accepted ? 'completed' : 'declined' });
     delta(msg.id, `write=${resp?.decision} `);
+    // `cancel` also interrupts the turn (generated schema, 0.154.0).
+    if (resp?.decision === 'cancel') return endTurn('interrupted');
   }
 
   if (prompt.includes('mcp-')) {
