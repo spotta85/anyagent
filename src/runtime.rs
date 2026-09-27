@@ -320,7 +320,7 @@ impl Runtime {
 }
 
 /// Default options for the probes and the quota read: temp dir, never persisted.
-fn throwaway_options() -> SessionOptions {
+pub(crate) fn throwaway_options() -> SessionOptions {
     let mut options = SessionOptions::in_dir(std::env::temp_dir());
     options.throwaway = true;
     options
