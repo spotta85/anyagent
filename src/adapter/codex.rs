@@ -1093,7 +1093,10 @@ impl Drive {
                 // `last` is the latest model call = current context occupancy;
                 // the window rides in the same frame.
                 let usage = &params["tokenUsage"];
-                self.add_turn_usage(&usage["last"]).await?;
+                // Only a running turn's calls count: a bind replays the thread's last one.
+                if self.turn_started {
+                    self.add_turn_usage(&usage["last"]).await?;
+                }
                 let used = usage["last"]["totalTokens"]
                     .as_u64()
                     .or_else(|| usage["total"]["totalTokens"].as_u64());

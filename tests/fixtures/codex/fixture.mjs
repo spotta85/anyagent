@@ -47,6 +47,12 @@ function hookRun(status) {
   notify(status === 'running' ? 'hook/started' : 'hook/completed', { threadId: THREAD.id, turnId: turn.id, run });
 }
 
+// Recorded (05-resume-and-fork): right after a resume or fork reply, the
+// restored thread's last model call, while no turn runs.
+function restoredUsage(last) {
+  notify('thread/tokenUsage/updated', { threadId: THREAD.id, turnId: 'turn-prev', tokenUsage: { total: last, last, modelContextWindow: 258400 } });
+}
+
 // Recorded 2026-09-26 (0.154.0): after thread/start, and again on a revert.
 function featureWarning() {
   if (!FEATURES.length) return;
@@ -141,11 +147,13 @@ async function onRequest(m) {
       if (m.params.threadId === 'not-a-uuid') return refuse('invalid session id: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-fA-F-], found `n` at 1');
       THREAD.id = m.params.threadId;
       turnIds.push('turn-prev'); // the thread's history rides the bind
-      return reply({ ...threadResult(m.params), thread: { ...THREAD, turns: [{ id: 'turn-prev' }] } });
+      reply({ ...threadResult(m.params), thread: { ...THREAD, turns: [{ id: 'turn-prev' }] } });
+      return restoredUsage({ totalTokens: 10259, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 });
     case 'thread/fork':
       THREAD.id = 'th-fork-1';
       THREAD.forkPoint = m.params.lastTurnId ?? null;
-      return reply({ ...threadResult(m.params), thread: { ...THREAD, forkedFromId: m.params.threadId } });
+      reply({ ...threadResult(m.params), thread: { ...THREAD, forkedFromId: m.params.threadId } });
+      return restoredUsage({ totalTokens: 14382, inputTokens: 14377, cachedInputTokens: 11008, outputTokens: 5 });
     case 'turn/start': {
       if (turn) return refuse('phantom: turn/start while a turn is running'); // adapters must steer instead
       if (m.params.input[0].text.includes('refuse-start')) return refuse('turn refused');
