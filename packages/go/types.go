@@ -7,10 +7,11 @@ import (
 	"fmt"
 )
 
-// AgentRef: exactly one field is set. A catalog id like `"claude"`, or an ACP agent the catalog does not know.
+// AgentRef: exactly one field is set. A catalog id like `"claude"`, a catalog agent at an exact path, or an unknown ACP agent.
 type AgentRef struct {
 	String       *string  `json:"-"`
 	Acp          *AcpSpec `json:"acp"`
+	AgentAt      *AgentAt `json:"-"`
 	Unrecognized string   `json:"-"` // a variant this package does not know (a newer binary): its wire name
 }
 
@@ -21,6 +22,8 @@ func (v AgentRef) Name() string {
 		return "string"
 	case v.Acp != nil:
 		return "acp"
+	case v.AgentAt != nil:
+		return "AgentAt"
 	}
 	return v.Unrecognized
 }
@@ -31,6 +34,8 @@ func (v AgentRef) MarshalJSON() ([]byte, error) {
 		return json.Marshal(v.String)
 	case v.Acp != nil:
 		return json.Marshal(map[string]any{"acp": v.Acp})
+	case v.AgentAt != nil:
+		return json.Marshal(v.AgentAt)
 	case v.Unrecognized != "":
 		return json.Marshal(v.Unrecognized)
 	}
@@ -41,6 +46,11 @@ func (v *AgentRef) UnmarshalJSON(b []byte) error {
 	var s string
 	if json.Unmarshal(b, &s) == nil {
 		v.String = &s
+		return nil
+	}
+	var raw AgentAt
+	if json.Unmarshal(b, &raw) == nil {
+		v.AgentAt = &raw
 		return nil
 	}
 	type plain AgentRef
@@ -60,6 +70,12 @@ type AcpSpec struct {
 	Name string   `json:"name"`
 	Path string   `json:"path"`
 	Args []string `json:"args,omitempty"`
+}
+
+// AgentAt: A catalog agent run from one executable: `{"id": "claude", "path": "/opt/claude"}`.
+type AgentAt struct {
+	ID   string `json:"id"`
+	Path string `json:"path"`
 }
 
 // PermissionMode: How anyagent handles tool permission requests.

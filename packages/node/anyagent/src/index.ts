@@ -33,6 +33,12 @@ export type * from "./types.ts";
 export type Command = Frame1;
 /** What `open` accepts besides the agent. */
 export type OpenOptions = Omit<Extract<Command, { cmd: "open" }>, "cmd" | "agent">;
+/** What `generate` accepts besides the agent and prompt: `open`'s fields plus `attachments`. */
+export type GenerateOptions = Omit<Extract<Command, { cmd: "generate" }>, "cmd" | "agent" | "prompt">;
+/** What `probe` accepts besides the agent: an optional `dir`, `env`, `args`, `config_home`. */
+export type ProbeOptions = Omit<Extract<Command, { cmd: "probe" }>, "cmd" | "agent">;
+/** What `planUsage` accepts besides the agent: `env`, `args`, `config_home`. */
+export type PlanUsageOptions = Omit<Extract<Command, { cmd: "plan_usage" }>, "cmd" | "agent">;
 /** The variant name of an `EventKind`: `"TextDelta"`, `"TurnEnded"`, … */
 export type EventKindName = EventKind extends infer K ? (K extends string ? K : keyof K) : never;
 
@@ -85,14 +91,14 @@ export class Runtime {
   discover(): Promise<DiscoveryReport> {
     return this.call({ cmd: "discover" });
   }
-  probe(agent: AgentRef): Promise<AgentDetails> {
-    return this.call({ cmd: "probe", agent });
+  probe(agent: AgentRef, opts: ProbeOptions = {}): Promise<AgentDetails> {
+    return this.call({ cmd: "probe", agent, ...opts });
   }
-  planUsage(agent: AgentRef): Promise<PlanUsage> {
-    return this.call({ cmd: "plan_usage", agent });
+  planUsage(agent: AgentRef, opts: PlanUsageOptions = {}): Promise<PlanUsage> {
+    return this.call({ cmd: "plan_usage", agent, ...opts });
   }
   /** One-shot text with no session to manage: titles, commit messages. */
-  generate(agent: AgentRef, opts: OpenOptions, prompt: string): Promise<string> {
+  generate(agent: AgentRef, opts: GenerateOptions, prompt: string): Promise<string> {
     return this.call({ cmd: "generate", agent, ...opts, prompt });
   }
 

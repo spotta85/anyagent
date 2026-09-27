@@ -12,16 +12,10 @@ export type Frame1 =
     }
   | {
       agent: AgentRef;
-      cmd: "probe";
-    }
-  | {
-      agent: AgentRef;
-      cmd: "plan_usage";
-    }
-  | {
-      agent: AgentRef;
-      dir: string;
-      prompt: string;
+      /**
+       * Default: the temp dir.
+       */
+      dir?: string | null;
       resume?: string | null;
       fork?: string | null;
       fork_at?: string | null;
@@ -30,6 +24,54 @@ export type Frame1 =
       configure?: {
         [k: string]: ConfigValue;
       };
+      instructions?: string | null;
+      env?: {
+        [k: string]: string;
+      };
+      args?: string[];
+      config_home?: string | null;
+      record_wire?: string | null;
+      cmd: "probe";
+    }
+  | {
+      agent: AgentRef;
+      resume?: string | null;
+      fork?: string | null;
+      fork_at?: string | null;
+      permission_mode?: PermissionMode | null;
+      mcp_servers?: McpServer[];
+      configure?: {
+        [k: string]: ConfigValue;
+      };
+      instructions?: string | null;
+      env?: {
+        [k: string]: string;
+      };
+      args?: string[];
+      config_home?: string | null;
+      record_wire?: string | null;
+      cmd: "plan_usage";
+    }
+  | {
+      agent: AgentRef;
+      dir: string;
+      prompt: string;
+      attachments?: string[];
+      resume?: string | null;
+      fork?: string | null;
+      fork_at?: string | null;
+      permission_mode?: PermissionMode | null;
+      mcp_servers?: McpServer[];
+      configure?: {
+        [k: string]: ConfigValue;
+      };
+      instructions?: string | null;
+      env?: {
+        [k: string]: string;
+      };
+      args?: string[];
+      config_home?: string | null;
+      record_wire?: string | null;
       cmd: "generate";
     }
   | {
@@ -43,6 +85,13 @@ export type Frame1 =
       configure?: {
         [k: string]: ConfigValue;
       };
+      instructions?: string | null;
+      env?: {
+        [k: string]: string;
+      };
+      args?: string[];
+      config_home?: string | null;
+      record_wire?: string | null;
       cmd: "open";
     }
   | {
@@ -93,13 +142,14 @@ export type Frame1 =
       cmd: "close";
     };
 /**
- * A catalog id like `"claude"`, or an ACP agent the catalog does not know.
+ * A catalog id like `"claude"`, a catalog agent at an exact path, or an unknown ACP agent.
  */
 export type AgentRef =
   | string
   | {
       acp: AcpSpec;
-    };
+    }
+  | AgentAt;
 /**
  * How anyagent handles tool permission requests.
  */
@@ -447,6 +497,13 @@ export interface AcpSpec {
   name: string;
   path: string;
   args?: string[];
+}
+/**
+ * A catalog agent run from one executable: `{"id": "claude", "path": "/opt/claude"}`.
+ */
+export interface AgentAt {
+  id: string;
+  path: string;
 }
 /**
  * A client-owned MCP server the agent should connect to, forwarded at open.

@@ -71,49 +71,18 @@
           ]
         },
         {
-          "type": "object",
-          "properties": {
-            "agent": {
-              "$ref": "#/definitions/AgentRef"
-            },
-            "cmd": {
-              "type": "string",
-              "const": "probe"
-            }
-          },
-          "required": [
-            "cmd",
-            "agent"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "agent": {
-              "$ref": "#/definitions/AgentRef"
-            },
-            "cmd": {
-              "type": "string",
-              "const": "plan_usage"
-            }
-          },
-          "required": [
-            "cmd",
-            "agent"
-          ]
-        },
-        {
-          "description": "The `SessionOptions` the wire exposes, as top-level fields of `open`\nand `generate`.",
+          "description": "The `SessionOptions` the wire exposes, as top-level fields of `open`,\n`generate`, `probe` and `plan_usage`.",
           "type": "object",
           "properties": {
             "agent": {
               "$ref": "#/definitions/AgentRef"
             },
             "dir": {
-              "type": "string"
-            },
-            "prompt": {
-              "type": "string"
+              "description": "Default: the temp dir.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "resume": {
               "type": [
@@ -156,6 +125,233 @@
                 "$ref": "#/definitions/ConfigValue"
               },
               "default": {}
+            },
+            "instructions": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "env": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {}
+            },
+            "args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "config_home": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "record_wire": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "cmd": {
+              "type": "string",
+              "const": "probe"
+            }
+          },
+          "required": [
+            "cmd",
+            "agent"
+          ]
+        },
+        {
+          "description": "The `SessionOptions` the wire exposes, as top-level fields of `open`,\n`generate`, `probe` and `plan_usage`.",
+          "type": "object",
+          "properties": {
+            "agent": {
+              "$ref": "#/definitions/AgentRef"
+            },
+            "resume": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "fork": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "fork_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "permission_mode": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PermissionMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "mcp_servers": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/McpServer"
+              },
+              "default": []
+            },
+            "configure": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/definitions/ConfigValue"
+              },
+              "default": {}
+            },
+            "instructions": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "env": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {}
+            },
+            "args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "config_home": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "record_wire": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "cmd": {
+              "type": "string",
+              "const": "plan_usage"
+            }
+          },
+          "required": [
+            "cmd",
+            "agent"
+          ]
+        },
+        {
+          "description": "The `SessionOptions` the wire exposes, as top-level fields of `open`,\n`generate`, `probe` and `plan_usage`.",
+          "type": "object",
+          "properties": {
+            "agent": {
+              "$ref": "#/definitions/AgentRef"
+            },
+            "dir": {
+              "type": "string"
+            },
+            "prompt": {
+              "type": "string"
+            },
+            "attachments": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "resume": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "fork": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "fork_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "permission_mode": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PermissionMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "mcp_servers": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/McpServer"
+              },
+              "default": []
+            },
+            "configure": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/definitions/ConfigValue"
+              },
+              "default": {}
+            },
+            "instructions": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "env": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {}
+            },
+            "args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "config_home": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "record_wire": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "cmd": {
               "type": "string",
@@ -170,7 +366,7 @@
           ]
         },
         {
-          "description": "The `SessionOptions` the wire exposes, as top-level fields of `open`\nand `generate`.",
+          "description": "The `SessionOptions` the wire exposes, as top-level fields of `open`,\n`generate`, `probe` and `plan_usage`.",
           "type": "object",
           "properties": {
             "agent": {
@@ -220,6 +416,38 @@
                 "$ref": "#/definitions/ConfigValue"
               },
               "default": {}
+            },
+            "instructions": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "env": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {}
+            },
+            "args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "config_home": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "record_wire": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "cmd": {
               "type": "string",
@@ -431,7 +659,7 @@
       ]
     },
     "AgentRef": {
-      "description": "A catalog id like `\"claude\"`, or an ACP agent the catalog does not know.",
+      "description": "A catalog id like `\"claude\"`, a catalog agent at an exact path, or an unknown ACP agent.",
       "anyOf": [
         {
           "type": "string"
@@ -446,6 +674,9 @@
           "required": [
             "acp"
           ]
+        },
+        {
+          "$ref": "#/definitions/AgentAt"
         }
       ]
     },
@@ -468,6 +699,22 @@
       },
       "required": [
         "name",
+        "path"
+      ]
+    },
+    "AgentAt": {
+      "description": "A catalog agent run from one executable: `{\"id\": \"claude\", \"path\": \"/opt/claude\"}`.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
         "path"
       ]
     },
