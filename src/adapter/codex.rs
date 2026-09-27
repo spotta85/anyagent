@@ -912,6 +912,8 @@ impl Drive {
             // would cancel the next turn at its start.
             Pending::StartTurn(plan) => match error {
                 Some(message) => {
+                    // A refused plan turn may still have left the thread in plan.
+                    self.in_plan |= plan;
                     self.cancel_pending = false;
                     self.events
                         .send(DriverEvent::TurnEnded(StopReason::Failed {

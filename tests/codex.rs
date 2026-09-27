@@ -701,6 +701,23 @@ async fn plan_mode_rides_turn_start_and_proposes_the_plan_item() {
     assert!(text.contains(&collab("plan")), "{text}");
     assert_eq!(plans.len(), 1);
     session.close().await.unwrap();
+
+    // A refused first plan turn still sends `default` when plan mode ends.
+    let (session, mut events) = open_with(
+        "plan-refused",
+        "",
+        SessionOptions::in_dir(std::env::temp_dir()).configure("mode", "plan"),
+    )
+    .await
+    .unwrap();
+    plan_turn(&session, &mut events, "refuse-start").await;
+    session.configure("mode", "never").await.unwrap();
+    while text_option(&session.info(), "mode").as_deref() != Some("never") {
+        next(&mut events).await;
+    }
+    let (text, _) = plan_turn(&session, &mut events, "plan a README").await;
+    assert!(text.contains(&collab("default")), "{text}");
+    session.close().await.unwrap();
 }
 
 /// Runs one turn and returns its text and proposed plans; plan deltas must
