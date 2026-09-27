@@ -20,6 +20,8 @@ const LOGIN_SHELL_TIMEOUT: Duration = Duration::from_secs(5);
 /// Env var every agent process and its descendants carry; `shutdown` finds
 /// jobs that left the group by it.
 const SPAWN_TAG_ENV: &str = "ANYAGENT_SPAWN_ID";
+/// Env vars `spawn` sets itself (a composed PATH, the spawn tag); callers must not.
+pub(crate) const OWN_VARS: [&str; 2] = ["PATH", SPAWN_TAG_ENV];
 /// `ps` listing every process with its environment appended.
 #[cfg(target_os = "linux")]
 const PS_WITH_ENV: &[&str] = &["-A", "e", "-ww", "-o", "pid=,command="];

@@ -106,8 +106,8 @@ last approval policy; to leave it, select an approval policy and prompt
 again. Images ride as `localImage` items. Client MCP servers ride as
 launch overrides (stdio and HTTP; no SSE). Header and env values ride env
 vars the overrides name, never argv. codex forwards stdio MCP env by name, so
-a declared name is also set on codex itself; a name codex's environment
-already has with another value is refused. `rollback` maps to
+a declared name is also set on codex itself; `PATH`, or a name codex's
+environment already has with another value, is refused. `rollback` maps to
 `thread/revert`; files are never restored. Questions are translated
 defensively but the capability stays off until observed live.
 </Accordion>

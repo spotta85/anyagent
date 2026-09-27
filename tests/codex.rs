@@ -1303,37 +1303,48 @@ async fn mcp_values_ride_the_env_not_argv() {
     session.close().await.unwrap();
 }
 
-/// A stdio env name the launch env (session env or another server) already
-/// holds with another value fails the open, naming it but not the value.
+/// A stdio env name the launch env holds with another value, or one spawn sets
+/// itself (`PATH`), fails the open, naming it but not the value.
 #[tokio::test]
 async fn a_conflicting_stdio_env_name_is_refused() {
-    let server = |name: &str, value: &str| {
-        McpServer::stdio(name, "/bin/tool", ["--serve"]).with("TOOL_KEY", value)
+    let server = |name: &str, var: &str, value: &str| {
+        McpServer::stdio(name, "/bin/tool", ["--serve"]).with(var, value)
     };
     let base = SessionOptions::in_dir(std::env::temp_dir());
     let same = base
         .clone()
         .env("TOOL_KEY", "v-one")
-        .mcp_server(server("a", "v-one"));
+        .mcp_server(server("a", "TOOL_KEY", "v-one"));
     let (session, _events) = open_with("mcp-same", "", same).await.unwrap();
     session.close().await.unwrap();
-    for options in [
-        base.clone()
-            .env("TOOL_KEY", "v-one")
-            .mcp_server(server("a", "v-two")),
-        base.clone()
-            .mcp_server(server("b", "v-one"))
-            .mcp_server(server("a", "v-two")),
+    let path = std::env::var("PATH").unwrap();
+    for (var, options) in [
+        (
+            "TOOL_KEY",
+            base.clone()
+                .env("TOOL_KEY", "v-one")
+                .mcp_server(server("a", "TOOL_KEY", "v-two")),
+        ),
+        (
+            "TOOL_KEY",
+            base.clone()
+                .mcp_server(server("b", "TOOL_KEY", "v-one"))
+                .mcp_server(server("a", "TOOL_KEY", "v-two")),
+        ),
+        ("PATH", base.clone().mcp_server(server("a", "PATH", &path))),
     ] {
         let err = open_with("mcp-conflict", "", options).await.err().unwrap();
         let AgentError::InvalidConfiguration(message) = &err else {
             panic!("{err}");
         };
         assert!(
-            message.contains("TOOL_KEY") && message.contains("`a`"),
+            message.contains(&format!("`{var}`")) && message.contains("`a`"),
             "{message}"
         );
-        assert!(!message.contains("v-"), "{message}");
+        assert!(
+            !message.contains("v-") && !message.contains(&path),
+            "{message}"
+        );
     }
 }
 
