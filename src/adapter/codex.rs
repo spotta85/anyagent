@@ -1276,11 +1276,14 @@ impl Drive {
                 }
                 None => Ok(()),
             },
-            // The subagent's own thread; its frames route to this tool.
+            // The subagent's own thread; its frames route to this tool. Later activity
+            // on a known child (0.154.0 sends its finish under a new id, recording 13) is no new tool.
             "subAgentActivity" => {
-                if let Some(child) = item["agentThreadId"].as_str() {
-                    self.children.insert(child.to_owned(), ToolId::new(&id));
+                let child = item["agentThreadId"].as_str().unwrap_or_default();
+                if self.children.contains_key(child) {
+                    return Ok(());
                 }
+                self.children.insert(child.to_owned(), ToolId::new(&id));
                 self.on_tool_item(&id, item).await
             }
             _ => self.on_tool_item(&id, item).await,

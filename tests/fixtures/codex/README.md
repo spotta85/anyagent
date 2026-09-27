@@ -38,6 +38,7 @@ it shows what an unisolated host looks like (dozens of
 | 10-openai-api-key-ignored | The decisive one: with no `auth.json`, a bogus `OPENAI_API_KEY` produces the *same* "Missing bearer" 401 as no key at all — codex app-server ignores the variable |
 | 11-config-plan-compact | `model` / `effort` as per-turn `turn/start` params; an unknown model fails at turn end, not at request time; `turn/plan/updated`; `thread/compact/start` → a `contextCompaction` item |
 | 12-steer-race | `turn/steer` between `turn/start`'s response and `turn/started` is refused ("no active turn to steer"); accepted once `turn/started` arrives; refused while idle and during a compact turn |
+| 13-subagent | 0.154.0, 2026-09-27, real `~/.codex` (MCP, hook and rate-limit frames cut): a spawn is a `subAgentActivity` item (`kind: started`), a `wait` collab call blocks on it, the child thread's frames (its own `thread/tokenUsage/updated`) interleave, and its finish is a second `subAgentActivity` under a new id (`kind: completed`). No child `thread/started`, so no `agentRole` |
 
 Authoritative types: `codex app-server generate-json-schema --out DIR` from the
 same binary (also `generate-ts`). That is the codex equivalent of `sdk.d.ts`:
