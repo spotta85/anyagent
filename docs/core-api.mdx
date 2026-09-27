@@ -281,7 +281,7 @@ pub enum CommandSource {
 | Agent | A command is a `Skill` when | `path` | `scope` |
 |---|---|---|---|
 | codex | it comes from `skills/list` (disabled skills are left out) | its `SKILL.md` | `user`, `repo`, `system`, `admin` |
-| claude | the CLI's `/skills` menu lists it | none: the CLI does not say | `user`, `project`, `plugin`, `claude.ai sync` |
+| claude | the CLI's `/skills` menu lists it | none: the CLI does not say | `user`, `project`, `plugin`, `claude.ai sync`, `built-in` |
 | others | never: every command is `Builtin` | | |
 
 A `Capability` is one optional thing this agent can do on this connection.
