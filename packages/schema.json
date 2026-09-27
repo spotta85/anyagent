@@ -732,7 +732,7 @@
           "const": "AcceptEdits"
         },
         {
-          "description": "Allow each permission request once without forwarding it.",
+          "description": "Allow each permission request once without forwarding it, except a\nproposed plan's approval.",
           "type": "string",
           "const": "AutoApprove"
         }

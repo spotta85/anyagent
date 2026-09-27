@@ -445,7 +445,8 @@ pub enum PermissionMode {
     Ask,
     /// Allow file edits once without asking; forward every other request.
     AcceptEdits,
-    /// Allow each permission request once without forwarding it.
+    /// Allow each permission request once without forwarding it, except a
+    /// proposed plan's approval.
     AutoApprove,
 }
 
