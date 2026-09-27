@@ -1772,6 +1772,7 @@ fn fresh_tool(call_id: &str, name: &str) -> ToolUpdate {
         diffs: Vec::new(),
         locations: Vec::new(),
         raw: None,
+        subagent: None,
     }
 }
 

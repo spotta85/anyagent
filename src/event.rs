@@ -170,6 +170,26 @@ pub struct ToolUpdate {
     pub locations: Vec<PathBuf>,
     /// Agent's own tool name and raw input, for unknown or MCP tools.
     pub raw: Option<RawTool>,
+    /// For a `Subagent` tool: who runs and what it reports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent: Option<SubagentInfo>,
+}
+
+/// What a subagent tool reports about the agent it spawned.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct SubagentInfo {
+    /// The kind of agent, as the parent named it ("general-purpose").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Its latest progress line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// Token count the agent reports for this subagent so far.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -1559,6 +1559,17 @@
               "type": "null"
             }
           ]
+        },
+        "subagent": {
+          "description": "For a `Subagent` tool: who runs and what it reports.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SubagentInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -1760,6 +1771,41 @@
         "name",
         "input"
       ]
+    },
+    "SubagentInfo": {
+      "description": "What a subagent tool reports about the agent it spawned.",
+      "type": "object",
+      "properties": {
+        "role": {
+          "description": "The kind of agent, as the parent named it (\"general-purpose\").",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "description": "Its latest progress line.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tokens": {
+          "description": "Token count the agent reports for this subagent so far.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      }
     },
     "PlanEntry": {
       "type": "object",
