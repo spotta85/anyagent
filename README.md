@@ -103,7 +103,7 @@ Real apps whose agent layer is anyagent. Numbers are `git diff` of the port, non
 
 | App | What anyagent replaced | Deleted | Added | Details |
 |---|---|---|---|---|
-| [T3 Code](https://github.com/pingdotgg/t3code) | Six per-agent adapters, ACP client, Codex app-server client | 41,326 hand-written + 68,414 generated | 2,005 product (1.9k adapter), plus a 1,235-line live check script and 120 lines of docs | [docs/ports/t3-code](docs/ports/t3-code/README.md) |
+| [T3 Code](https://github.com/pingdotgg/t3code) | Six per-agent adapters, ACP client, Codex app-server client | 41,549 hand-written + 68,414 generated | 2,355 product (2.2k adapter), plus a 1,474-line live check script and 163 lines of docs | [docs/ports/t3-code](docs/ports/t3-code/README.md) |
 | laptop-agent | Its ACP harness layer | 877 | 1,200 (and every agent in the catalog instead of one) | commit "Replace the ACP harness layer with an anyagent-backed driver" |
 | Zeron | Built on anyagent from the start | – | – | `crates/harness` |
 
