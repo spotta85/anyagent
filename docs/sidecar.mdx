@@ -81,6 +81,7 @@ for `NotInstalled`, `login` for `AuthRequired`, `status` and `stderr` for
 `BadFrame` and `UnknownSession` (with `session`). A command on a closed
 session gets the crate's `SessionClosed`. `probe` and `plan_usage` take
 `open`'s option fields too; `resume` or `fork` on them is `InvalidConfiguration`.
+`plan_usage` uses only `env`, `args` and `config_home` of them.
 
 ## Types for other languages
 

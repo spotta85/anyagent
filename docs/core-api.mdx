@@ -49,8 +49,9 @@ for missing in &report.missing {               // MissingAgent { name, install_h
 ```
 
 Throwaway sessions (`probe`, `probe_auth`, `generate`) on claude launch
-without your hooks and MCP servers (`--strict-mcp-config`,
-`disableAllHooks`), so a probe's `commands` leave out MCP-provided prompts.
+without the user's configured hooks and MCP servers (`--strict-mcp-config`,
+`disableAllHooks`); servers the app declares still load. So a probe's
+`commands` leave out the user's MCP-provided prompts.
 
 Discovery hands you `AgentInstallation` values, and every other `Runtime`
 call takes one. You can also build one by hand: `AgentInstallation::at(id, path)`

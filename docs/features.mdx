@@ -74,8 +74,9 @@ match &details.auth {
 **Confirms:** `AgentDetails`. The same struct is available later as
 `session.info().details`.
 **Gates:** none. `probe_with(&agent, options)` probes with your dir, env,
-args and config home. On claude a probe skips your hooks and MCP servers,
-so MCP-provided prompts are not in `commands`.
+args and config home. On claude a probe skips the user's configured hooks
+and MCP servers (servers the app declares still load), so the user's
+MCP-provided prompts are not in `commands`.
 
 anyagent never reads or holds credentials and never drives a login flow. It
 tells you the exact command or env var to show the user. Keep several
@@ -176,8 +177,8 @@ session.cancel(true).await?;    // stop the turn, drop the queue too
 session.cancel_turn(turn_id, false).await?;  // only if that turn is still running
 ```
 
-**Confirms:** `TurnEnded { stop: Cancelled }`, then `RequestClosed` for any
-request the turn had open.
+**Confirms:** `RequestClosed` for any request the turn had open, then
+`TurnEnded { stop: Cancelled }`.
 **Gates:** none.
 
 ## Configuration
