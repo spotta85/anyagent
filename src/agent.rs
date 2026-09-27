@@ -442,8 +442,19 @@ pub struct SessionOptions {
     pub(crate) config_home: Option<PathBuf>,
     pub(crate) record_wire: Option<PathBuf>,
     pub(crate) instructions: Option<String>,
-    pub(crate) env: BTreeMap<String, String>,
+    pub(crate) env: EnvVars,
     pub(crate) args: Vec<String>,
+}
+
+/// The caller's env pairs for the agent; `Debug` shows the names, never the values.
+#[derive(Clone, Default, PartialEq, Eq, Hash)]
+pub(crate) struct EnvVars(pub(crate) BTreeMap<String, String>);
+
+impl std::fmt::Debug for EnvVars {
+    /// The variable names only: values may be credentials.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_set().entries(self.0.keys()).finish()
+    }
 }
 
 /// How `open` binds to a provider session.
@@ -474,7 +485,7 @@ impl SessionOptions {
             config_home: None,
             record_wire: None,
             instructions: None,
-            env: BTreeMap::new(),
+            env: EnvVars::default(),
             args: Vec::new(),
         }
     }
@@ -548,7 +559,7 @@ impl SessionOptions {
 
     /// One environment variable for the agent process, over the inherited ones.
     pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.env.insert(key.into(), value.into());
+        self.env.0.insert(key.into(), value.into());
         self
     }
 
@@ -636,5 +647,14 @@ mod tests {
         );
         let abs = std::env::temp_dir();
         assert_eq!(SessionOptions::in_dir(&abs).cwd(), &abs);
+    }
+
+    /// `Debug` of the options names each env variable but never prints its value.
+    #[test]
+    fn debug_hides_env_values() {
+        let options = SessionOptions::in_dir(".").env("API_KEY", "sk-secret");
+        let text = format!("{options:?}");
+        assert!(text.contains(r#"env: {"API_KEY"}"#), "{text}");
+        assert!(!text.contains("sk-secret"), "{text}");
     }
 }

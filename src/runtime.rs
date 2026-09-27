@@ -5,7 +5,7 @@
 //! `open` connects and starts the engine, `generate` runs one prompt to text,
 //! `plan_usage` reads account quota.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -40,7 +40,7 @@ pub struct Runtime {
 }
 
 /// One cached login: agent, executable, config home, env. Args are not part of it.
-type UsageKey = (AgentId, PathBuf, Option<PathBuf>, BTreeMap<String, String>);
+type UsageKey = (AgentId, PathBuf, Option<PathBuf>, crate::agent::EnvVars);
 
 impl Default for Runtime {
     fn default() -> Self {

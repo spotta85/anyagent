@@ -445,15 +445,15 @@ fn echo() -> Script {
     }
 }
 
-/// The `detail` of a reply the echo mock refused.
-async fn echoed(wire: &mut Wire, id: u64, mut command: Value) -> String {
+/// The launch options the echo mock received, parsed from its refusal.
+async fn echoed(wire: &mut Wire, id: u64, mut command: Value) -> Value {
     command["id"] = json!(id);
     wire.send(command).await;
     let reply = wire.reply(id).await;
-    reply["error"]["detail"]
+    let detail = reply["error"]["detail"]
         .as_str()
-        .unwrap_or_else(|| panic!("no echo: {reply}"))
-        .to_owned()
+        .unwrap_or_else(|| panic!("no echo: {reply}"));
+    serde_json::from_str(detail).unwrap()
 }
 
 /// `instructions`, `env`, `args`, `config_home` and `record_wire` reach the
@@ -482,18 +482,9 @@ async fn launch_options_reach_the_adapter() {
             .as_object_mut()
             .unwrap()
             .extend(fields.as_object().unwrap().clone());
-        let detail = echoed(&mut wire, id as u64, command).await;
-        for want in [
-            r#"instructions: Some("Be brief.")"#.to_owned(),
-            r#"env: {"KEY": "value"}"#.to_owned(),
-            r#"args: ["--extra-flag"]"#.to_owned(),
-            format!("config_home: Some({home:?})"),
-            format!("record_wire: Some({log:?})"),
-        ] {
-            assert!(
-                detail.contains(&want),
-                "command {id}: {want} not in {detail}"
-            );
+        let echo = echoed(&mut wire, id as u64, command).await;
+        for (key, want) in fields.as_object().unwrap() {
+            assert_eq!(&echo[key], want, "command {id}: {key} in {echo}");
         }
     }
 }
@@ -504,23 +495,20 @@ async fn launch_options_reach_the_adapter() {
 async fn probe_takes_a_dir_and_an_exact_path() {
     let mut wire = Wire::start(echo()).await;
     let dir = wire.dir.path().to_owned();
-    let detail = echoed(
+    let echo = echoed(
         &mut wire,
         1,
         json!({"cmd": "probe", "agent": {"id": "mock", "path": "/opt/mock"}, "dir": dir}),
     )
     .await;
-    assert!(
-        detail.contains(r#"executable_path: "/opt/mock""#),
-        "{detail}"
-    );
-    assert!(detail.contains("source: Pinned"), "{detail}");
-    assert!(detail.contains(&format!("cwd: {dir:?}")), "{detail}");
-    assert!(detail.contains("throwaway: true"), "{detail}");
+    assert_eq!(echo["executable_path"], "/opt/mock", "{echo}");
+    assert_eq!(echo["source"], "Pinned", "{echo}");
+    assert_eq!(echo["cwd"], json!(dir), "{echo}");
+    assert_eq!(echo["throwaway"], true, "{echo}");
 
-    let detail = echoed(&mut wire, 2, json!({"cmd": "probe", "agent": "mock"})).await;
+    let echo = echoed(&mut wire, 2, json!({"cmd": "probe", "agent": "mock"})).await;
     let temp = std::path::absolute(std::env::temp_dir()).unwrap();
-    assert!(detail.contains(&format!("cwd: {temp:?}")), "{detail}");
+    assert_eq!(echo["cwd"], json!(temp), "{echo}");
 }
 
 /// `probe` and `plan_usage` only ever start a new session: `resume` or
