@@ -1227,16 +1227,15 @@ impl Drive {
         self.cost += part["cost"].as_f64().unwrap_or_default();
         self.add_turn_usage(tokens).await?;
         // Other step-finish shapes carry the components without a `total`.
-        let sum = |v: &Value| v.as_u64().unwrap_or_default();
         let used = tokens["total"]
             .as_u64()
             .filter(|t| *t > 0)
             .unwrap_or_else(|| {
-                sum(&tokens["input"])
-                    + sum(&tokens["output"])
-                    + sum(&tokens["reasoning"])
-                    + sum(&tokens["cache"]["read"])
-                    + sum(&tokens["cache"]["write"])
+                count(&tokens["input"])
+                    + count(&tokens["output"])
+                    + count(&tokens["reasoning"])
+                    + count(&tokens["cache"]["read"])
+                    + count(&tokens["cache"]["write"])
             });
         if used == 0 {
             return Ok(());
@@ -1254,7 +1253,6 @@ impl Drive {
     /// Adds one step's tokens to the turn and reports the sum. opencode
     /// splits cache out of `input` and reasoning out of `output` (1.18.29).
     async fn add_turn_usage(&mut self, tokens: &Value) -> Result<(), Gone> {
-        let count = |v: &Value| v.as_u64().unwrap_or_default();
         let cached = count(&tokens["cache"]["read"]);
         self.turn_usage.input_tokens +=
             count(&tokens["input"]) + cached + count(&tokens["cache"]["write"]);
@@ -1622,6 +1620,11 @@ async fn admission(deadline: Option<tokio::time::Instant>) {
 /// opencode's own client reconciles the same way.
 fn busy_status(status: &Value) -> bool {
     matches!(status["type"].as_str(), Some("busy") | Some("retry"))
+}
+
+/// One token count of a step-finish, zero when absent.
+fn count(tokens: &Value) -> u64 {
+    tokens.as_u64().unwrap_or_default()
 }
 
 /// The spawn a newborn direct child binds to: oldest still-running spawn
