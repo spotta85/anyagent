@@ -158,8 +158,8 @@ type Env = Vec<(String, String)>;
 
 /// The MCP servers as `-c mcp_servers.<name>.<key>=<toml>` launch overrides
 /// plus the env pairs they need, the wire having no per-thread declaration.
-/// A bearer `Authorization` header travels as `bearer_token_env_var` so the
-/// token stays out of argv. SSE is not a codex transport.
+/// Header values ride env vars the override names (`bearer_token_env_var`,
+/// `env_http_headers`; codex 0.154.0, 2026-09-27). SSE is not a codex transport.
 fn mcp_overrides(servers: &[McpServer]) -> Result<(Vec<String>, Env), AgentError> {
     let quote = |s: &str| serde_json::to_string(s).unwrap_or_default();
     let table = |map: &std::collections::BTreeMap<String, String>| {
@@ -196,17 +196,24 @@ fn mcp_overrides(servers: &[McpServer]) -> Result<(Vec<String>, Env), AgentError
             }
             McpConnection::Http { url, headers } => {
                 push("url", quote(url));
+                let var = |suffix: &str| {
+                    let name = server.name.to_uppercase().replace('-', "_");
+                    format!("ANYAGENT_MCP_{name}_{suffix}")
+                };
                 let (bearer, rest) = split_bearer(headers);
                 if let Some(token) = bearer {
-                    let var = format!(
-                        "ANYAGENT_MCP_{}_TOKEN",
-                        server.name.to_uppercase().replace('-', "_")
-                    );
-                    push("bearer_token_env_var", quote(&var));
-                    env.push((var, token));
+                    push("bearer_token_env_var", quote(&var("TOKEN")));
+                    env.push((var("TOKEN"), token));
                 }
-                if !rest.is_empty() {
-                    push("http_headers", table(&rest));
+                // Other header values ride the env too, named per header.
+                let mut named = std::collections::BTreeMap::new();
+                for (i, (header, value)) in rest.into_iter().enumerate() {
+                    let name = var(&format!("HEADER_{i}"));
+                    env.push((name.clone(), value));
+                    named.insert(header, name);
+                }
+                if !named.is_empty() {
+                    push("env_http_headers", table(&named));
                 }
             }
             McpConnection::Sse { .. } => {
@@ -2261,10 +2268,10 @@ mod tests {
     }
 
     #[test]
-    fn mcp_bearer_header_becomes_an_env_var() {
+    fn mcp_header_values_become_env_vars() {
         let mut headers = std::collections::BTreeMap::new();
         headers.insert("Authorization".to_owned(), "Bearer s3cret".to_owned());
-        headers.insert("X-Team".to_owned(), "t3".to_owned());
+        headers.insert("X-Team".to_owned(), "team-s3cret".to_owned());
         let server = McpServer {
             name: "t3-code".to_owned(),
             connection: McpConnection::Http {
@@ -2279,14 +2286,22 @@ mod tests {
                 "mcp_servers.t3-code.bearer_token_env_var=\"ANYAGENT_MCP_T3_CODE_TOKEN\""
             )
         );
-        assert!(joined.contains("http_headers={\"X-Team\"=\"t3\"}"));
+        assert!(joined.contains(
+            "mcp_servers.t3-code.env_http_headers={\"X-Team\"=\"ANYAGENT_MCP_T3_CODE_HEADER_0\"}"
+        ));
         assert!(
             !joined.contains("s3cret"),
-            "token must stay out of argv: {joined}"
+            "values must stay out of argv: {joined}"
         );
         assert_eq!(
             env,
-            vec![("ANYAGENT_MCP_T3_CODE_TOKEN".to_owned(), "s3cret".to_owned())]
+            vec![
+                ("ANYAGENT_MCP_T3_CODE_TOKEN".to_owned(), "s3cret".to_owned()),
+                (
+                    "ANYAGENT_MCP_T3_CODE_HEADER_0".to_owned(),
+                    "team-s3cret".to_owned()
+                )
+            ]
         );
     }
 }
