@@ -39,8 +39,14 @@ pub struct Runtime {
     usage_cache: Mutex<HashMap<UsageKey, (Instant, PlanUsage)>>,
 }
 
-/// One cached login: agent, executable, config home, env. Args are not part of it.
-type UsageKey = (AgentId, PathBuf, Option<PathBuf>, crate::agent::EnvVars);
+/// One cached login: agent, executable, config home, env, args.
+type UsageKey = (
+    AgentId,
+    PathBuf,
+    Option<PathBuf>,
+    crate::agent::EnvVars,
+    Vec<String>,
+);
 
 impl Default for Runtime {
     fn default() -> Self {
@@ -288,6 +294,7 @@ impl Runtime {
             agent.executable_path.clone(),
             options.config_home.clone(),
             options.env.clone(),
+            options.args.clone(),
         );
         if let Some((at, usage)) = self.usage_cache.lock().unwrap().get(&key)
             && at.elapsed() < USAGE_CACHE_TTL
