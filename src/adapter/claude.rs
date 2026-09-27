@@ -1369,11 +1369,14 @@ impl Drive {
                 let Some(tool) = self.task_tool(frame) else {
                     return Ok(());
                 };
-                tool.status = if frame["status"].as_str() == Some("failed") {
-                    ToolStatus::Failed
-                } else {
-                    ToolStatus::Completed
+                tool.status = match frame["status"].as_str() {
+                    Some("failed") => ToolStatus::Failed,
+                    Some("stopped") => ToolStatus::Cancelled,
+                    _ => ToolStatus::Completed,
                 };
+                // A background task's real result is the `summary` (2.1.283 schema).
+                let summary = text(&frame["summary"]).map(|s| cap(s, OUTPUT_CAP));
+                tool.output = summary.or(tool.output.take());
                 if let Some(info) = &mut tool.subagent {
                     info.tokens = frame["usage"]["total_tokens"].as_u64().or(info.tokens);
                 }
