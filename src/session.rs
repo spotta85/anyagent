@@ -1238,6 +1238,7 @@ fn is_content(kind: &EventKind) -> bool {
         EventKind::TextDelta { .. }
         | EventKind::ReasoningDelta { .. }
         | EventKind::UserMessage { .. }
+        | EventKind::PlanProposed { .. }
         | EventKind::RequestOpened(_) => true,
         EventKind::ToolUpdated(tool) => tool.status.is_active(),
         _ => false,

@@ -189,11 +189,19 @@ class EventKind7(TypedDict):
     ToolOutputDelta: ToolOutputDelta
 
 
+class PlanProposed(TypedDict):
+    markdown: str
+
+
+class EventKind9(TypedDict):
+    PlanProposed: PlanProposed
+
+
 class RequestClosed(TypedDict):
     request_id: str
 
 
-class EventKind10(TypedDict):
+class EventKind11(TypedDict):
     RequestClosed: RequestClosed
 
 
@@ -203,7 +211,7 @@ class ContextUsage(TypedDict):
     cost_usd: NotRequired[float | None]
 
 
-class EventKind13(TypedDict):
+class EventKind14(TypedDict):
     ContextUsage: ContextUsage
 
 
@@ -457,7 +465,7 @@ class EventKind1(TypedDict):
     TurnStarted: TurnStarted
 
 
-class EventKind12(TypedDict):
+class EventKind13(TypedDict):
     StatusChanged: SessionStatus
 
 
@@ -624,11 +632,11 @@ class EventKind8(TypedDict):
     PlanUpdated: PlanUpdated
 
 
-class EventKind14(TypedDict):
+class EventKind15(TypedDict):
     PlanUsageUpdated: PlanUsage
 
 
-class EventKind15(TypedDict):
+class EventKind16(TypedDict):
     Diagnostic: Diagnostic
 
 
@@ -638,7 +646,7 @@ class TurnEnded(TypedDict):
     usage: NotRequired[TurnUsage | None]
 
 
-class EventKind16(TypedDict):
+class EventKind17(TypedDict):
     TurnEnded: TurnEnded
 
 
@@ -658,7 +666,7 @@ class Request2(TypedDict):
 Request: TypeAlias = Request1 | Request2
 
 
-class EventKind9(TypedDict):
+class EventKind10(TypedDict):
     RequestOpened: Request
 
 
@@ -690,11 +698,11 @@ class Event(TypedDict):
     extensions: dict[str, Any]
 
 
-class EventKind11(TypedDict):
+class EventKind12(TypedDict):
     SessionUpdated: SessionInfo
 
 
-EventKind: TypeAlias = EventKind1 | EventKind2 | EventKind3 | EventKind4 | EventKind5 | EventKind6 | EventKind7 | EventKind8 | EventKind9 | EventKind10 | EventKind11 | EventKind12 | EventKind13 | Literal['ContextCompacted'] | EventKind14 | EventKind15 | EventKind16
+EventKind: TypeAlias = EventKind1 | EventKind2 | EventKind3 | EventKind4 | EventKind5 | EventKind6 | EventKind7 | EventKind8 | EventKind9 | EventKind10 | EventKind11 | EventKind12 | EventKind13 | EventKind14 | Literal['ContextCompacted'] | EventKind15 | EventKind16 | EventKind17
 
 
 class SessionInfo(TypedDict):

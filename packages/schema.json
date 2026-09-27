@@ -1058,6 +1058,27 @@
           "additionalProperties": false
         },
         {
+          "description": "The agent proposes this plan and waits for a go-ahead.",
+          "type": "object",
+          "properties": {
+            "PlanProposed": {
+              "type": "object",
+              "properties": {
+                "markdown": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "markdown"
+              ]
+            }
+          },
+          "required": [
+            "PlanProposed"
+          ],
+          "additionalProperties": false
+        },
+        {
           "type": "object",
           "properties": {
             "RequestOpened": {
@@ -2050,7 +2071,7 @@
       ]
     },
     "ConfigOption": {
-      "description": "A session setting the agent advertises. Well-known ids: `model`, `effort`,\n`mode`, `sandbox`, `fast` (boolean, lower latency with increased usage).",
+      "description": "A session setting the agent advertises. Well-known ids: `model`, `effort`,\n`mode`, `sandbox`, `fast` (boolean, lower latency with increased usage).\nThe `mode` choice `plan` is plan mode on every agent that has one.",
       "type": "object",
       "properties": {
         "id": {
