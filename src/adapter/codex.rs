@@ -314,8 +314,8 @@ async fn create_config_home(options: &SessionOptions) -> Result<(), AgentError> 
         .map_err(|e| AgentError::SpawnFailed(format!("could not create config home: {e}")))
 }
 
-/// `initialize` → `initialized`, then account, model catalog, and skills, then
-/// the thread bind from `options.start`.
+/// `initialize` → `initialized`, then account and model catalog, then the
+/// thread bind from `options.start` (a probe reads the effective config instead).
 async fn handshake(
     wire: &mut Wire,
     request: &ConnectRequest,
@@ -341,11 +341,17 @@ async fn handshake(
     // `SessionUpdated`, like ACP's late command list.
     let commands = Vec::new();
     let config = start_config(request, &models)?;
-    let thread = open_thread(wire, request, &config).await?;
-    let thread_id = thread["thread"]["id"]
-        .as_str()
-        .ok_or_else(|| AgentError::ProtocolFailed("thread bind returned no id".into()))?
-        .to_owned();
+    // A probe stops short of `thread/start`, which starts the user's MCP servers and hooks.
+    let (thread, thread_id) = if request.options.details_only {
+        (effective_config(wire, request).await, String::new())
+    } else {
+        let thread = open_thread(wire, request, &config).await?;
+        let id = thread["thread"]["id"]
+            .as_str()
+            .ok_or_else(|| AgentError::ProtocolFailed("thread bind returned no id".into()))?
+            .to_owned();
+        (thread, id)
+    };
     let info = driver_info(
         &init, &account, &models, &thread, &config, commands, request,
     );
@@ -524,6 +530,25 @@ async fn open_thread(
             AgentError::ResumeFailed(m)
         }
         e => e.into_error(),
+    })
+}
+
+/// The effective config (`config/read`, 0.154.0) in `thread/start`'s response shape. Unset
+/// values read as codex's defaults; a trusted dir's thread would say workspace-write.
+async fn effective_config(wire: &mut Wire, request: &ConnectRequest) -> Value {
+    let params = json!({ "cwd": request.options.cwd() });
+    let response = wire
+        .roundtrip("config/read", params)
+        .await
+        .unwrap_or_default();
+    let config = &response["config"];
+    let sandbox = config["sandbox_mode"].as_str().unwrap_or("read-only");
+    json!({
+        "model": config["model"],
+        "reasoningEffort": config["model_reasoning_effort"],
+        "serviceTier": config["service_tier"],
+        "approvalPolicy": config["approval_policy"],
+        "sandbox": { "type": sandbox_policy(sandbox) },
     })
 }
 

@@ -78,7 +78,8 @@ args and config home; in a workspace's dir it returns that workspace's
 commands, and each command's `source` tells a skill (`Skill { path, scope }`)
 from a built-in. On claude a probe skips the user's configured hooks
 and MCP servers (servers the app declares still load), so the user's
-MCP-provided prompts are not in `commands`.
+MCP-provided prompts are not in `commands`. On codex a probe opens no
+thread, so nothing of the user's starts at all.
 
 anyagent never reads or holds credentials and never drives a login flow. It
 tells you the exact command or env var to show the user. Keep several

@@ -51,7 +51,10 @@ for missing in &report.missing {               // MissingAgent { name, install_h
 Throwaway sessions (`probe`, `probe_auth`, `generate`) on claude launch
 without the user's configured hooks and MCP servers (`--strict-mcp-config`,
 `disableAllHooks`); servers the app declares still load. So a probe's
-`commands` leave out the user's MCP-provided prompts.
+`commands` leave out the user's MCP-provided prompts. On codex, `probe` and
+`probe_auth` stop before `thread/start`, so no MCP server or hook starts; the
+current values come from codex's effective config (an unset sandbox reads
+`read-only`, though a trusted project's thread would say `workspace-write`).
 
 Discovery hands you `AgentInstallation` values, and every other `Runtime`
 call takes one. You can also build one by hand: `AgentInstallation::at(id, path)`

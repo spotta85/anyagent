@@ -485,6 +485,9 @@ pub struct SessionOptions {
     /// Never persisted: keeps probes and one-shot generation out of the
     /// user's session history.
     pub(crate) throwaway: bool,
+    /// Only the details are wanted (the probes): an adapter may stop before
+    /// creating the provider session.
+    pub(crate) details_only: bool,
     pub(crate) quiet_window: Option<Duration>,
     pub(crate) stall_after: Option<Duration>,
     pub(crate) mcp_servers: Vec<McpServer>,
@@ -528,6 +531,7 @@ impl SessionOptions {
             permission_mode: PermissionMode::Ask,
             no_tools: false,
             throwaway: false,
+            details_only: false,
             quiet_window: None,
             stall_after: None,
             mcp_servers: Vec::new(),
