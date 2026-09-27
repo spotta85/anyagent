@@ -205,8 +205,8 @@ impl Runtime {
     }
 
     /// Opens a throwaway session in the temp dir, reads the details the
-    /// handshake learned, and closes. A logged-out agent is a result, not
-    /// an error.
+    /// handshake learned, and closes (codex stops before its thread). A
+    /// logged-out agent is a result, not an error.
     pub async fn probe(&self, agent: &AgentInstallation) -> Result<AgentDetails, AgentError> {
         self.probe_with(agent, throwaway_options()).await
     }
@@ -219,6 +219,7 @@ impl Runtime {
     ) -> Result<AgentDetails, AgentError> {
         require_new(&options, "probe")?;
         options.throwaway = true;
+        options.details_only = true;
         let opened = self.open(agent, options).await;
         // Not logged is reported as a detail.
         let (session, mut events) = match opened {
@@ -319,10 +320,12 @@ impl Runtime {
     }
 }
 
-/// Default options for the probes and the quota read: temp dir, never persisted.
+/// Default options for the probes and the quota read: temp dir, never
+/// persisted, details only.
 pub(crate) fn throwaway_options() -> SessionOptions {
     let mut options = SessionOptions::in_dir(std::env::temp_dir());
     options.throwaway = true;
+    options.details_only = true;
     options
 }
 

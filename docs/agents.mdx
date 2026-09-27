@@ -126,7 +126,8 @@ environment already has with another value, is refused. `rollback` maps to
 `thread/revert`; files are never restored. Questions are translated
 defensively but the capability stays off until observed live. MCP progress
 maps to `ToolProgress`, but 0.154.0 did not forward a stdio server's progress
-when probed.
+when probed. `probe` opens no thread: it reads `config/read` and
+`skills/list`, so the user's MCP servers and hooks never start.
 </Accordion>
 
 <Accordion title="opencode">

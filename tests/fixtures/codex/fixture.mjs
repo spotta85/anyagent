@@ -101,6 +101,8 @@ rl.on('line', (line) => {
     delete waiters[m.id];
     return r?.(m.result ?? m.error);
   }
+  // FIXTURE_REQUEST_LOG, set through the session's env: log each request's method and params there.
+  if (process.env.FIXTURE_REQUEST_LOG) appendFileSync(process.env.FIXTURE_REQUEST_LOG, JSON.stringify({ method: m.method, params: m.params }) + '\n');
   if (m.id !== undefined) onRequest(m).catch(() => process.exit(1));
 });
 rl.on('close', () => process.exit(0));
@@ -136,6 +138,9 @@ async function onRequest(m) {
         : { account: { type: 'chatgpt', email: 'user@example.com', planType: 'edu' }, requiresOpenaiAuth: true });
     case 'model/list':
       return reply({ data: MODELS, nextCursor: null });
+    // The effective config (probed 2026-09-27, 0.154.0, trimmed): unset keys are null.
+    case 'config/read':
+      return reply({ config: { model: 'gpt-6-mini', model_reasoning_effort: null, service_tier: null, approval_policy: null, sandbox_mode: 'workspace-write' }, origins: {} });
     case 'skills/list':
       // Grouped by root; the same skill appears under every root (dedupe by
       // name), a nameless entry is junk, and only `review` has an interface.
