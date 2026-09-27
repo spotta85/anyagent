@@ -202,14 +202,23 @@ async function runTurn(m) {
     done('end_turn');
     return;
   }
-  // Antigravity's ACP server names an MCP tool in `_meta.mcp` on the call,
-  // its permission and its first update; `kind` stays `other` (recorded 2026-09-27).
+  // One MCP call as three agents name it (recorded 2026-09-27), as
+  // [call, permission toolCall, ...updates]; `kind` is at most `other`.
+  // `mcp-call` is antigravity's server (`_meta.mcp` everywhere); `mcp-call
+  // kiro` names it on the call only; `mcp-call qwen` by `provenance: mcp`.
   if (ptext.includes('mcp-call')) {
-    const toolCall = { toolCallId: 'call_m', title: 'probe_secret_word', kind: 'other', status: 'pending', content: [], rawInput: { arguments: {} }, _meta: { mcp: { tool: 'secret_word', server: 'probe' }, is_mcp_tool_call: true } };
-    notify(sid, { sessionUpdate: 'tool_call', ...toolCall });
-    await request('session/request_permission', { sessionId: sid, toolCall, options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }] });
-    notify(sid, { sessionUpdate: 'tool_call_update', ...toolCall, status: 'in_progress' });
-    notify(sid, { sessionUpdate: 'tool_call_update', toolCallId: 'call_m', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'PLUM-4417' } }], rawOutput: 'PLUM-4417' });
+    const out = { status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'PLUM-4417' } }], rawOutput: 'PLUM-4417' };
+    const ag = { title: 'probe_secret_word', kind: 'other', status: 'pending', content: [], rawInput: { arguments: {} }, _meta: { mcp: { tool: 'secret_word', server: 'probe' }, is_mcp_tool_call: true } };
+    const kiro = { title: 'Running: @probe/secret_word', rawInput: { __tool_use_purpose: 'Retrieve the secret word.' } };
+    const qwen = { status: 'pending', content: [], locations: [], kind: 'other', rawInput: {} };
+    const [call, permission, ...updates] = {
+      antigravity: [ag, ag, { ...ag, status: 'in_progress' }, out],
+      kiro: [{ ...kiro, _meta: { kiro: { toolName: 'secret_word', mcpServerName: 'probe' } } }, kiro, { ...kiro, ...out, kind: 'other' }],
+      qwen: [{ ...qwen, title: 'secret_word (probe MCP Server): {}', _meta: { toolName: 'mcp__probe__secret_word', provenance: 'mcp', serverId: 'probe', phase: 'preparing' } }, { ...qwen, title: '{}', _meta: { toolName: 'mcp__probe__secret_word' } }, { ...out, _meta: { toolName: 'mcp__probe__secret_word', provenance: 'mcp', serverId: 'probe' } }],
+    }[ptext.split(' ')[1] ?? 'antigravity'];
+    notify(sid, { sessionUpdate: 'tool_call', toolCallId: 'call_m', ...call });
+    await request('session/request_permission', { sessionId: sid, toolCall: { toolCallId: 'call_m', ...permission }, options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }] });
+    for (const update of updates) notify(sid, { sessionUpdate: 'tool_call_update', toolCallId: 'call_m', ...update });
     done('end_turn');
     return;
   }
