@@ -12,6 +12,7 @@
 // instead of turn/completed), "refuse-start" (turn/start is refused).
 // --rename: the server renames the thread after the first turn.
 // --host-feature: the host config enables an under-development feature too.
+// "hook-blocked": the user's prompt hook completes as `blocked`.
 // A turn/start in the `plan` collaboration mode also yields a `plan` item
 // ("no-plan": one with empty text).
 import { createInterface } from 'node:readline';
@@ -41,9 +42,9 @@ const turnIds = []; // completed turns, oldest first
 let lastModel = null; // the model the thread last ran a turn with
 const waiters = {}; // server request id -> resolver
 
-// Notifications anyagent ignores: names from the 0.154.0 app-server schema, params trimmed.
-function hookRun(status) {
-  const run = { id: 'hook-1', eventName: 'userPromptSubmit', executionMode: 'sync', handlerType: 'command', scope: 'turn', status };
+// A user hook's run (0.154.0 app-server schema, params trimmed).
+function hookRun(status, entries = []) {
+  const run = { id: 'hook-1', eventName: 'userPromptSubmit', executionMode: 'sync', handlerType: 'command', scope: 'turn', status, entries, statusMessage: null };
   notify(status === 'running' ? 'hook/started' : 'hook/completed', { threadId: THREAD.id, turnId: turn.id, run });
 }
 
@@ -216,7 +217,8 @@ async function runTurn(params) {
   turn.started = true;
   notify('thread/settings/updated', { threadId: THREAD.id, threadSettings: { model: params.model ?? 'gpt-6', cwd: process.cwd() } });
   hookRun('running');
-  hookRun('completed');
+  if (prompt.includes('hook-blocked')) hookRun('blocked', [{ kind: 'stop', text: 'no secrets in prompts' }]);
+  else hookRun('completed');
   const user = item({ type: 'userMessage', clientId: params.clientUserMessageId, content: [{ type: 'text', text: prompt }] });
   itemStarted(user);
   itemCompleted(user);
