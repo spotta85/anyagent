@@ -133,6 +133,9 @@ mod process;
 mod runtime;
 mod session;
 pub mod sidecar;
+// The shared test helpers name this crate `anyagent`, like the integration tests.
+#[cfg(test)]
+extern crate self as anyagent;
 #[cfg(test)]
 #[path = "../tests/common/mod.rs"]
 mod testutil;

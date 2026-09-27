@@ -4,6 +4,9 @@
 
 use std::path::{Path, PathBuf};
 
+use anyagent::{Answer, EventKind, Events, Session, StopReason};
+use futures::StreamExt;
+
 /// An agent stand-in on disk: runs `tests/fixtures/<fixture>/fixture.mjs` with
 /// scenario flags, ignoring the real launch args appended after them. `name`
 /// only keeps concurrent scenarios in separate temp dirs.
@@ -106,6 +109,28 @@ pub async fn sent_frames(
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
     panic!("fewer than {count} matching frames in {}", log.display());
+}
+
+/// Prompts and answers every request with `answer`; returns the turn's text and stop.
+pub async fn answer_every_request(
+    session: &Session,
+    events: &mut Events,
+    prompt: &str,
+    answer: Answer,
+) -> (String, StopReason) {
+    session.prompt(prompt).await.unwrap();
+    let mut text = String::new();
+    loop {
+        let next = tokio::time::timeout(std::time::Duration::from_secs(10), events.next());
+        match next.await.expect("timed out").unwrap().unwrap().kind {
+            EventKind::RequestOpened(request) => {
+                session.answer(request.id(), answer.clone()).await.unwrap()
+            }
+            EventKind::TextDelta { text: t, .. } => text.push_str(&t),
+            EventKind::TurnEnded { stop, .. } => return (text, stop),
+            _ => {}
+        }
+    }
 }
 
 /// The variable `std::env::home_dir` reads, for tests that redirect home.

@@ -1004,18 +1004,8 @@ async fn deny_declines_and_cancel_withdraws() {
         ),
     ] {
         let (session, mut events) = open(name, flags).await;
-        session.prompt(prompt).await.unwrap();
-        let mut text = String::new();
-        let stop = loop {
-            match next(&mut events).await.kind {
-                EventKind::TextDelta { text: t, .. } => text.push_str(&t),
-                EventKind::RequestOpened(request) => {
-                    session.answer(request.id(), answer.clone()).await.unwrap()
-                }
-                EventKind::TurnEnded { stop, .. } => break stop,
-                _ => {}
-            }
-        };
+        let (text, stop) =
+            common::answer_every_request(&session, &mut events, prompt, answer).await;
         assert!(text.contains(reply), "{name}: {text}");
         assert_eq!(stop == StopReason::Cancelled, cancelled, "{name}: {stop:?}");
         session.close().await.unwrap();
