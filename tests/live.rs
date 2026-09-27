@@ -1198,7 +1198,9 @@ async fn turn_usage_rides_turn_ended() {
             }
         };
         println!("{h}: turn usage {usage:?}");
-        if matches!(h, "claude" | "codex" | "opencode" | "pi") {
+        // Headless agy reports usage; its ACP server reports only context fill.
+        let headless_agy = h == "antigravity" && HEADLESS_AGY.get().copied().unwrap_or(false);
+        if matches!(h, "claude" | "codex" | "opencode" | "pi") || headless_agy {
             let usage = usage.unwrap_or_else(|| panic!("{h}: TurnEnded without usage"));
             assert!(usage.input_tokens > 0, "{h}: no input tokens");
             assert!(usage.output_tokens > 0, "{h}: no output tokens");
