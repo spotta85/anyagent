@@ -658,10 +658,12 @@ async fn generate_returns_text_without_a_session() {
     }
 }
 
-/// `instructions` reach the agent: the reply follows a rule the prompt never mentions.
+/// `instructions` reach the agent: the reply follows a rule the prompt never
+/// mentions, and still does after a resume with the same instructions.
 #[tokio::test]
 #[ignore = "live: talks to real agents"]
 async fn instructions_reach_the_agent() {
+    const RULE: &str = "End every reply with the word PINEAPPLE";
     for h in enabled().await {
         let dir = tempfile::tempdir().unwrap();
         let runtime = Runtime::new();
@@ -669,10 +671,8 @@ async fn instructions_reach_the_agent() {
         let agent = report
             .require(h)
             .unwrap_or_else(|_| panic!("{h}: not discovered"));
-        let options =
-            options(h, dir.path()).instructions("End every reply with the word PINEAPPLE");
         let (session, mut events) = runtime
-            .open(agent, options)
+            .open(agent, options(h, dir.path()).instructions(RULE))
             .await
             .unwrap_or_else(|e| panic!("{h}: open failed: {e}"));
         session
@@ -680,12 +680,37 @@ async fn instructions_reach_the_agent() {
             .await
             .unwrap();
         let text = drain_to_turn_end(&session, &mut events, &format!("{h}: instructions")).await;
+        let info = session.info();
         session.close().await.ok();
         assert!(
             text.to_uppercase().contains("PINEAPPLE"),
             "{h}: instructions not followed: {text:?}"
         );
         pass(h, &format!("instructions reached the agent: {text:?}"));
+
+        let (true, Some(token)) = (
+            info.details.capabilities.supports(Capability::Resume),
+            info.resume_token,
+        ) else {
+            println!("SKIP {h}: no resume, so no resumed leg");
+            continue;
+        };
+        let options = options(h, dir.path()).instructions(RULE).resume(token);
+        let (session, mut events) = runtime
+            .open(agent, options)
+            .await
+            .unwrap_or_else(|e| panic!("{h}: resume failed: {e}"));
+        session
+            .prompt("Say goodbye in three words. No tools.")
+            .await
+            .unwrap();
+        let text = drain_to_turn_end(&session, &mut events, &format!("{h}: resumed")).await;
+        session.close().await.ok();
+        assert!(
+            text.to_uppercase().contains("PINEAPPLE"),
+            "{h}: instructions lost on resume: {text:?}"
+        );
+        pass(h, &format!("instructions held after resume: {text:?}"));
     }
 }
 
@@ -1812,6 +1837,9 @@ async fn runtime_plan_usage_probes_without_a_session() {
         match runtime.plan_usage(agent).await {
             Ok(usage) => {
                 assert!(!usage.windows.is_empty(), "{h}: quota with no windows");
+                if h == "codex" {
+                    assert!(usage.reset_credits.is_some(), "{h}: no reset credits");
+                }
                 let cached = runtime.plan_usage(agent).await.unwrap();
                 assert_eq!(cached.fetched_at, usage.fetched_at, "{h}: cache missed");
                 pass(
