@@ -54,6 +54,7 @@ cd /path/to/t3code && pnpm install && pnpm typecheck
 cd apps/server && TMPDIR=/private/tmp/t3tmp npx vp test run
 ANYAGENT_BIN=/path/to/anyagent/target/release/anyagent node scripts/anyagent-port-check.ts --agents claude,codex
 git diff --shortstat main..anyagent
+bash /path/to/anyagent/docs/ports/t3-code/measure.sh   # the per-bucket table above
 ```
 
 ## Known limits of the fork
