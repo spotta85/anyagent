@@ -34,6 +34,8 @@ use crate::event::{
 #[allow(clippy::large_enum_variant)]
 pub enum Step {
     Emit(EventKind),
+    /// Emit as an event of this tool's subagent (`parent_tool_id` set).
+    Nested(ToolId, EventKind),
     /// Pause until the engine forwards an `Answer`.
     AwaitAnswer,
     /// Report what the turn has spent; rides on the next `End`.
@@ -232,6 +234,14 @@ async fn drive(
             let Some(step) = steps.pop_front() else { break };
             let ok = match step {
                 Step::Emit(kind) => send(DriverEvent::event(kind)).await,
+                Step::Nested(parent, kind) => {
+                    send(DriverEvent::Event {
+                        kind,
+                        parent_tool_id: Some(parent),
+                        extensions: Default::default(),
+                    })
+                    .await
+                }
                 Step::AwaitAnswer => {
                     waiting = true;
                     true

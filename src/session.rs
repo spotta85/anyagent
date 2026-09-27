@@ -825,7 +825,11 @@ impl Engine {
         // bookkeeping (usage receipts, diagnostics) still passes.
         if self.awaiting_ack {
             match &ev {
-                DriverEvent::Event { kind, .. } if is_content(kind) => return,
+                DriverEvent::Event {
+                    kind,
+                    parent_tool_id,
+                    ..
+                } if is_content(kind, parent_tool_id.as_ref(), &self.background) => return,
                 DriverEvent::TurnEnded(_) | DriverEvent::TurnUsage(_) => return,
                 _ => {}
             }
@@ -886,15 +890,14 @@ impl Engine {
             });
             return;
         }
-        // A background tool's progress is bookkeeping, not the agent starting work.
+        // A settled tool no longer runs in the background.
         if let EventKind::ToolUpdated(tool) = &kind
             && !tool.status.is_active()
         {
             self.background.remove(&tool.id);
         }
-        let background =
-            matches!(&kind, EventKind::ToolUpdated(tool) if self.background.contains(&tool.id));
-        if matches!(self.state, TurnState::Idle) && is_content(&kind) && !background {
+        let parent = parent_tool_id.as_ref();
+        if matches!(self.state, TurnState::Idle) && is_content(&kind, parent, &self.background) {
             self.enter_running(TurnOrigin::Agent).await;
         }
         let turn = match &mut self.state {
@@ -1253,16 +1256,20 @@ impl Engine {
     }
 }
 
-/// Content opens an agent-originated turn when the session is idle;
-/// everything else is bookkeeping.
-fn is_content(kind: &EventKind) -> bool {
+/// Content opens an agent-originated turn when the session is idle; everything
+/// else is bookkeeping, as are updates of a `background` tool or one nested under it.
+fn is_content(kind: &EventKind, parent: Option<&ToolId>, background: &BTreeSet<ToolId>) -> bool {
     match kind {
         EventKind::TextDelta { .. }
         | EventKind::ReasoningDelta { .. }
         | EventKind::UserMessage { .. }
         | EventKind::PlanProposed { .. }
         | EventKind::RequestOpened(_) => true,
-        EventKind::ToolUpdated(tool) => tool.status.is_active(),
+        EventKind::ToolUpdated(tool) => {
+            tool.status.is_active()
+                && !background.contains(&tool.id)
+                && !parent.is_some_and(|p| background.contains(p))
+        }
         _ => false,
     }
 }
