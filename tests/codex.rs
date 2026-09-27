@@ -751,6 +751,71 @@ async fn approvals_map_accept_and_decline() {
     session.close().await.unwrap();
 }
 
+/// An MCP tool-call elicitation asks on the tracked MCP tool: allow completes
+/// it (the session form rides `persist`), deny fails it and the turn goes on.
+#[tokio::test]
+async fn an_mcp_tool_approval_maps_to_a_permission() {
+    let (session, mut events) = open("mcp-approve", "").await;
+    let mcp = ToolKind::Mcp {
+        server: "probe".into(),
+        tool: "secret_word".into(),
+    };
+    for (choice, reply, status) in [
+        (
+            PermissionChoice::AllowOnce,
+            "mcpcall=accept ",
+            ToolStatus::Completed,
+        ),
+        (
+            PermissionChoice::AllowAlways,
+            "mcpcall=accept/session ",
+            ToolStatus::Completed,
+        ),
+        (
+            PermissionChoice::DenyOnce,
+            "mcpcall=decline ",
+            ToolStatus::Failed,
+        ),
+    ] {
+        session.prompt("mcp-tool please").await.unwrap();
+        let mut text = String::new();
+        let mut states = Vec::new();
+        let stop = loop {
+            match next(&mut events).await.kind {
+                EventKind::TextDelta { text: t, .. } => text.push_str(&t),
+                EventKind::ToolUpdated(tool) if tool.kind == mcp => states.push(tool),
+                EventKind::RequestOpened(Request::Permission(request)) => {
+                    // The request names no item; its tool is the call `item/started` opened.
+                    assert_eq!(request.tool.id, states[0].id);
+                    assert_eq!(request.tool.kind, mcp);
+                    assert_eq!(
+                        request.options,
+                        vec![
+                            PermissionChoice::AllowOnce,
+                            PermissionChoice::AllowAlways,
+                            PermissionChoice::DenyOnce,
+                        ]
+                    );
+                    assert_eq!(
+                        request.detail.as_deref(),
+                        Some("Allow the probe MCP server to run tool \"secret_word\"?")
+                    );
+                    session
+                        .answer(request.id, Answer::Permission(choice))
+                        .await
+                        .unwrap();
+                }
+                EventKind::TurnEnded { stop, .. } => break stop,
+                _ => {}
+            }
+        };
+        assert!(text.contains(reply), "{text}");
+        assert_eq!(states.last().unwrap().status, status);
+        assert!(matches!(stop, StopReason::Completed { .. }), "{stop:?}");
+    }
+    session.close().await.unwrap();
+}
+
 /// Steer sent before turn/started is held until accepted and folded via Steered delivery.
 #[tokio::test]
 async fn a_steer_folds_into_the_running_turn() {

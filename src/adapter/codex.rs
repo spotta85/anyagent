@@ -688,6 +688,8 @@ struct PendingRequest {
     wire_id: u64,
     /// Present when the request is a `requestUserInput`.
     questions: Option<Vec<Question>>,
+    /// An MCP tool-call approval: replies carry an elicitation `action`.
+    elicitation: bool,
 }
 
 struct Drive {
@@ -792,6 +794,7 @@ impl Drive {
                 for (_, pending) in std::mem::take(&mut self.requests) {
                     let response = match pending.questions {
                         Some(_) => json!({ "answers": {} }),
+                        None if pending.elicitation => json!({ "action": "cancel" }),
                         None => json!({ "decision": "cancel" }),
                     };
                     self.wire.respond(pending.wire_id, response).await?;
@@ -1332,6 +1335,7 @@ impl Drive {
                     PendingRequest {
                         wire_id,
                         questions: None,
+                        elicitation: false,
                     },
                 );
                 Request::Permission(PermissionRequest {
@@ -1345,6 +1349,38 @@ impl Drive {
                     detail: params["reason"].as_str().map(str::to_owned),
                 })
             }
+            // MCP tool approvals name the server, not the item; other elicitations are declined.
+            "mcpServer/elicitation/request"
+                if params["_meta"]["codex_approval_kind"] == "mcp_tool_call" =>
+            {
+                self.requests.insert(
+                    id.clone(),
+                    PendingRequest {
+                        wire_id,
+                        questions: None,
+                        elicitation: true,
+                    },
+                );
+                // `persist` lists the remember forms offered; only "session" maps to a choice.
+                let persist = &params["_meta"]["persist"];
+                let session = *persist == "session"
+                    || persist
+                        .as_array()
+                        .is_some_and(|forms| forms.iter().any(|f| *f == "session"));
+                Request::Permission(PermissionRequest {
+                    id,
+                    tool: self.mcp_tool_for(params),
+                    options: [
+                        Some(PermissionChoice::AllowOnce),
+                        session.then_some(PermissionChoice::AllowAlways),
+                        Some(PermissionChoice::DenyOnce),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect(),
+                    detail: params["message"].as_str().map(str::to_owned),
+                })
+            }
             "item/tool/requestUserInput" => {
                 let questions = questions(&params["questions"]);
                 self.requests.insert(
@@ -1352,6 +1388,7 @@ impl Drive {
                     PendingRequest {
                         wire_id,
                         questions: Some(questions.clone()),
+                        elicitation: false,
                     },
                 );
                 Request::Question(QuestionRequest { id, questions })
@@ -1380,6 +1417,9 @@ impl Drive {
             return Ok(());
         };
         let response = match (&pending.questions, answer) {
+            (None, Answer::Permission(choice)) if pending.elicitation => {
+                elicitation_response(choice)
+            }
             (None, Answer::Permission(choice)) => json!({ "decision": match choice {
                 PermissionChoice::AllowOnce => "accept",
                 PermissionChoice::AllowAlways => "acceptForSession",
@@ -1396,24 +1436,38 @@ impl Drive {
     /// only what the request itself says.
     fn tool_for(&self, method: &str, params: &Value) -> ToolUpdate {
         let item_id = params["itemId"].as_str().unwrap_or_default();
+        let kind = if method.contains("fileChange") {
+            ToolKind::Edit
+        } else {
+            ToolKind::Execute
+        };
         self.tools
             .get(item_id)
             .cloned()
-            .unwrap_or_else(|| ToolUpdate {
-                id: ToolId::new(item_id),
-                kind: if method.contains("fileChange") {
-                    ToolKind::Edit
-                } else {
-                    ToolKind::Execute
-                },
-                title: "Approval required".into(),
-                status: ToolStatus::Running,
-                input: ToolInput::None,
-                output: None,
-                diffs: Vec::new(),
-                locations: Vec::new(),
-                raw: None,
-            })
+            .unwrap_or_else(|| approval_stub(item_id, kind))
+    }
+
+    /// The MCP call an approval elicitation is about: a tracked call on the
+    /// request's server, preferring the tool its message quotes, else a stub.
+    fn mcp_tool_for(&self, params: &Value) -> ToolUpdate {
+        let server = params["serverName"].as_str().unwrap_or_default();
+        let message = params["message"].as_str().unwrap_or_default();
+        let on_server =
+            |t: &&ToolUpdate| matches!(&t.kind, ToolKind::Mcp { server: s, .. } if s == server);
+        let quoted = |t: &&ToolUpdate| match &t.kind {
+            ToolKind::Mcp { tool, .. } => message.contains(&format!("\"{tool}\"")),
+            _ => false,
+        };
+        let unknown = ToolKind::Mcp {
+            server: server.to_owned(),
+            tool: String::new(),
+        };
+        self.tools
+            .values()
+            .filter(on_server)
+            .max_by_key(quoted)
+            .cloned()
+            .unwrap_or_else(|| approval_stub("", unknown))
     }
 
     /// `turn/steer` into the running wire turn; refused when none is known.
@@ -1713,6 +1767,32 @@ fn question_response(questions: &[Question], answers: &[QuestionAnswer]) -> Valu
         map.insert(question.id.to_string(), json!({ "answers": values }));
     }
     json!({ "answers": map })
+}
+
+/// An MCP tool-call approval reply; the session form rides `_meta.persist`.
+fn elicitation_response(choice: PermissionChoice) -> Value {
+    match choice {
+        PermissionChoice::AllowOnce => json!({ "action": "accept" }),
+        PermissionChoice::AllowAlways => {
+            json!({ "action": "accept", "_meta": { "persist": "session" } })
+        }
+        _ => json!({ "action": "decline" }),
+    }
+}
+
+/// A running stand-in for an approval's tool when no tracked item matches.
+fn approval_stub(id: &str, kind: ToolKind) -> ToolUpdate {
+    ToolUpdate {
+        id: ToolId::new(id),
+        kind,
+        title: "Approval required".into(),
+        status: ToolStatus::Running,
+        input: ToolInput::None,
+        output: None,
+        diffs: Vec::new(),
+        locations: Vec::new(),
+        raw: None,
+    }
 }
 
 /// The human text of a warning-shaped notification.
