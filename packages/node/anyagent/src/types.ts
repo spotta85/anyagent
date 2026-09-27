@@ -725,7 +725,7 @@ export interface SlashCommand {
   description: string;
   input_hint?: string | null;
   /**
-   * Where the command comes from.
+   * Where the command comes from; absent on the wire means `Builtin`.
    */
   source?: CommandSource;
 }
