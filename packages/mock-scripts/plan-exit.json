@@ -1,0 +1,37 @@
+{
+  "options": [{
+    "id": "mode", "name": "Mode", "category": null,
+    "kind": {"Select": {"choices": [
+      {"value": "default", "label": "Default", "description": null},
+      {"value": "plan", "label": "Plan", "description": null}
+    ]}},
+    "current": "plan", "live": true
+  }],
+  "turns": [
+    [
+      {"Emit": {"PlanProposed": {"markdown": "1. Add a README"}}},
+      {"Emit": {"RequestOpened": {"Permission": {
+        "id": "exit-1",
+        "tool": {"id": "tool-exit", "kind": "Other", "title": "ExitPlanMode", "status": "Pending",
+                 "input": "None", "output": null, "diffs": [], "locations": [],
+                 "raw": {"name": "ExitPlanMode", "input": {"plan": "1. Add a README"}}},
+        "options": ["AllowOnce", "DenyOnce"],
+        "detail": null}}}},
+      "AwaitAnswer",
+      {"Emit": {"TextDelta": {"message_id": "m1", "text": "Kept the plan."}}},
+      {"End": {"Completed": {"source": "Protocol"}}}
+    ],
+    [
+      {"Emit": {"RequestOpened": {"Permission": {
+        "id": "r2",
+        "tool": {"id": "tool-2", "kind": "Execute", "title": "cargo test", "status": "Pending",
+                 "input": {"Command": {"command": "cargo test", "cwd": null}},
+                 "output": null, "diffs": [], "locations": [], "raw": null},
+        "options": ["AllowOnce", "DenyOnce"],
+        "detail": null}}}},
+      "AwaitAnswer",
+      {"Emit": {"TextDelta": {"message_id": "m2", "text": "Done."}}},
+      {"End": {"Completed": {"source": "Protocol"}}}
+    ]
+  ]
+}
