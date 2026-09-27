@@ -260,6 +260,84 @@ async fn mode_switches_live() {
     }
 }
 
+/// `mode: plan` selected live makes the agent propose a plan as
+/// `PlanProposed` and write nothing; claude's go-ahead request follows the plan
+/// and is denied (keep planning).
+#[tokio::test]
+#[ignore = "live: talks to real agents"]
+async fn plan_mode_proposes_a_plan() {
+    for h in enabled().await {
+        if !matches!(h, "claude" | "codex") {
+            println!("SKIP {h}: plan mode asserted on claude and codex");
+            continue;
+        }
+        let (session, mut events, dir) = open(h).await;
+        std::fs::write(dir.path().join("main.py"), "print(1 + 2)\n").unwrap();
+        session.configure("mode", "plan").await.unwrap();
+        let mode = anyagent::ConfigId::new("mode");
+        while session.info().configuration.options.get(&mode) != Some(&"plan".into()) {
+            next(&mut events, "plan mode").await;
+        }
+        session
+            .prompt("Plan how to add a README to this project. Do not write files. Do not ask me any questions; make reasonable assumptions.")
+            .await
+            .unwrap();
+        let mut plans = Vec::new();
+        let mut previous = None;
+        loop {
+            let kind = next(&mut events, &format!("{h}: plan")).await.kind;
+            match &kind {
+                EventKind::PlanProposed { markdown } => plans.push(markdown.clone()),
+                // claude's go-ahead: right after its plan; deny keeps planning.
+                EventKind::RequestOpened(Request::Permission(request)) => {
+                    assert_eq!(request.tool.title, "ExitPlanMode", "{h}");
+                    assert!(
+                        matches!(previous, Some(EventKind::PlanProposed { .. })),
+                        "{h}: the request did not follow its plan: {previous:?}"
+                    );
+                    let deny = Answer::Permission(PermissionChoice::DenyOnce);
+                    session.answer(request.id.clone(), deny).await.unwrap();
+                }
+                // Plan mode may still ask; the first choice keeps it moving.
+                EventKind::RequestOpened(Request::Question(request)) => {
+                    let answers = request
+                        .questions
+                        .iter()
+                        .map(|q| match q.choices.first() {
+                            Some(choice) => QuestionAnswer::Choices(vec![choice.id.clone()]),
+                            None => QuestionAnswer::Text("Use your best judgment.".into()),
+                        })
+                        .collect();
+                    session
+                        .answer(request.id.clone(), Answer::Question(answers))
+                        .await
+                        .unwrap();
+                }
+                EventKind::TurnEnded { stop, .. } => {
+                    assert!(
+                        matches!(stop, StopReason::Completed { .. }),
+                        "{h}: {stop:?}"
+                    );
+                    break;
+                }
+                _ => {}
+            }
+            previous = Some(kind);
+        }
+        println!("{h}: proposed plan:\n{}", plans.join("\n---\n"));
+        let plan = plans
+            .last()
+            .unwrap_or_else(|| panic!("{h}: no plan proposed"));
+        assert!(plan.to_lowercase().contains("readme"), "{h}: plan {plan:?}");
+        assert!(
+            !dir.path().join("README.md").exists(),
+            "{h}: wrote the README"
+        );
+        session.close().await.unwrap();
+        pass(h, "plan mode proposed a plan");
+    }
+}
+
 /// An attached image reaches the model wherever `Images` is advertised; a
 /// PDF reaches antigravity's server, the one wire that takes PDFs inline.
 #[tokio::test]
