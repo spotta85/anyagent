@@ -1863,11 +1863,16 @@ impl Drive {
         answer: crate::event::Answer,
     ) -> Result<(), Gone> {
         if let Some(pending) = self.permissions.remove(&request) {
-            let outcome = match answer {
-                crate::event::Answer::Permission(choice) => option_for(choice, &pending.options)
-                    .map(|option_id| json!({ "outcome": "selected", "optionId": option_id })),
-                crate::event::Answer::Question(_) => None,
+            // The reject option carries no message; `Cancel` falls to the
+            // `cancelled` outcome (agent-client-protocol-schema 1.7).
+            let choice = match answer {
+                crate::event::Answer::Permission(choice) => Some(choice),
+                crate::event::Answer::Deny { .. } => Some(PermissionChoice::DenyOnce),
+                _ => None,
             };
+            let outcome = choice
+                .and_then(|choice| option_for(choice, &pending.options))
+                .map(|option_id| json!({ "outcome": "selected", "optionId": option_id }));
             let outcome = outcome.unwrap_or(json!({ "outcome": "cancelled" }));
             self.wire
                 .respond(pending.wire_id, json!({ "outcome": outcome }))
@@ -1887,7 +1892,8 @@ impl Drive {
             (crate::event::Answer::Question(answers), QuestionWire::Interaction) => {
                 interaction_response(&pending.questions, &answers)
             }
-            (crate::event::Answer::Permission(_), _) => None,
+            // `Cancel`, and a shape mismatch, send the cancelled reply.
+            _ => None,
         };
         let response = response.unwrap_or_else(|| cancelled_question(pending.wire));
         self.wire.respond(pending.wire_id, response).await?;

@@ -388,6 +388,13 @@ impl RequestShape {
                 }
                 format!("choice {choice:?} was not offered")
             }
+            (RequestShape::Permission(options), Answer::Deny { .. }) => {
+                if options.contains(&PermissionChoice::DenyOnce) {
+                    return Ok(());
+                }
+                "choice DenyOnce was not offered".into()
+            }
+            (_, Answer::Cancel) => return Ok(()),
             (RequestShape::Question(questions), Answer::Question(answers)) => {
                 if answers.len() != questions.len() {
                     format!(

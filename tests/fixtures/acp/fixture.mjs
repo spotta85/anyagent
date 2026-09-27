@@ -287,7 +287,7 @@ async function runTurn(m) {
   notify(sid, { sessionUpdate: 'some_future_update_kind', payload: { x: 1 } }); // unknown kind
   send({ jsonrpc: '2.0', method: '_claude/rateLimit', params: { sessionId: sid, status: 'allowed_warning' } }); // ext notification
   const perm = await request('session/request_permission', { sessionId: sid, toolCall: { toolCallId: 'call_2', title: 'Run tests' }, options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }] });
-  const outcome = perm.result?.outcome?.outcome ?? 'error';
+  const outcome = perm.result?.outcome?.optionId ?? perm.result?.outcome?.outcome ?? 'error';
   notify(sid, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `perm=${outcome} ` } });
   // "die-late": a plain RPC failure after the permission exchange.
   if (ptext.includes('die-late')) { send({ jsonrpc: '2.0', id: m.id, error: { code: -32603, message: 'kaput' } }); turn = null; return; }

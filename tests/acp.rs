@@ -127,7 +127,7 @@ async fn a_full_turn_maps_every_update_kind() {
             _ => {}
         }
     }
-    assert_eq!(text, "Hello perm=selected ");
+    assert_eq!(text, "Hello perm=allow ");
     assert_eq!(thoughts, "thinking…");
     assert_eq!(plan_steps, vec!["step 1"]);
     assert_eq!(usage, Some((1200, Some(200_000), Some(0.01))));
@@ -1675,6 +1675,42 @@ async fn interaction_permissions_are_questions() {
             .supports(Capability::Questions)
     );
     session.close().await.unwrap();
+}
+
+/// `Deny` picks the reject option (the wire takes no message); `Cancel` sends
+/// the `cancelled` outcome, for a permission and a question alike.
+#[tokio::test]
+async fn deny_rejects_and_cancel_sends_cancelled() {
+    let deny = Answer::Deny {
+        message: "not now".into(),
+    };
+    let cancelled = r#"q={"outcome":"cancelled"} "#;
+    for (flags, prompt, answer, expected) in [
+        (&[][..], "hi", deny, "perm=reject "),
+        (&[], "hi", Answer::Cancel, "perm=cancelled "),
+        (
+            &["--antigravity"],
+            "interaction-question",
+            Answer::Cancel,
+            cancelled,
+        ),
+    ] {
+        let (session, mut events) = open(flags).await;
+        session.prompt(prompt).await.unwrap();
+        let mut text = String::new();
+        loop {
+            match next(&mut events).await.kind {
+                EventKind::RequestOpened(request) => {
+                    session.answer(request.id(), answer.clone()).await.unwrap()
+                }
+                EventKind::TextDelta { text: t, .. } => text.push_str(&t),
+                EventKind::TurnEnded { .. } => break,
+                _ => {}
+            }
+        }
+        assert!(text.contains(expected), "{prompt}: {text}");
+        session.close().await.unwrap();
+    }
 }
 
 #[tokio::test]
