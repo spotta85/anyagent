@@ -251,6 +251,13 @@ match request {
 `PermissionChoice` is `AllowOnce`, `AllowAlways`, `DenyOnce`, `DenyAlways`.
 `QuestionAnswer` is `Text(String)` or `Choices(Vec<ChoiceId>)`.
 
+| Answer | Valid for | Does |
+|---|---|---|
+| `Permission(choice)` | a permission offering `choice` | picks that option |
+| `Question(answers)` | a question | one answer per question, in order |
+| `Deny { message }` | a permission offering `DenyOnce` | denies once and tells the agent why ([which agents carry the message](/agents#answers-by-agent)) |
+| `Cancel` | any open request | withdraws it; the agent stops waiting for it ([what each agent does next](/agents#answers-by-agent)) |
+
 ### Session state and usage
 
 Everything about the session that isn't part of the conversation: its
@@ -336,7 +343,7 @@ enum is `#[non_exhaustive]`.
 | `HandshakeTimeout` | Launch plus handshake exceeded 30 s |
 | `UnsupportedFeature` | You called something the capability set does not include |
 | `InvalidConfiguration` | Bad option id or value, or an isolation request the agent cannot honour |
-| `InvalidRequest` | Answering a closed request, dequeueing a started prompt, a rollback the agent refused (its reason) |
+| `InvalidRequest` | Answering a closed request, an answer the request does not offer (a `Deny` without `DenyOnce`; the request stays open), dequeueing a started prompt, a rollback the agent refused (its reason) |
 | `ResumeFailed` | The agent has no conversation for the token. Other resume failures keep their own variant |
 | `SessionBusy` | `rollback` or `compact` while a turn is running, or `rollback` while another is pending |
 | `ProtocolFailed` | The wire misbehaved |

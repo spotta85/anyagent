@@ -156,6 +156,10 @@ EventKind::RequestOpened(Request::Question(r)) => {
 EventKind::RequestClosed { request_id } => ui.clear(request_id),
 ```
 
+To say no with a reason, answer `Answer::Deny { message }`; to take a
+request back without choosing, `Answer::Cancel`. What each agent does with
+them: [answers by agent](/agents#answers-by-agent).
+
 **Confirms:** `RequestClosed`. It also arrives when a cancelled turn
 withdraws the request, so clear your UI on that event, not on your own
 answer. While a request is open, `session.status()` is `NeedsInput`.

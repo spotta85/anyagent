@@ -82,6 +82,19 @@ On claude, codex, and opencode each `model` choice also carries that model's
 own `effort` and `fast` in `options` (opencode: `effort` only). Other agents
 leave it empty.
 
+## Answers by agent
+
+What `Answer::Deny { message }` and `Answer::Cancel` send. Where the wire
+takes no message, the message is dropped.
+
+| Agent | `Deny { message }` | `Cancel` |
+|---|---|---|
+| claude | deny; the model reads the message as the tool's result | deny with `interrupt`: the turn ends `Cancelled` (a question too) |
+| codex | `decline`, no message | approvals: `cancel`, which also ends the turn `Cancelled`; a question gets no answers |
+| opencode | `reject` with the message | a permission gets `reject`; a question takes the reject route |
+| ACP agents | the reject option, no message | outcome `cancelled` |
+| pi | not offered (pi asks only questions) | the dialog is cancelled |
+
 ## Per-agent notes
 
 <AccordionGroup>
