@@ -1096,6 +1096,29 @@ async fn mcp_servers_ride_the_control_channel() {
     session.close().await.unwrap();
 }
 
+/// A throwaway session (a probe here) keeps the declared servers:
+/// `--strict-mcp-config` drops only the user's own.
+#[tokio::test]
+async fn throwaway_sessions_keep_declared_mcp_servers() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.jsonl");
+    let wire = dir.path().join("wire.jsonl");
+    let agent = AgentInstallation::at("claude", wrapper("throwaway-mcp", ""));
+    let options = SessionOptions::in_dir(dir.path())
+        .mcp_server(McpServer::stdio("tool", "/bin/echo", ["hi"]))
+        .record_wire(&wire)
+        .env("FIXTURE_ARGV_LOG", log.to_string_lossy());
+    Runtime::new().probe_with(&agent, options).await.unwrap();
+    let sent =
+        common::sent_frames(&wire, 1, |f| f["request"]["subtype"] == "mcp_set_servers").await;
+    assert_eq!(
+        sent[0]["request"]["servers"]["tool"]["command"],
+        "/bin/echo"
+    );
+    let argv = &common::logged_args(&log)[0];
+    assert!(argv.iter().any(|a| a == "--strict-mcp-config"), "{argv:?}");
+}
+
 /// Mismatched answer type or not-offered choice rejected typed; request stays open for correct answer.
 #[tokio::test]
 async fn a_mismatched_answer_is_rejected_and_the_request_stays_open() {
