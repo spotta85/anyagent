@@ -1,6 +1,6 @@
 # Gaps found porting T3 Code to anyagent
 
-Things T3 Code's server needed from its agent layer that anyagent did not have. 25 rows. Each row becomes an anyagent ticket; sizes are estimates in lines of Rust.
+Things T3 Code's server needed from its agent layer that anyagent did not have. 26 rows. Each row becomes an anyagent ticket; sizes are estimates in lines of Rust.
 
 Two are bugs found live, not missing features: **Codex ignores declared MCP servers** (flag order, plus the bearer token in argv) and **Quiet codex sessions** (warnings anyagent causes itself). Fix those first.
 
@@ -31,3 +31,5 @@ Two are bugs found live, not missing features: **Codex ignores declared MCP serv
 | Model rerouted | `model.rerouted { fromModel, toModel, reason }` (codex `model/rerouted`; feeds `ProviderService`'s reroute analytics) | codex's frame becomes a `Diagnostic` warning (text only), so T3 shows a warning and the analytics never see it | `EventKind::ModelRerouted { from, to, reason }` | ~15 |
 | Isolated one-shot generation | `generateCommitMessage` / `PrContent` / `BranchName` / `ThreadTitle`. The old claude generator ran with hooks off (`disableAllHooks`), `--strict-mcp-config`, `--tools ""`, `--json-schema`, and titles in a temp dir; codex used `--output-schema` | `generate` opens a tool-less session in the caller's dir with the user's hooks and MCP servers, and has no output schema (T3 digs the JSON out of free text). The adapter now runs titles in a temp dir; commit, PR and branch text still run in the checkout | `generate { isolated: bool, output_schema: Option<Value> }`: no hooks, no user MCP servers, schema passed where the wire takes one (claude `--json-schema`, codex `--output-schema`) | ~50 |
 | Cancel a specific or queued turn | `interruptTurn(threadId, turnId)` | `cancel` is session-wide: it stops whatever turn runs and cannot withdraw a queued prompt. The adapter ignores `turnId` | `Session::cancel(target: Option<TurnId \| PromptId>)`: cancel the running turn only if it matches, drop a queued prompt by id | ~30 |
+| Narrow `ResumeFailed` | `startSession({ resumeCursor })`; on `ResumeFailed` the adapter opens a fresh session with a warning | codex (`src/adapter/codex.rs` `thread/resume`) and opencode (`src/adapter/opencode.rs` `GET /session/{id}`) map *any* RPC or HTTP error to `ResumeFailed`, so a transient 5xx or connect error drops the conversation as if the agent had forgotten it; claude matches only "No conversation found" | Map only not-found responses to `ResumeFailed`; everything else stays the typed transport/auth error | ~20 |
+
