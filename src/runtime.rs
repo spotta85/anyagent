@@ -604,9 +604,9 @@ mod tests {
             matches!(&refused, Some(AgentError::UnsupportedFeature(f)) if f == "output schema"),
             "{refused:?}"
         );
-        let refused = runtime.generate(&agent, options, "go").await;
+        let refused = runtime.generate(&agent, options, "go").await.err();
         assert!(
-            matches!(refused, Err(AgentError::UnsupportedFeature(_))),
+            matches!(&refused, Some(AgentError::UnsupportedFeature(f)) if f == "output schema"),
             "{refused:?}"
         );
     }
