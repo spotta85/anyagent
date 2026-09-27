@@ -195,6 +195,9 @@ whole every time it changes, so there is no delta merging to get wrong.
 | `PlanUpdated` | `entries` | The agent's full task list. Replaces the previous one |
 | `PlanProposed` | `markdown` | Claude and codex only. In `mode: plan`, the plan the agent proposes before it acts. On claude, the `ExitPlanMode` permission request follows: allow to implement, deny to keep planning. It reaches you in every permission mode. On codex, select an approval policy and prompt again to implement |
 
+`ToolProgress`, `TurnDiff` and `ModelRerouted` ride a running turn and never
+open one: while the session is idle they arrive with no `turn_info`.
+
 ```rust
 pub struct ToolUpdate {
     pub id: ToolId,

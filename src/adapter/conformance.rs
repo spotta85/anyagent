@@ -326,9 +326,9 @@ async fn bookkeeping_after_turn_end_is_not_a_turn_and_late_stops_are_diagnostics
 }
 
 /// Tool progress, the turn diff and a reroute ride the prompted turn they arrive
-/// in; after it ended, each is content that opens an agent turn and rides it.
+/// in; while idle each arrives outside any turn and opens none.
 #[tokio::test]
-async fn live_events_ride_the_running_turn() {
+async fn live_events_ride_a_running_turn_and_never_open_one() {
     let diff = EventKind::TurnDiff {
         unified: "diff --git a/a.txt b/a.txt".into(),
     };
@@ -342,23 +342,19 @@ async fn live_events_ride_the_running_turn() {
             Step::Emit(kind.clone()),
             Step::End(completed()),
             Step::Emit(kind.clone()),
-            Step::End(completed()),
         ]);
         let (session, mut events) = open(MockAdapter::new(script), None).await;
         session.prompt("go").await.unwrap();
-        for by_agent in [false, true] {
-            let started = next(&mut events).await;
-            let EventKind::TurnStarted { origin } = &started.kind else {
-                panic!("expected a turn start, got {:?}", started.kind)
-            };
-            assert_eq!(*origin == TurnOrigin::Agent, by_agent);
-            let event = next(&mut events).await;
-            assert_eq!(event.kind, kind);
-            assert!(event.turn_info.is_some());
-            assert_eq!(event.turn_info, started.turn_info);
-            let ended = next(&mut events).await;
-            assert!(matches!(ended.kind, EventKind::TurnEnded { .. }));
-        }
+        let started = next(&mut events).await;
+        assert!(matches!(started.kind, EventKind::TurnStarted { .. }));
+        let event = next(&mut events).await;
+        assert_eq!(event.kind, kind);
+        assert_eq!(event.turn_info, started.turn_info);
+        let ended = next(&mut events).await;
+        assert!(matches!(ended.kind, EventKind::TurnEnded { .. }));
+        let idle = next(&mut events).await;
+        assert_eq!(idle.kind, kind);
+        assert!(idle.turn_info.is_none(), "opened a turn: {:?}", idle.kind);
     }
 }
 

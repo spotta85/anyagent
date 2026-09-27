@@ -1263,21 +1263,20 @@ impl Engine {
     }
 }
 
-/// Content opens an agent-originated turn when the session is idle; everything
-/// else is bookkeeping, as are updates of a `background` tool or one nested under it.
+/// Content opens an agent-originated turn when the session is idle; everything else is
+/// bookkeeping, as are updates of a `background` tool or one nested under it.
 fn is_content(kind: &EventKind, parent: Option<&ToolId>, background: &BTreeSet<ToolId>) -> bool {
-    let in_background =
-        |id: &ToolId| background.contains(id) || parent.is_some_and(|p| background.contains(p));
     match kind {
         EventKind::TextDelta { .. }
         | EventKind::ReasoningDelta { .. }
         | EventKind::UserMessage { .. }
         | EventKind::PlanProposed { .. }
-        | EventKind::TurnDiff { .. }
-        | EventKind::ModelRerouted { .. }
         | EventKind::RequestOpened(_) => true,
-        EventKind::ToolUpdated(tool) => tool.status.is_active() && !in_background(&tool.id),
-        EventKind::ToolProgress { tool_id, .. } => !in_background(tool_id),
+        EventKind::ToolUpdated(tool) => {
+            tool.status.is_active()
+                && !background.contains(&tool.id)
+                && !parent.is_some_and(|p| background.contains(p))
+        }
         _ => false,
     }
 }

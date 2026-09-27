@@ -185,7 +185,7 @@ ModelRerouted {
 },
 ```
 
-All three are turn content (`is_content`).
+They ride a running turn and never open one.
 
 **Behavior:**
 
