@@ -87,7 +87,8 @@ impl Adapter for CodexAdapter {
                 requests: HashMap::new(),
                 open_reasoning: std::collections::HashSet::new(),
                 auth_lost: false,
-                in_plan: false,
+                // A resumed or forked thread may have been left in plan mode.
+                in_plan: !matches!(request.options.start, SessionStart::New),
                 next_msg: 1,
                 request,
             }
@@ -725,7 +726,7 @@ struct Drive {
     open_reasoning: std::collections::HashSet<String>,
     /// The first 401 already surfaced `AuthLost`; the retries stay quiet.
     auth_lost: bool,
-    /// The thread's collaboration mode is `plan`; it sticks until changed.
+    /// The thread may be in plan mode (it sticks), so the next turn states the mode.
     in_plan: bool,
     next_msg: u64,
     request: ConnectRequest,

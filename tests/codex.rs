@@ -893,6 +893,8 @@ async fn resume_keeps_the_thread_and_fork_cuts_at_the_anchor() {
     resumed.prompt("hi").await.unwrap();
     let text = complete_turn(&resumed, &mut events, PermissionChoice::AllowOnce).await;
     assert!(text.contains("rolled=1"), "{text}");
+    // The thread may have been left in plan mode; its first turn says which.
+    assert!(text.contains(r#"collab={"mode":"default""#), "{text}");
     resumed.close().await.unwrap();
 
     // Fork at a wire turn id (the `codex/fork_point` extension currency).
@@ -908,6 +910,7 @@ async fn resume_keeps_the_thread_and_fork_cuts_at_the_anchor() {
     fork.prompt("hi").await.unwrap();
     let text = complete_turn(&fork, &mut events, PermissionChoice::AllowOnce).await;
     assert!(text.contains("fork=turn-0"), "{text}");
+    assert!(text.contains(r#"collab={"mode":"default""#), "{text}");
     fork.close().await.unwrap();
 }
 
