@@ -272,12 +272,14 @@ async function runTurn(params) {
   if (prompt.includes('mcp-')) {
     // Recorded 2026-09-27 (codex 0.154.0): names the server, not the item; decline fails it.
     // "mcp-two" runs two calls of one tool; each is asked about while both are in flight.
+    // "mcp-always" offers only the persistent remember form, as a string.
     const args = prompt.includes('mcp-two') ? [{ word: 'a' }, { word: 'b' }] : [{}];
+    const persist = prompt.includes('mcp-always') ? 'always' : ['session', 'always'];
     const calls = args.map((a) => item({ type: 'mcpToolCall', server: 'probe', tool: 'secret_word', status: 'inProgress', arguments: a, result: null, error: null }));
     calls.forEach(itemStarted);
     const resps = [];
     for (const call of calls) {
-      resps.push(await ask('mcpServer/elicitation/request', { serverName: 'probe', mode: 'form', _meta: { codex_approval_kind: 'mcp_tool_call', persist: ['session', 'always'], tool_description: 'Returns the secret word.', tool_params: call.arguments, tool_params_display: [] }, message: 'Allow the probe MCP server to run tool "secret_word"?', requestedSchema: { type: 'object', properties: {} } }));
+      resps.push(await ask('mcpServer/elicitation/request', { serverName: 'probe', mode: 'form', _meta: { codex_approval_kind: 'mcp_tool_call', persist, tool_description: 'Returns the secret word.', tool_params: call.arguments, tool_params_display: [] }, message: 'Allow the probe MCP server to run tool "secret_word"?', requestedSchema: { type: 'object', properties: {} } }));
       if (turn.interrupted) return endTurn('interrupted');
       notify('serverRequest/resolved', { threadId: THREAD.id, requestId: serverReqN - 1 });
     }
