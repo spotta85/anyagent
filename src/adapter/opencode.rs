@@ -1751,7 +1751,8 @@ fn tool_kind(name: &str) -> ToolKind {
     match name {
         "bash" => ToolKind::Execute,
         "read" | "list" => ToolKind::Read,
-        "edit" | "write" | "patch" => ToolKind::Edit,
+        // `apply_patch` (GPT models) takes a multi-file `patchText`: raw input.
+        "edit" | "write" | "patch" | "apply_patch" => ToolKind::Edit,
         "grep" | "glob" => ToolKind::Search,
         "webfetch" => ToolKind::Fetch,
         "task" => ToolKind::Subagent,
@@ -2644,5 +2645,19 @@ mod tests {
         assert_eq!(tool.status, ToolStatus::Failed);
         assert_eq!(tool.locations, vec![PathBuf::from("/tmp/a.txt")]);
         assert_eq!(tool.output.as_deref(), Some("denied"));
+    }
+
+    #[test]
+    fn apply_patch_is_an_edit_that_keeps_its_patch_raw() {
+        let mut tool = fresh_tool("call1", "apply_patch");
+        let input =
+            json!({ "patchText": "*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch" });
+        apply_state(
+            &mut tool,
+            "apply_patch",
+            &json!({ "status": "completed", "input": input }),
+        );
+        assert_eq!(tool.kind, ToolKind::Edit);
+        assert_eq!(tool.raw.unwrap().input, input);
     }
 }
