@@ -36,7 +36,7 @@ conversation, like one-shot text generation and reading account quota.
 | `open(&agent, options)` | `(Session, Events)` | Spawn the agent and hand back the two halves |
 | `generate(&agent, options, prompt)` | `String` | One-shot text: opens, prompts, declines tools, closes |
 | `plan_usage(&agent)` | `PlanUsage` | The account's subscription quota and banked resets (`reset_credits`), from the agent itself |
-| `plan_usage_with(&agent, &options)` | `PlanUsage` | `plan_usage` for the login the options point at (config home, env, args). Cached per agent, binary, config home, env and args |
+| `plan_usage_with(&agent, options)` | `PlanUsage` | `plan_usage` for the login the options point at (config home, env, args). Cached per agent, binary, config home, env and args |
 | `plan_usage_all()` | `Vec<AgentPlanUsage>` | The same for every installed agent |
 | `with_mock(script)` | `Runtime` | Feature `mock`: the real engine over a scripted agent |
 

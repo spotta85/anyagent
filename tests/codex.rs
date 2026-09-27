@@ -1090,7 +1090,7 @@ async fn plan_usage_with_applies_the_options_and_caches_per_login() {
         base.clone().config_home(&home),
         base.clone().env("OTHER", "1"),
     ];
-    for options in &calls {
+    for options in calls {
         runtime.plan_usage_with(&agent, options).await.unwrap();
     }
     let argv = common::logged_args(&log);

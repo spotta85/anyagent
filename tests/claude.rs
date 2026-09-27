@@ -495,7 +495,7 @@ async fn plan_usage_with_applies_env_and_args() {
         .env("FIXTURE_ARGV_LOG", log.to_string_lossy())
         .arg("--extra-flag");
     Runtime::new()
-        .plan_usage_with(&agent, &options)
+        .plan_usage_with(&agent, options)
         .await
         .unwrap();
     let argv = common::logged_args(&log);

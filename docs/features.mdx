@@ -337,7 +337,7 @@ the parent's turn; anyagent consumes the child's turn bookkeeping.
 
 ```rust
 let usage = runtime.plan_usage(&agent).await?;        // plan name, 5-hour and weekly windows, banked resets
-let work = runtime.plan_usage_with(&agent, &SessionOptions::in_dir(".").config_home("/logins/work")).await?;
+let work = runtime.plan_usage_with(&agent, SessionOptions::in_dir(".").config_home("/logins/work")).await?;
 for entry in runtime.plan_usage_all().await {          // every installed agent, for a dashboard
     ui.card(&entry.agent.name, entry.usage);
 }
