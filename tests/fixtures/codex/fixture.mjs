@@ -10,7 +10,8 @@
 // (the turn ends via turn/failed / turn/aborted instead of turn/completed).
 // --rename: the server renames the thread after the first turn.
 // --host-feature: the host config enables an under-development feature too.
-// A turn/start in the `plan` collaboration mode also yields a `plan` item.
+// A turn/start in the `plan` collaboration mode also yields a `plan` item
+// ("no-plan": one with empty text).
 import { createInterface } from 'node:readline';
 
 const flag = (name) => process.argv.includes(name);
@@ -236,7 +237,7 @@ async function runTurn(params) {
     const plan = item({ type: 'plan', text: '' });
     itemStarted(plan);
     notify('item/plan/delta', { threadId: THREAD.id, turnId: turn.id, itemId: plan.id, delta: '# Plan' });
-    itemCompleted({ ...plan, text: '# Plan\n\n1. Add README.md' });
+    itemCompleted({ ...plan, text: prompt.includes('no-plan') ? '' : '# Plan\n\n1. Add README.md' });
   }
 
   if (flag('--question')) {
