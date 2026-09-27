@@ -5,7 +5,8 @@
 // --rename (the server titles the session after the first turn). Prompt
 // words: "write-file" (a write asks permission), "question" (a question
 // tool), "sleep" (only an abort ends the turn), "child" (a task-tool child
-// session runs and asks permission), "die" (exit mid-turn).
+// session runs and asks permission), "die" (exit mid-turn), "mcp-call" (a
+// tool of the user's "my docs" MCP server runs).
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
 
@@ -95,6 +96,7 @@ async function runTurn(ses, body, text) {
     say(`q=${answers.map((a) => a.join('+')).join(',')} `);
   }
   if (prompt.includes('child')) await runChild(ses, asst, say);
+  if (prompt.includes('mcp-call')) partUpdated(sid, part(sid, asst.id, { type: 'tool', tool: 'my_docs_lookup', callID: `call_${partN + 1}`, state: { status: 'completed', input: {}, output: 'found' } }));
   partUpdated(sid, part(sid, asst.id, { type: 'tool', tool: 'todowrite', callID: `call_${partN + 1}`, state: { status: 'completed', input: { todos: [{ content: 'step 1', status: 'in_progress' }] }, output: '' } }));
   say('done');
   partUpdated(sid, part(sid, asst.id, { type: 'step-finish', tokens: { total: 1200, input: 700, output: 150, reasoning: 50, cache: { write: 0, read: 300 } }, cost: 0.01 }));
@@ -163,6 +165,8 @@ createServer(async (req, res) => {
     if (!missing) mcpAdds.push(body);
     return json(res, 200, mcpStatus);
   }
+  // Every MCP server, a user-configured one ("my docs") included.
+  if (req.method === 'GET' && url.pathname === '/mcp') return json(res, 200, { 'my docs': { status: 'connected' }, ...mcpStatus });
   if (req.method === 'POST' && url.pathname === '/session') { const s = newSession(); return json(res, 200, { id: s.id, title: s.title, model: s.model }); }
   if (req.method === 'POST' && p[0] === 'question' && p[2] === 'reply') { waiters[p[1]]?.(body.answers); delete waiters[p[1]]; return json(res, 200, true); }
   if (!ses) return json(res, 404, { error: `no session ${p[1]}` });
