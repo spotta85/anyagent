@@ -279,6 +279,7 @@ pub(crate) fn start(
         deadline: None,
         closing: None,
         permission_mode: options.permission_mode,
+        plan_proposed: false,
         stall: None,
         stall_after: options.stall_after.unwrap_or(STALL_WARNING),
         exit: None,
@@ -454,6 +455,9 @@ struct Engine {
     closing: Option<Vec<Reply<()>>>,
     /// Which permission requests the engine allows once without the caller.
     permission_mode: PermissionMode,
+    /// A `PlanProposed` came and no request followed yet: the next one is
+    /// the plan's approval and always reaches the caller.
+    plan_proposed: bool,
     /// When mid-turn silence becomes a warning; re-armed by every driver
     /// event, off while the agent waits on the caller.
     stall: Option<Instant>,
@@ -862,9 +866,14 @@ impl Engine {
                 .await;
             return;
         }
+        // The request right after a proposed plan approves it: never unasked.
+        let plan_approval =
+            matches!(kind, EventKind::RequestOpened(_)) && std::mem::take(&mut self.plan_proposed);
+        self.plan_proposed |= matches!(kind, EventKind::PlanProposed { .. });
         // Allow once what the mode allows unasked. A request without a one-time
         // allow is forwarded: a persistent rule is never chosen for the caller.
         if let EventKind::RequestOpened(Request::Permission(request)) = &kind
+            && !plan_approval
             && request.options.contains(&PermissionChoice::AllowOnce)
             && allows_unasked(self.permission_mode, &request.tool.kind)
         {
@@ -1130,6 +1139,7 @@ impl Engine {
         }
         self.stall = None;
         self.noise_reported = false;
+        self.plan_proposed = false;
         self.resolve_steer(false).await;
     }
 
