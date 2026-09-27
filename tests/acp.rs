@@ -1037,12 +1037,18 @@ async fn config_home_on_an_agent_without_a_known_var_is_refused() {
 }
 
 /// `instructions` lead a new session's first prompt only, after a blank
-/// line; a resumed session's prompts carry none.
+/// line; a resumed session's prompts carry none; a first slash command goes
+/// untouched and the next prompt carries them.
 #[tokio::test]
 async fn instructions_lead_the_first_prompt_of_a_new_session() {
     let dir = tempfile::tempdir().unwrap();
     let text = |frame: &serde_json::Value| frame["params"]["prompt"][0]["text"].clone();
-    for (i, resume) in [false, true].into_iter().enumerate() {
+    let cases = [
+        (false, ["one", "two"], ["Be brief.\n\none", "two"]),
+        (true, ["one", "two"], ["one", "two"]),
+        (false, ["/help", "one"], ["/help", "Be brief.\n\none"]),
+    ];
+    for (i, (resume, sent, want)) in cases.into_iter().enumerate() {
         let log = dir.path().join(format!("wire-{i}.jsonl"));
         let mut options = SessionOptions::in_dir(dir.path())
             .instructions("Be brief.")
@@ -1051,7 +1057,7 @@ async fn instructions_lead_the_first_prompt_of_a_new_session() {
             options = options.resume(ResumeToken::new("sess-1"));
         }
         let (session, mut events) = Runtime::new().open(&fixture(&[]), options).await.unwrap();
-        for prompt in ["one", "two"] {
+        for prompt in sent {
             session.prompt(prompt).await.unwrap();
             loop {
                 match next(&mut events).await.kind {
@@ -1064,9 +1070,7 @@ async fn instructions_lead_the_first_prompt_of_a_new_session() {
             }
         }
         let prompts = common::sent_frames(&log, 2, |f| f["method"] == "session/prompt").await;
-        let first = if resume { "one" } else { "Be brief.\n\none" };
-        assert_eq!(text(&prompts[0]), first, "resume={resume}");
-        assert_eq!(text(&prompts[1]), "two", "resume={resume}");
+        assert_eq!([text(&prompts[0]), text(&prompts[1])], want, "case {i}");
         session.close().await.unwrap();
     }
 }
