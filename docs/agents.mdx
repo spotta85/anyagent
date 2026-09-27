@@ -78,6 +78,10 @@ pi, which reports no model call for it.
 | kiro | live | live (`low` … `max`), absent on models without it | | | |
 | hermes, qwen | live | none | | | |
 
+On claude, codex, and opencode each `model` choice also carries that model's
+own `effort` and `fast` in `options` (opencode: `effort` only). Other agents
+leave it empty.
+
 ## Per-agent notes
 
 <AccordionGroup>
