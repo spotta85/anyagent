@@ -1275,9 +1275,10 @@ func (v *ConfigKind) UnmarshalJSON(b []byte) error {
 
 // ConfigChoice is a wire type.
 type ConfigChoice struct {
-	Value       string  `json:"value"`
-	Label       string  `json:"label"`
-	Description *string `json:"description,omitempty"`
+	Value       string         `json:"value"`
+	Label       string         `json:"label"`
+	Description *string        `json:"description,omitempty"`
+	Options     []ConfigOption `json:"options,omitempty"`
 }
 
 // SlashCommand is a wire type.

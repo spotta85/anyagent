@@ -1364,11 +1364,13 @@ public struct ConfigChoice: Codable, Sendable, Equatable {
     public var value: String
     public var label: String
     public var description: String?
+    public var options: [ConfigOption]?
 
-    public init(value: String, label: String, description: String? = nil) {
+    public init(value: String, label: String, description: String? = nil, options: [ConfigOption]? = nil) {
         self.value = value
         self.label = label
         self.description = description
+        self.options = options
     }
 }
 

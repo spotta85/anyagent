@@ -2137,6 +2137,13 @@
             "string",
             "null"
           ]
+        },
+        "options": {
+          "description": "For a `model` choice: the options this model offers once selected.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ConfigOption"
+          }
         }
       },
       "required": [
