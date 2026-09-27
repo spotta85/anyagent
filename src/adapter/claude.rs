@@ -257,9 +257,11 @@ async fn handshake(
     Ok((info, init["models"].clone()))
 }
 
-/// MCP declarations, instructions and creation-time config as launch flags.
+/// MCP declarations, instructions, throwaway isolation and creation-time
+/// config as launch flags. Flag settings share one `--settings` value.
 fn option_args(options: &crate::agent::SessionOptions) -> Result<Vec<String>, AgentError> {
     let mut args = Vec::new();
+    let mut settings = serde_json::Map::new();
     if !options.mcp_servers.is_empty() {
         args.push("--mcp-config".into());
         args.push(mcp_config(&options.mcp_servers).to_string());
@@ -267,6 +269,11 @@ fn option_args(options: &crate::agent::SessionOptions) -> Result<Vec<String>, Ag
     if let Some(text) = &options.instructions {
         args.push("--append-system-prompt".into());
         args.push(text.clone());
+    }
+    // A throwaway session (probe, generate) runs no user hooks or MCP servers.
+    if options.throwaway {
+        args.push("--strict-mcp-config".into());
+        settings.insert("disableAllHooks".into(), json!(true));
     }
     for (id, value) in &options.configure {
         match (id.as_str(), value) {
@@ -279,8 +286,7 @@ fn option_args(options: &crate::agent::SessionOptions) -> Result<Vec<String>, Ag
                 args.push(model.clone());
             }
             ("fast", ConfigValue::Bool(fast)) => {
-                args.push("--settings".into());
-                args.push(json!({ "fastMode": fast }).to_string());
+                settings.insert("fastMode".into(), json!(fast));
             }
             ("effort", ConfigValue::Text(effort)) => {
                 args.push("--effort".into());
@@ -292,6 +298,10 @@ fn option_args(options: &crate::agent::SessionOptions) -> Result<Vec<String>, Ag
                 )));
             }
         }
+    }
+    if !settings.is_empty() {
+        args.push("--settings".into());
+        args.push(Value::Object(settings).to_string());
     }
     Ok(args)
 }

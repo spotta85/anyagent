@@ -446,6 +446,44 @@ async fn runtime_plan_usage_probes_without_a_session_and_caches() {
     assert_eq!(again.fetched_at, usage.fetched_at);
 }
 
+/// A throwaway session (`probe_with` here) launches without user hooks or
+/// MCP servers, the hook switch merged into `fast`'s one `--settings`
+/// value; an ordinary open keeps both.
+#[tokio::test]
+async fn throwaway_sessions_skip_user_hooks_and_mcp_servers() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.jsonl");
+    let agent = AgentInstallation::at("claude", wrapper("throwaway", ""));
+    let options = SessionOptions::in_dir(dir.path())
+        .configure("fast", true)
+        .env("FIXTURE_ARGV_LOG", log.to_string_lossy())
+        .arg("--extra-flag");
+    let runtime = Runtime::new();
+    let details = runtime.probe_with(&agent, options.clone()).await.unwrap();
+    assert!(!details.commands.is_empty());
+    let (session, _events) = runtime.open(&agent, options).await.unwrap();
+    session.close().await.unwrap();
+
+    let argv = common::logged_args(&log);
+    let settings = |argv: &[String]| -> Vec<serde_json::Value> {
+        argv.windows(2)
+            .filter(|pair| pair[0] == "--settings")
+            .map(|pair| serde_json::from_str(&pair[1]).unwrap())
+            .collect()
+    };
+    let has = |argv: &[String], flag: &str| argv.iter().any(|a| a == flag);
+    let (probe, open) = (&argv[0], &argv[1]);
+    assert!(has(probe, "--strict-mcp-config"), "{probe:?}");
+    assert!(has(probe, "--no-session-persistence"), "{probe:?}");
+    assert_eq!(
+        settings(probe),
+        [serde_json::json!({ "disableAllHooks": true, "fastMode": true })]
+    );
+    assert_eq!(probe.last().unwrap(), "--extra-flag", "{probe:?}");
+    assert!(!has(open, "--strict-mcp-config"), "{open:?}");
+    assert_eq!(settings(open), [serde_json::json!({ "fastMode": true })]);
+}
+
 /// `plan_usage_with` spawns its short-lived process with the options' env
 /// and args.
 #[tokio::test]
