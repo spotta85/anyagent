@@ -1447,16 +1447,20 @@ impl Drive {
             .unwrap_or_else(|| approval_stub(item_id, kind))
     }
 
-    /// The MCP call an approval elicitation is about: a tracked call on the
-    /// request's server, preferring the tool its message quotes, else a stub.
+    /// The MCP call an approval elicitation is about: a tracked call on the request's
+    /// server, ranked by its tool quoted in the message, then its arguments in `tool_params`.
     fn mcp_tool_for(&self, params: &Value) -> ToolUpdate {
         let server = params["serverName"].as_str().unwrap_or_default();
         let message = params["message"].as_str().unwrap_or_default();
         let on_server =
             |t: &&ToolUpdate| matches!(&t.kind, ToolKind::Mcp { server: s, .. } if s == server);
-        let quoted = |t: &&ToolUpdate| match &t.kind {
-            ToolKind::Mcp { tool, .. } => message.contains(&format!("\"{tool}\"")),
-            _ => false,
+        let rank = |t: &&ToolUpdate| {
+            let quoted = match &t.kind {
+                ToolKind::Mcp { tool, .. } => message.contains(&format!("\"{tool}\"")),
+                _ => false,
+            };
+            let arguments = t.raw.as_ref().map(|raw| &raw.input["arguments"]);
+            (quoted, arguments == Some(&params["_meta"]["tool_params"]))
         };
         let unknown = ToolKind::Mcp {
             server: server.to_owned(),
@@ -1465,7 +1469,7 @@ impl Drive {
         self.tools
             .values()
             .filter(on_server)
-            .max_by_key(quoted)
+            .max_by_key(rank)
             .cloned()
             .unwrap_or_else(|| approval_stub("", unknown))
     }
