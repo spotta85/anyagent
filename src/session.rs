@@ -286,6 +286,7 @@ pub(crate) fn start(
         noise_reported: false,
         awaiting_ack: false,
         turn_usage: None,
+        background: BTreeSet::new(),
         last_status: SessionStatus::Idle,
         done: false,
     };
@@ -469,6 +470,8 @@ struct Engine {
     awaiting_ack: bool,
     /// Latest usage the adapter reported for the running turn.
     turn_usage: Option<TurnUsage>,
+    /// Tools a turn ended with still running; their updates start no turn.
+    background: BTreeSet<ToolId>,
     /// The last status emitted, so `StatusChanged` fires only on change.
     last_status: SessionStatus,
     done: bool,
@@ -883,7 +886,15 @@ impl Engine {
             });
             return;
         }
-        if matches!(self.state, TurnState::Idle) && is_content(&kind) {
+        // A background tool's progress is bookkeeping, not the agent starting work.
+        if let EventKind::ToolUpdated(tool) = &kind
+            && !tool.status.is_active()
+        {
+            self.background.remove(&tool.id);
+        }
+        let background =
+            matches!(&kind, EventKind::ToolUpdated(tool) if self.background.contains(&tool.id));
+        if matches!(self.state, TurnState::Idle) && is_content(&kind) && !background {
             self.enter_running(TurnOrigin::Agent).await;
         }
         let turn = match &mut self.state {
@@ -1121,6 +1132,7 @@ impl Engine {
             )
             .await;
         }
+        self.background.extend(running_tools.iter().cloned());
         let background = running_tools.into_iter().collect();
         let usage = self.turn_usage.take();
         self.push(

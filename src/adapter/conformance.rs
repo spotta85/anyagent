@@ -285,12 +285,14 @@ async fn trailing_content_beats_a_queued_prompt_to_the_next_turn() {
     ));
 }
 
-/// Background bookkeeping after end carries no turn; extra stop becomes Diagnostic.
+/// Background bookkeeping after end (progress, then completion) carries no turn;
+/// extra stop becomes Diagnostic.
 #[tokio::test]
 async fn bookkeeping_after_turn_end_is_not_a_turn_and_late_stops_are_diagnostics() {
     let script = Script::default().turn(vec![
         Step::Emit(tool("bg", ToolStatus::Running)),
         Step::End(completed()),
+        Step::Emit(tool("bg", ToolStatus::Running)),
         Step::Emit(tool("bg", ToolStatus::Completed)),
         Step::End(completed()),
     ]);
@@ -304,9 +306,11 @@ async fn bookkeeping_after_turn_end_is_not_a_turn_and_late_stops_are_diagnostics
         &ended.kind,
         EventKind::TurnEnded { background, .. } if *background == vec![ToolId::new("bg")]
     ));
-    let late_tool = next(&mut events).await;
-    assert!(matches!(late_tool.kind, EventKind::ToolUpdated(_)));
-    assert!(late_tool.turn_info.is_none(), "bookkeeping carries no turn");
+    for status in [ToolStatus::Running, ToolStatus::Completed] {
+        let late_tool = next(&mut events).await;
+        assert!(matches!(&late_tool.kind, EventKind::ToolUpdated(t) if t.status == status));
+        assert!(late_tool.turn_info.is_none(), "bookkeeping carries no turn");
+    }
     let late_stop = next(&mut events).await;
     assert!(matches!(late_stop.kind, EventKind::Diagnostic(_)));
 }
