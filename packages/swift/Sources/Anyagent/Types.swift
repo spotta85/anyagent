@@ -55,6 +55,7 @@ public struct AcpSpec: Codable, Sendable, Equatable {
 /// How anyagent handles tool permission requests.
 public enum PermissionMode: String, Codable, Sendable, Equatable {
     case ask = "Ask"
+    case acceptEdits = "AcceptEdits"
     case autoApprove = "AutoApprove"
     /// A value this package does not know (a newer binary).
     case unrecognized

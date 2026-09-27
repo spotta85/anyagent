@@ -383,11 +383,13 @@ fn with_permission(mut config: Value, ours: Value) -> Value {
     config
 }
 
-/// The permission rules for a mode. `Ask` forces every tool to prompt but
-/// lets the question tool run so it surfaces as a question, not a permission.
+/// The permission rules for a mode. `Ask` and `AcceptEdits` prompt for every
+/// tool; the question tool runs so it surfaces as a question.
 fn permission_config(mode: PermissionMode) -> Value {
     match mode {
-        PermissionMode::Ask => json!({ "*": "ask", "question": "allow" }),
+        PermissionMode::Ask | PermissionMode::AcceptEdits => {
+            json!({ "*": "ask", "question": "allow" })
+        }
         PermissionMode::AutoApprove => json!({ "*": "allow" }),
     }
 }

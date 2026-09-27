@@ -28,7 +28,7 @@ use crate::error::AgentError;
 use crate::event::{
     Answer, ChoiceId, CompletionSource, Delivery, DeliveryKind, Diagnostic, DiagnosticLevel, Event,
     EventKind, Extensions, MessageId, PermissionChoice, PromptId, QuestionAnswer, Request,
-    RequestId, SessionId, StopReason, ToolId, TurnContext, TurnId, TurnOrigin, TurnUsage,
+    RequestId, SessionId, StopReason, ToolId, ToolKind, TurnContext, TurnId, TurnOrigin, TurnUsage,
 };
 
 /// Consumer event buffer. Generous because the engine never waits on it: a
@@ -260,7 +260,7 @@ pub(crate) fn start(
         ),
         deadline: None,
         closing: None,
-        auto_approve: matches!(options.permission_mode, PermissionMode::AutoApprove),
+        permission_mode: options.permission_mode,
         stall: None,
         stall_after: options.stall_after.unwrap_or(STALL_WARNING),
         exit: None,
@@ -432,8 +432,8 @@ struct Engine {
     deadline: Option<Instant>,
     /// `close` callers waiting for the driver to finish.
     closing: Option<Vec<Reply<()>>>,
-    /// `PermissionMode::AutoApprove`: allow each permission request once.
-    auto_approve: bool,
+    /// Which permission requests the engine allows once without the caller.
+    permission_mode: PermissionMode,
     /// When mid-turn silence becomes a warning; re-armed by every driver
     /// event, off while the agent waits on the caller.
     stall: Option<Instant>,
@@ -816,12 +816,11 @@ impl Engine {
                 .await;
             return;
         }
-        // AutoApprove answers permissions itself; the caller never sees them.
-        // A request that does not offer a one-time allow is forwarded
-        // instead: a persistent rule is never chosen on the caller's behalf.
-        if self.auto_approve
-            && let EventKind::RequestOpened(Request::Permission(request)) = &kind
+        // Allow once what the mode allows unasked. A request without a one-time
+        // allow is forwarded: a persistent rule is never chosen for the caller.
+        if let EventKind::RequestOpened(Request::Permission(request)) = &kind
             && request.options.contains(&PermissionChoice::AllowOnce)
+            && allows_unasked(self.permission_mode, &request.tool.kind)
         {
             let _ = self.forward(DriverCommand::Answer {
                 request: request.id.clone(),
@@ -1209,6 +1208,17 @@ fn is_engine_owned(kind: &EventKind) -> bool {
             | EventKind::SessionUpdated(_)
             | EventKind::StatusChanged(_)
     )
+}
+
+/// Whether the mode allows a permission for this tool kind without asking.
+fn allows_unasked(mode: PermissionMode, kind: &ToolKind) -> bool {
+    match mode {
+        PermissionMode::Ask => false,
+        PermissionMode::AcceptEdits => {
+            matches!(kind, ToolKind::Edit | ToolKind::Delete | ToolKind::Move)
+        }
+        PermissionMode::AutoApprove => true,
+    }
 }
 
 /// Keeps the open-request and running-tool sets current for one event.

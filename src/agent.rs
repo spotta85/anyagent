@@ -399,6 +399,8 @@ pub struct SessionConfiguration {
 pub enum PermissionMode {
     /// Forward each request to the application.
     Ask,
+    /// Allow file edits once without asking; forward every other request.
+    AcceptEdits,
     /// Allow each permission request once without forwarding it.
     AutoApprove,
 }

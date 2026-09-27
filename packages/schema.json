@@ -473,6 +473,11 @@
           "const": "Ask"
         },
         {
+          "description": "Allow file edits once without asking; forward every other request.",
+          "type": "string",
+          "const": "AcceptEdits"
+        },
+        {
           "description": "Allow each permission request once without forwarding it.",
           "type": "string",
           "const": "AutoApprove"

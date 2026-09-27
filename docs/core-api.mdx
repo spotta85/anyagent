@@ -65,7 +65,7 @@ can change later goes through `Session::configure` instead.
 | `resume(token)` | Reopen an earlier session |
 | `fork_from(token, at)` | Branch a new session off an old one, at a message or at the end |
 | `mcp_server(server)` | Hand the agent one of your MCP servers (stdio, HTTP, SSE) |
-| `permission_mode(mode)` | `Ask` (forward requests) or `AutoApprove` |
+| `permission_mode(mode)` | `Ask` (forward requests), `AcceptEdits` (allow file edits, forward the rest) or `AutoApprove` |
 | `config_home(dir)` | Separate config directory, for several logins of one agent |
 | `quiet_window(dur)` | How long silence may run before completion is inferred |
 | `stall_after(dur)` | Silence before a stall `Diagnostic` (default 120 s). Never ends the turn |
