@@ -109,7 +109,9 @@ Client MCP servers ride the `mcp_set_servers` control request after
 that fails to connect, or a CLI that refuses the request, is a Warning
 diagnostic. While a declared server is still connecting (up to 30 s for an
 unreachable one) the CLI holds later input, so the first turn and the answers
-to cancel, configure and usage requests wait for it.
+to cancel, configure and usage requests wait for it. A running Bash reports
+`ToolProgress` only when the CLI runs with `CLAUDE_CODE_CONTAINER_ID` or
+`CLAUDE_CODE_REMOTE` set (2.1.283); a subagent's Bash sent none when probed.
 </Accordion>
 
 <Accordion title="Codex">
@@ -122,7 +124,9 @@ vars the overrides name, never argv. codex forwards stdio MCP env by name, so
 a declared name is also set on codex itself; `PATH`, or a name codex's
 environment already has with another value, is refused. `rollback` maps to
 `thread/revert`; files are never restored. Questions are translated
-defensively but the capability stays off until observed live.
+defensively but the capability stays off until observed live. MCP progress
+maps to `ToolProgress`, but 0.154.0 did not forward a stdio server's progress
+when probed.
 </Accordion>
 
 <Accordion title="opencode">
