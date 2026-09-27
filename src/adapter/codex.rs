@@ -42,6 +42,9 @@ const CLIENT_MSG_PREFIX: &str = "anyagent-m";
 const MODES: [&str; 3] = ["untrusted", "on-request", "never"];
 /// `sandbox` values, matching the `permissionProfile/list` ids.
 const SANDBOXES: [&str; 3] = ["read-only", "workspace-write", "danger-full-access"];
+/// The under-development feature anyagent turns on at launch: it lets
+/// `request_user_input` fire outside plan mode (live-verified 0.152.0).
+const USER_INPUT_FEATURE: &str = "default_mode_request_user_input";
 
 /// Launches `codex app-server`; one instance serves every session.
 pub(crate) struct CodexAdapter;
@@ -245,10 +248,9 @@ async fn launch(
     let mut args = vec!["app-server".to_owned()];
     args.extend(overrides);
     env.extend(mcp_env);
-    // Lets `request_user_input` fire outside plan mode (live-verified 0.152.0).
     args.extend([
         "-c".to_owned(),
-        "features.default_mode_request_user_input=true".to_owned(),
+        format!("features.{USER_INPUT_FEATURE}=true"),
     ]);
     let mut child = process::spawn(Spawn {
         exec_path: request.installation.executable_path.clone(),
@@ -1094,9 +1096,11 @@ impl Drive {
             },
             "error" => self.on_error(params).await,
             "warning" | "guardianWarning" | "configWarning" | "model/rerouted" => {
-                self.events
-                    .diagnostic(DiagnosticLevel::Warning, notice_text(params))
-                    .await
+                let text = notice_text(params);
+                if self.is_own_noise(&text) {
+                    return Ok(());
+                }
+                self.events.diagnostic(DiagnosticLevel::Warning, text).await
             }
             "deprecationNotice" => {
                 self.events
@@ -1502,6 +1506,24 @@ impl Drive {
         self.events
             .content(kind, self.child_tool.clone(), Extensions::new())
             .await
+    }
+
+    /// A warning about our own doing: the launch flag alone, or a revert's
+    /// model mismatch while the session runs the recorded model (0.154.0).
+    fn is_own_noise(&self, text: &str) -> bool {
+        if text.starts_with(&format!(
+            "Under-development features enabled: {USER_INPUT_FEATURE}. "
+        )) {
+            return true;
+        }
+        let reverting = self
+            .pending
+            .values()
+            .any(|p| matches!(p, Pending::Rollback(_)));
+        reverting
+            && selected(&self.info, "model").is_some_and(|model| {
+                text.starts_with(&format!("This session was recorded with model `{model}` "))
+            })
     }
 }
 
