@@ -417,6 +417,22 @@ async fn an_api_key_in_the_env_is_reported_as_one() {
     );
 }
 
+/// A documented API key given through the session's `env` counts like one
+/// in the process env.
+#[tokio::test]
+async fn an_api_key_in_the_session_env_is_reported_as_one() {
+    let agent = catalog_wrapper("qwen", "session-key", "");
+    let options = SessionOptions::in_dir(std::env::temp_dir()).env("OPENAI_API_KEY", "sk-test");
+    let details = Runtime::new().probe_with(&agent, options).await.unwrap();
+    assert_eq!(
+        details.auth,
+        AuthStatus::Authenticated {
+            kind: AuthKind::ApiKey,
+            account: None
+        }
+    );
+}
+
 /// Pre-protocol exit (kiro not logged in) mapped to Unauthenticated with terminal login method.
 #[tokio::test]
 async fn probe_maps_a_pre_protocol_exit_to_logged_out() {
@@ -1456,6 +1472,25 @@ async fn cursor_logged_out_is_reported_before_the_browser_login() {
             .iter()
             .any(|m| matches!(m, LoginMethod::EnvVar { name } if name == "CURSOR_API_KEY"))
     );
+}
+
+/// Cursor's `about` side process runs with the session's `env`, like the agent.
+#[tokio::test]
+async fn cursor_about_gets_the_session_env() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.jsonl");
+    let options = SessionOptions::in_dir(dir.path()).env("FIXTURE_ARGV_LOG", log.to_string_lossy());
+    let (session, _events) = Runtime::new()
+        .open(&cursor("about-env", ""), options)
+        .await
+        .unwrap();
+    let argv = common::logged_args(&log);
+    assert!(
+        argv.iter()
+            .any(|a| a.ends_with(&["about", "--format", "json"].map(String::from))),
+        "{argv:?}"
+    );
+    session.close().await.unwrap();
 }
 
 /// A model switch adopts the model's own options from the config response (fast for composer, thinking/context/effort for opus), and they leave with the model; creation-time config does the same.
