@@ -286,6 +286,27 @@ async fn a_probe_opens_no_thread() {
     assert_eq!(current("sandbox"), "workspace-write");
 }
 
+/// A probe reports the caller's `configure` choices over the config file's, as
+/// `thread/start` would echo them.
+#[tokio::test]
+async fn a_probe_reports_the_configured_choices() {
+    let agent = AgentInstallation::at("codex", wrapper("probe-configured", ""));
+    let options = SessionOptions::in_dir(std::env::temp_dir())
+        .configure("model", "gpt-6")
+        .configure("effort", "high")
+        .configure("sandbox", "danger-full-access")
+        .configure("mode", "never");
+    let details = Runtime::new().probe_with(&agent, options).await.unwrap();
+    let current = |id: &str| {
+        let option = details.config_options.iter().find(|o| o.id.as_str() == id);
+        option.and_then(|o| o.current.clone())
+    };
+    assert_eq!(current("model"), Some("gpt-6".into()));
+    assert_eq!(current("effort"), Some("high".into()));
+    assert_eq!(current("sandbox"), Some("danger-full-access".into()));
+    assert_eq!(current("mode"), Some("never".into()));
+}
+
 /// A codex that dies while the probe reads its config fails the probe; it never reports defaults.
 #[tokio::test]
 async fn a_probe_fails_when_codex_dies_at_the_config_read() {
