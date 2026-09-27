@@ -793,6 +793,12 @@ async fn a_question_is_typed_and_the_answer_reaches_the_agent() {
 #[tokio::test]
 async fn exit_plan_mode_proposes_the_plan_before_its_request() {
     let (session, mut events) = open("plan", "--plan").await;
+    let mode =
+        |session: &Session| session.info().configuration.options[&ConfigId::new("mode")].clone();
+    session.configure("mode", "plan").await.unwrap();
+    while mode(&session) != "plan".into() {
+        next(&mut events).await;
+    }
     for (prompt, plan) in [
         ("plan it", Some("# Plan\n\n1. Add README.md")),
         ("no-plan", None),
@@ -832,6 +838,8 @@ async fn exit_plan_mode_proposes_the_plan_before_its_request() {
             message_id: MessageId::new("msg_1"),
             text: "plan=allow".into(),
         }));
+        // The allow ended plan mode in the CLI; `mode` follows it.
+        assert_eq!(mode(&session), "default".into());
     }
     session.close().await.unwrap();
 }

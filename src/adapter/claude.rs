@@ -1250,6 +1250,18 @@ impl Drive {
                     )
                     .await
             }
+            // The CLI changed its own mode (an allowed `ExitPlanMode`, probed 2.1.283).
+            "status" if frame["permissionMode"].is_string() => {
+                let id = ConfigId::new("mode");
+                let mode = ConfigValue::from(frame["permissionMode"].as_str().unwrap_or_default());
+                if !crate::adapter::apply_selection(&mut self.info, &id, &mode) {
+                    return Ok(());
+                }
+                self.remember_option(id, mode);
+                self.events
+                    .send(DriverEvent::InfoChanged(self.info.clone()))
+                    .await
+            }
             // A background task finished: complete the tool it ran under.
             "task_notification" => {
                 let Some(id) = frame["tool_use_id"].as_str() else {
