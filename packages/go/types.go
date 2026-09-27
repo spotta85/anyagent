@@ -48,8 +48,10 @@ func (v *AgentRef) UnmarshalJSON(b []byte) error {
 		v.String = &s
 		return nil
 	}
+	var keys map[string]json.RawMessage
+	json.Unmarshal(b, &keys)
 	var raw AgentAt
-	if json.Unmarshal(b, &raw) == nil {
+	if json.Unmarshal(b, &raw) == nil && keys["id"] != nil && keys["path"] != nil {
 		v.AgentAt = &raw
 		return nil
 	}

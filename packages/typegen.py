@@ -284,13 +284,14 @@ GO_ACRONYMS = {"id": "ID", "url": "URL", "usd": "USD"}
 def go(types: list) -> str:
     """The Go file: structs, string types with consts, and one-field-set structs for enums with payloads."""
     parts = [f"// Code generated from packages/schema.json by `just types`. DO NOT EDIT.\n\npackage anyagent\n\nimport (\n\t\"encoding/json\"\n\t\"fmt\"\n)"]
+    required = {t.name: [j for j, _, req in t.fields if req] for t in types if isinstance(t, Struct)}
     for t in types:
         if isinstance(t, Struct):
             parts.append(go_struct(t))
         elif isinstance(t, StringEnum):
             parts.append(go_string_enum(t))
         else:
-            parts.append(go_enum(t))
+            parts.append(go_enum(t, required))
     return "\n\n".join(parts) + "\n"
 
 
@@ -307,7 +308,8 @@ def go_string_enum(e: StringEnum) -> str:
     return "\n".join(lines + [")"])
 
 
-def go_enum(e: Enum) -> str:
+def go_enum(e: Enum, required: dict[str, list[str]]) -> str:
+    """One-field-set struct; an untagged struct member decodes only when its `required` keys are all there."""
     fields = [(kind, pascal(n) if n else raw_name(t, pascal), n or raw_name(t, str), t) for kind, n, t in e.variants]
     units = [(f, n) for kind, f, n, _ in fields if kind == "unit"]
     raws = [(f, t) for kind, f, _, t in fields if kind == "raw"]
@@ -341,7 +343,9 @@ def go_enum(e: Enum) -> str:
     lines += [f"\t\tv.{raw_string} = &s" if raw_string else "\t\tv.Unrecognized = s", "\t\treturn nil", "\t}"]
     for f, t in raws:
         if t != ("str",):
-            lines += [f"\tvar raw {go_type(t)}", "\tif json.Unmarshal(b, &raw) == nil {", f"\t\tv.{f} = &raw", "\t\treturn nil", "\t}"]
+            keys = "".join(f' && keys["{k}"] != nil' for k in required.get(go_type(t), []))
+            lines += ["\tvar keys map[string]json.RawMessage", "\tjson.Unmarshal(b, &keys)"] if keys else []
+            lines += [f"\tvar raw {go_type(t)}", f"\tif json.Unmarshal(b, &raw) == nil{keys} {{", f"\t\tv.{f} = &raw", "\t\treturn nil", "\t}"]
     if tagged:  # a tag nobody matched: the object's one key
         lines += [f"\ttype plain {e.name}", '\tif err := json.Unmarshal(b, (*plain)(v)); err != nil || v.Name() != "" {', "\t\treturn err", "\t}"]
         lines += ["\tvar m map[string]json.RawMessage", "\tjson.Unmarshal(b, &m)", "\tfor tag := range m {", "\t\tv.Unrecognized = tag", "\t}"]

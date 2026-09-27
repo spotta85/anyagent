@@ -181,6 +181,17 @@ fn mcp_overrides(servers: &[McpServer], base: &Env) -> Result<(Vec<String>, Env)
                 server.name
             )));
         }
+        // Two names that differ only by case or `-`/`_` would share their env vars.
+        let upper = |name: &str| name.to_uppercase().replace('-', "_");
+        let twins = servers
+            .iter()
+            .filter(|s| upper(&s.name) == upper(&server.name));
+        if twins.count() > 1 {
+            return Err(AgentError::InvalidConfiguration(format!(
+                "codex MCP server name `{}` collides with another declared server",
+                server.name
+            )));
+        }
         let key = |field: &str| format!("mcp_servers.{}.{field}", server.name);
         let mut push = |field: &str, value: String| {
             args.push("-c".to_owned());
@@ -217,10 +228,7 @@ fn mcp_overrides(servers: &[McpServer], base: &Env) -> Result<(Vec<String>, Env)
             }
             McpConnection::Http { url, headers } => {
                 push("url", quote(url));
-                let var = |suffix: &str| {
-                    let name = server.name.to_uppercase().replace('-', "_");
-                    format!("ANYAGENT_MCP_{name}_{suffix}")
-                };
+                let var = |suffix: &str| format!("ANYAGENT_MCP_{}_{suffix}", upper(&server.name));
                 let (bearer, rest) = split_bearer(headers);
                 if let Some(token) = bearer {
                     push("bearer_token_env_var", quote(&var("TOKEN")));

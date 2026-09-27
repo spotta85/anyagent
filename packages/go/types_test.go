@@ -19,3 +19,18 @@ func TestUnrecognizedVariantsDecode(t *testing.T) {
 		t.Fatal(tool.Kind, tool.Status, tool.Input)
 	}
 }
+
+// An agent reference round-trips as the variant its keys name, never as a zero AgentAt.
+func TestAgentRefVariantsRoundTrip(t *testing.T) {
+	for raw, name := range map[string]string{
+		`"claude"`:                             "string",
+		`{"id":"claude","path":"/opt/claude"}`: "AgentAt",
+		`{"acp":{"name":"x","path":"/p"}}`:     "acp",
+		`{"NewThing":{}}`:                      "NewThing",
+	} {
+		var ref AgentRef
+		if err := json.Unmarshal([]byte(raw), &ref); err != nil || ref.Name() != name {
+			t.Fatal(raw, err, ref.Name())
+		}
+	}
+}

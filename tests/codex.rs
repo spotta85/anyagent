@@ -1579,6 +1579,19 @@ async fn mcp_values_ride_the_env_not_argv() {
     session.close().await.unwrap();
 }
 
+/// Two servers whose names map to the same env var prefix fail the open.
+#[tokio::test]
+async fn colliding_mcp_server_names_are_refused() {
+    let options = SessionOptions::in_dir(std::env::temp_dir())
+        .mcp_server(McpServer::stdio("my-srv", "/bin/tool", ["--serve"]))
+        .mcp_server(McpServer::stdio("My_Srv", "/bin/tool", ["--serve"]));
+    let err = open_with("mcp-twins", "", options).await.err().unwrap();
+    assert!(
+        matches!(&err, AgentError::InvalidConfiguration(m) if m.contains("collides")),
+        "{err}"
+    );
+}
+
 /// A stdio env name the launch env holds with another value, or one spawn sets
 /// itself (`PATH`), fails the open, naming it but not the value.
 #[tokio::test]

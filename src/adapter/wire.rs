@@ -77,7 +77,7 @@ impl LineWire {
 /// Tees raw protocol frames to a JSONL file when `record_wire` is set: one
 /// `{"dir":"in"|"out","frame":<frame>}` per line, append-only and flushed
 /// per line. Unredacted except declared MCP servers' header and env values and
-/// codex's config; unbounded: a local debug artifact. A write failure is reported once as a
+/// any reply's `/result/config` (codex's config file); unbounded: a local debug artifact. A write failure is reported once as a
 /// `Diagnostic`; recording never fails a turn.
 #[derive(Clone)]
 pub(crate) struct WireRecorder {

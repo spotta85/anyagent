@@ -6,7 +6,8 @@
 #   docs      *.md
 #   check     scripts/anyagent-port-check.ts
 #   product   everything else (hand-written code and config)
-cd /Users/spotta/Desktop/Projects/t3code
+: "${T3CODE_DIR:?Set T3CODE_DIR to the T3 Code fork}"
+cd "$T3CODE_DIR" || exit 1
 git diff --shortstat main..HEAD
 git diff --numstat main..HEAD | awk -F'\t' '
 $1 == "-" { next }
