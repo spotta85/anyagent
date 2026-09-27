@@ -1550,7 +1550,8 @@ fn fresh_tool(block: &Value) -> ToolUpdate {
     let name = block["name"].as_str().unwrap_or_default();
     let input = &block["input"];
     let (kind, tool_input) = decode_tool(name, input);
-    // The Agent/Task input names the subagent; `model` only when the parent picks one.
+    // The Agent/Task input names the subagent; `model` only when the parent picks one
+    // (recording 05 line 36 has none; probed 2026-09-27, 2.1.283, it had "haiku").
     let subagent = (kind == ToolKind::Subagent).then(|| SubagentInfo {
         role: text(&input["subagent_type"]),
         model: text(&input["model"]),
