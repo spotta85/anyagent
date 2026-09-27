@@ -1901,8 +1901,11 @@ impl Drive {
             .tools
             .entry(update.tool_call_id.0.to_string())
             .or_insert_with(|| blank_tool(update.tool_call_id.0.as_ref()));
+        // A known MCP kind outlives a later bare `kind: other` (kiro, qwen).
+        let mcp = mcp_kind(update.meta.as_ref())
+            .or_else(|| matches!(tool.kind, ToolKind::Mcp { .. }).then(|| tool.kind.clone()));
         let appended = apply_fields(tool, update.fields);
-        if let Some(kind) = mcp_kind(update.meta.as_ref()) {
+        if let Some(kind) = mcp {
             tool.kind = kind;
         }
         (tool.clone(), appended)
@@ -2069,13 +2072,26 @@ fn tool_kind(kind: acp::ToolKind) -> ToolKind {
     }
 }
 
-/// An MCP call named in `_meta.mcp` (`{server, tool}`; antigravity's ACP
-/// server agy_acp_server_20260818_01_RC01, probed 2026-09-27).
+/// An MCP call named in `_meta` (probed 2026-09-27): antigravity ACP server
+/// RC01 `mcp`, kiro 2.23.0 `kiro`, qwen 0.23.2 `provenance: "mcp"`.
 fn mcp_kind(meta: Option<&acp::Meta>) -> Option<ToolKind> {
-    let mcp = meta?.get("mcp")?;
+    let meta = meta?;
+    let (server, tool) = if let Some(mcp) = meta.get("mcp") {
+        (mcp["server"].as_str()?, mcp["tool"].as_str()?)
+    } else if let Some(kiro) = meta.get("kiro") {
+        (kiro["mcpServerName"].as_str()?, kiro["toolName"].as_str()?)
+    } else if meta.get("provenance")?.as_str()? == "mcp" {
+        // qwen's `toolName` is `mcp__<server>__<tool>`.
+        let server = meta.get("serverId")?.as_str()?;
+        let name = meta.get("toolName")?.as_str()?;
+        let tool = name.strip_prefix(&format!("mcp__{server}__"));
+        (server, tool.unwrap_or(name))
+    } else {
+        return None;
+    };
     Some(ToolKind::Mcp {
-        server: mcp["server"].as_str()?.to_owned(),
-        tool: mcp["tool"].as_str()?.to_owned(),
+        server: server.to_owned(),
+        tool: tool.to_owned(),
     })
 }
 
