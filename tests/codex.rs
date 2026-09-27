@@ -128,15 +128,6 @@ async fn mcp_turn(
     }
 }
 
-/// Each request the fixture logged to its `FIXTURE_REQUEST_LOG`, as `{method, params}`.
-fn logged_requests(log: &std::path::Path) -> Vec<serde_json::Value> {
-    std::fs::read_to_string(log)
-        .unwrap_or_default()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect()
-}
-
 fn text_option(session: &anyagent::SessionInfo, id: &str) -> Option<String> {
     session.configuration.options.iter().find_map(|(k, v)| {
         (k.as_str() == id).then(|| match v {
@@ -257,18 +248,16 @@ async fn probe_reads_commands_without_waiting_them_out() {
 #[tokio::test]
 async fn a_probe_opens_no_thread() {
     let dir = tempfile::tempdir().unwrap();
-    let log = dir.path().join("requests.jsonl");
+    let wire = dir.path().join("wire.jsonl");
     let agent = AgentInstallation::at("codex", wrapper("probe-no-thread", ""));
-    let options =
-        SessionOptions::in_dir(dir.path()).env("FIXTURE_REQUEST_LOG", log.to_string_lossy());
+    let options = SessionOptions::in_dir(dir.path()).record_wire(&wire);
     let details = Runtime::new().probe_with(&agent, options).await.unwrap();
 
-    let methods: Vec<_> = logged_requests(&log)
-        .iter()
-        .filter_map(|r| r["method"].as_str().map(str::to_owned))
-        .collect();
-    assert!(!methods.iter().any(|m| m == "thread/start"), "{methods:?}");
-    assert!(methods.iter().any(|m| m == "config/read"), "{methods:?}");
+    // Frames are written in order: once `skills/list` is there, so is any `thread/start`.
+    common::sent_frames(&wire, 1, |f| f["method"] == "skills/list").await;
+    let thread = common::sent_frames(&wire, 0, |f| f["method"] == "thread/start").await;
+    assert!(thread.is_empty(), "{thread:?}");
+    common::sent_frames(&wire, 1, |f| f["method"] == "config/read").await;
     assert_eq!(details.commands.len(), 2);
     let current = |id: &str| {
         let option = details.config_options.iter().find(|o| o.id.as_str() == id);
@@ -338,11 +327,11 @@ async fn a_probe_fails_when_codex_dies_at_the_config_read() {
 #[tokio::test]
 async fn an_output_schema_rides_every_turn() {
     let dir = tempfile::tempdir().unwrap();
-    let log = dir.path().join("requests.jsonl");
+    let wire = dir.path().join("wire.jsonl");
     let schema = serde_json::json!({ "type": "object", "properties": { "title": { "type": "string" } }, "required": ["title"] });
     let options = SessionOptions::in_dir(dir.path())
         .output_schema(schema.clone())
-        .env("FIXTURE_REQUEST_LOG", log.to_string_lossy());
+        .record_wire(&wire);
     let (session, mut events) = open_with("schema", "", options).await.unwrap();
     let capabilities = session.info().details.capabilities;
     assert!(capabilities.supports(Capability::OutputSchema));
@@ -350,10 +339,10 @@ async fn an_output_schema_rides_every_turn() {
         session.prompt("hi").await.unwrap();
         complete_turn(&session, &mut events, PermissionChoice::AllowOnce).await;
     }
-    let sent: Vec<_> = logged_requests(&log)
+    let sent: Vec<_> = common::sent_frames(&wire, 2, |f| f["method"] == "turn/start")
+        .await
         .into_iter()
-        .filter(|r| r["method"] == "turn/start")
-        .map(|r| r["params"]["outputSchema"].clone())
+        .map(|f| f["params"]["outputSchema"].clone())
         .collect();
     assert_eq!(sent, [schema.clone(), schema]);
     session.close().await.unwrap();
