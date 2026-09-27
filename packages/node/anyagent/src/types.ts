@@ -441,6 +441,17 @@ export type ConfigKind =
       };
     };
 /**
+ * Where a slash command comes from.
+ */
+export type CommandSource =
+  | "Builtin"
+  | {
+      Skill: {
+        path?: string | null;
+        scope?: string | null;
+      };
+    };
+/**
  * What a UI should show for the session right now. Changes arrive as
  * `EventKind::StatusChanged`; `Session::status` reads it without the stream.
  */
@@ -713,6 +724,10 @@ export interface SlashCommand {
   name: string;
   description: string;
   input_hint?: string | null;
+  /**
+   * Where the command comes from.
+   */
+  source?: CommandSource;
 }
 export interface SessionConfiguration {
   options: {

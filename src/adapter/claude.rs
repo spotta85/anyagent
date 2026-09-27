@@ -1732,6 +1732,7 @@ fn slash_commands(commands: &Value) -> Vec<SlashCommand> {
                 .as_str()
                 .filter(|h| !h.is_empty())
                 .map(str::to_owned),
+            source: crate::agent::CommandSource::Builtin,
         })
         .collect()
 }

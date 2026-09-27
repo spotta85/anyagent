@@ -417,6 +417,31 @@ pub struct SlashCommand {
     pub name: String,
     pub description: String,
     pub input_hint: Option<String>,
+    /// Where the command comes from.
+    #[serde(default, skip_serializing_if = "CommandSource::is_builtin")]
+    pub source: CommandSource,
+}
+
+/// Where a slash command comes from.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum CommandSource {
+    /// Part of the agent.
+    #[default]
+    Builtin,
+    /// A skill on disk. `scope` is the agent's own word for where it lives ("user", "repo").
+    Skill {
+        path: Option<PathBuf>,
+        scope: Option<String>,
+    },
+}
+
+impl CommandSource {
+    /// `Builtin`, the default the wire leaves out.
+    fn is_builtin(&self) -> bool {
+        *self == Self::Builtin
+    }
 }
 
 /// What `probe` and `open` learn about an agent.
@@ -695,5 +720,14 @@ mod tests {
             assert!(text.contains(name), "{text}");
         }
         assert!(!text.contains("sk-"), "{text}");
+    }
+
+    /// A command stored before `source` existed loads as `Builtin`.
+    #[test]
+    fn a_command_stored_without_source_loads_as_builtin() {
+        let stored =
+            serde_json::json!({ "name": "compact", "description": "", "input_hint": null });
+        let command: SlashCommand = serde_json::from_value(stored).unwrap();
+        assert_eq!(command.source, CommandSource::Builtin);
     }
 }

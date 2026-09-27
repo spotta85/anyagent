@@ -357,6 +357,7 @@ fn parse_skill_commands(response: &Value) -> Vec<SlashCommand> {
                     .unwrap_or_default()
                     .to_owned(),
                 input_hint: None,
+                source: crate::agent::CommandSource::Builtin,
             })
         })
         .collect()
