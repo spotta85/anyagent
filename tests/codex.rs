@@ -462,6 +462,50 @@ async fn a_live_shaped_subagent_ends_completed_once() {
     session.close().await.unwrap();
 }
 
+/// Recording 14 (0.154.0): a `spawnAgent` collab call names the child. Its text rides
+/// the spawn tool, never the parent's; its tokens and model land on it; it ends Completed once.
+#[tokio::test]
+async fn a_spawn_call_owns_its_child_thread() {
+    let (session, mut events) = open("spawn-collab", "").await;
+    session.prompt("spawn-collab please").await.unwrap();
+    let spawn = "exec-40251fe2-a2c0-4302-9e2c-09481e5b900c";
+    let (mut parent_text, mut child_text, mut states, mut diagnostics) =
+        (String::new(), String::new(), Vec::new(), Vec::new());
+    loop {
+        let event = next(&mut events).await;
+        let parent = event.turn_info.and_then(|t| t.parent_tool_id);
+        match event.kind {
+            EventKind::TextDelta { text, .. } => match parent {
+                Some(tool) if tool.as_str() == spawn => child_text.push_str(&text),
+                Some(tool) => panic!("text under {tool:?}"),
+                None => parent_text.push_str(&text),
+            },
+            EventKind::ToolUpdated(tool) if tool.id.as_str() == spawn => {
+                let info = tool.subagent.unwrap_or_default();
+                states.push((tool.status, info.model, info.tokens));
+            }
+            EventKind::Diagnostic(d) => diagnostics.push(d.message),
+            EventKind::TurnEnded { .. } => break,
+            _ => {}
+        }
+    }
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    assert!(child_text.contains("`subagent-marker.txt`"), "{child_text}");
+    assert!(!parent_text.contains("subagent-marker"), "{parent_text}");
+    let luna = || Some("gpt-5.6-luna".to_owned());
+    assert_eq!(
+        states,
+        vec![
+            (ToolStatus::Running, None, None),
+            (ToolStatus::Running, luna(), None),
+            (ToolStatus::Running, luna(), Some(18549)),
+            (ToolStatus::Running, luna(), Some(37136)),
+            (ToolStatus::Completed, luna(), Some(37136)),
+        ]
+    );
+    session.close().await.unwrap();
+}
+
 /// Failed child turn marks its subagent tool as Failed but parent still completes.
 #[tokio::test]
 async fn a_failed_child_turn_fails_its_subagent_tool() {

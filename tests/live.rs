@@ -1266,6 +1266,55 @@ async fn codex_turn_diff_names_the_edited_file() {
     );
 }
 
+/// A codex subagent's child thread rides its subagent tool: the child's content carries
+/// the tool as parent, and its token total lands on the tool.
+#[tokio::test]
+#[ignore = "live: talks to real agents"]
+async fn codex_subagent_links_its_child() {
+    if !enabled().await.contains(&"codex") {
+        println!("SKIP: codex not enabled");
+        return;
+    }
+    let (session, mut events, _dir) = open("codex").await;
+    session
+        .prompt(
+            "Spawn exactly one subagent to reply with the single word PONG, wait for it, \
+             then reply with just the word done.",
+        )
+        .await
+        .unwrap();
+    let (mut nested, mut tools) = (0, std::collections::HashMap::new());
+    loop {
+        let event = next(&mut events, "codex: subagent").await;
+        nested += usize::from(event.turn_info.and_then(|t| t.parent_tool_id).is_some());
+        match event.kind {
+            EventKind::RequestOpened(request) => {
+                session.answer(request.id(), allow()).await.unwrap();
+            }
+            EventKind::ToolUpdated(tool) if tool.kind == ToolKind::Subagent => {
+                println!(
+                    "codex: subagent {} {:?} {:?}",
+                    tool.title, tool.status, tool.subagent
+                );
+                tools.insert(tool.id.clone(), tool);
+            }
+            EventKind::TurnEnded { .. } => break,
+            _ => {}
+        }
+    }
+    let owner = tools
+        .values()
+        .find(|t| t.subagent.as_ref().is_some_and(|s| s.tokens.is_some()))
+        .expect("codex: no subagent tool with the child's tokens");
+    assert!(nested > 0, "codex: no child event carried a parent tool");
+    assert_eq!(owner.status, ToolStatus::Completed);
+    session.close().await.unwrap();
+    pass(
+        "codex",
+        &format!("subagent {} {:?}", owner.title, owner.subagent),
+    );
+}
+
 /// claude's subagent tool names the role the parent gave it in the Agent input.
 #[tokio::test]
 #[ignore = "live: talks to real agents"]
