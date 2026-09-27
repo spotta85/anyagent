@@ -1855,8 +1855,8 @@ fn question_response(questions: &[Question], answers: &[QuestionAnswer]) -> Valu
     json!({ "answers": map })
 }
 
-/// The reply that withdraws a request: `cancel` also interrupts the turn
-/// (generated schema, 0.154.0); a question has no cancel, so no answers.
+/// The reply that withdraws a request; `cancel` also interrupts the turn only for command
+/// and file approvals (generated schema, 0.154.0). A question has no cancel: no answers.
 fn cancel_reply(reply: &Reply) -> Value {
     match reply {
         Reply::Decision => json!({ "decision": "cancel" }),

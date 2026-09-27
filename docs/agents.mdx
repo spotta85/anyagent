@@ -90,7 +90,7 @@ takes no message, the message is dropped.
 | Agent | `Deny { message }` | `Cancel` |
 |---|---|---|
 | claude | deny; the model reads the message as the tool's result | deny with `interrupt`: the turn ends `Cancelled` (a question too) |
-| codex | `decline`, no message | approvals: `cancel`, which also ends the turn `Cancelled`; a question gets no answers |
+| codex | `decline`, no message | command and file approvals: `cancel`, which also ends the turn `Cancelled`; an MCP approval: action `cancel`, which withdraws it (codex's schema does not say it ends the turn); a question gets no answers |
 | opencode | `reject` with the message | a permission gets `reject`; a question takes the reject route |
 | ACP agents | the reject option, no message | outcome `cancelled` |
 | pi | not offered (pi asks only questions) | the dialog is cancelled |
