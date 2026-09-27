@@ -1,0 +1,20 @@
+{
+  "options": [{
+    "id": "mode", "name": "Mode", "category": null,
+    "kind": {"Select": {"choices": [
+      {"value": "default", "label": "Default", "description": null},
+      {"value": "plan", "label": "Plan", "description": null}
+    ]}},
+    "current": "default", "live": true
+  }],
+  "turns": [
+    [
+      {"Emit": {"PlanProposed": {"markdown": "1. Add a README"}}},
+      {"End": {"Completed": {"source": "Protocol"}}}
+    ],
+    [
+      {"Emit": {"TextDelta": {"message_id": "m2", "text": "Done."}}},
+      {"End": {"Completed": {"source": "Protocol"}}}
+    ]
+  ]
+}

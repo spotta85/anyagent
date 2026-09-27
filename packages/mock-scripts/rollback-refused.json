@@ -1,0 +1,8 @@
+{
+  "rollback": true,
+  "rollback_refusal": "nothing to rewind past the compaction",
+  "turns": [[
+    {"Emit": {"TextDelta": {"message_id": "m1", "text": "hi"}}},
+    {"End": {"Completed": {"source": "Protocol"}}}
+  ]]
+}
