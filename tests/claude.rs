@@ -1380,6 +1380,56 @@ async fn a_subagent_tool_reports_role_model_progress_and_tokens() {
     session.close().await.unwrap();
 }
 
+/// A background subagent's tool is still Running at turn end and listed in
+/// `background`; its progress and completion arrive after it, outside any turn.
+#[tokio::test]
+async fn a_background_subagent_runs_past_its_turn() {
+    let (session, mut events) = open("bg-subagent", "--bg-subagent").await;
+    session.prompt("hi").await.unwrap();
+    let mut launched = None;
+    loop {
+        match next(&mut events).await.kind {
+            EventKind::ToolUpdated(tool) => launched = Some(tool),
+            EventKind::TurnEnded { background, .. } => {
+                assert_eq!(background.len(), 1);
+                assert_eq!(background[0].as_str(), "toolu_bga");
+                break;
+            }
+            _ => {}
+        }
+    }
+    let launched = launched.unwrap();
+    assert_eq!(launched.status, ToolStatus::Running);
+    let role = launched.subagent.and_then(|s| s.role);
+    assert_eq!(role.as_deref(), Some("general-purpose"));
+    // Progress then completion, neither opening a turn; the wake turn follows.
+    let mut late = Vec::new();
+    loop {
+        let event = next(&mut events).await;
+        match event.kind {
+            EventKind::ToolUpdated(tool) => {
+                assert!(event.turn_info.is_none(), "opened a turn: {tool:?}");
+                late.push((tool.status, tool.subagent.unwrap()));
+            }
+            EventKind::TurnStarted { origin } => {
+                assert_eq!(origin, TurnOrigin::Agent);
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(late.len(), 2);
+    assert_eq!(late[0].0, ToolStatus::Running);
+    assert_eq!(
+        late[0].1.summary.as_deref(),
+        Some("Running Echo the word hi")
+    );
+    assert_eq!(late[0].1.tokens, Some(20584));
+    assert_eq!(late[1].0, ToolStatus::Completed);
+    assert_eq!(late[1].1.tokens, Some(21582));
+    session.close().await.unwrap();
+}
+
 /// Losing auth mid-session fails turn and closes with AuthRequired + EnvVar method.
 #[tokio::test]
 async fn losing_auth_mid_session_fails_the_turn_and_closes() {
