@@ -441,6 +441,9 @@ pub struct SessionOptions {
     pub(crate) configure: Vec<(ConfigId, ConfigValue)>,
     pub(crate) config_home: Option<PathBuf>,
     pub(crate) record_wire: Option<PathBuf>,
+    pub(crate) instructions: Option<String>,
+    pub(crate) env: BTreeMap<String, String>,
+    pub(crate) args: Vec<String>,
 }
 
 /// How `open` binds to a provider session.
@@ -470,6 +473,9 @@ impl SessionOptions {
             configure: Vec::new(),
             config_home: None,
             record_wire: None,
+            instructions: None,
+            env: BTreeMap::new(),
+            args: Vec::new(),
         }
     }
 
@@ -531,6 +537,24 @@ impl SessionOptions {
     /// possibly secrets — so treat it as sensitive and delete it after use.
     pub fn record_wire(mut self, path: impl Into<PathBuf>) -> Self {
         self.record_wire = Some(path.into());
+        self
+    }
+
+    /// Extra instructions for the agent, added to its system prompt.
+    pub fn instructions(mut self, text: impl Into<String>) -> Self {
+        self.instructions = Some(text.into());
+        self
+    }
+
+    /// One environment variable for the agent process, over the inherited ones.
+    pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.env.insert(key.into(), value.into());
+        self
+    }
+
+    /// One extra launch argument, placed after anyagent's own.
+    pub fn arg(mut self, arg: impl Into<String>) -> Self {
+        self.args.push(arg.into());
         self
     }
 
