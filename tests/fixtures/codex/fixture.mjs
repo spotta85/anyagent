@@ -41,6 +41,12 @@ const turnIds = []; // completed turns, oldest first
 let lastModel = null; // the model the thread last ran a turn with
 const waiters = {}; // server request id -> resolver
 
+// Notifications anyagent ignores: names from the 0.154.0 app-server schema, params trimmed.
+function hookRun(status) {
+  const run = { id: 'hook-1', eventName: 'userPromptSubmit', executionMode: 'sync', handlerType: 'command', scope: 'turn', status };
+  notify(status === 'running' ? 'hook/started' : 'hook/completed', { threadId: THREAD.id, turnId: turn.id, run });
+}
+
 // Recorded 2026-09-26 (0.154.0): after thread/start, and again on a revert.
 function featureWarning() {
   if (!FEATURES.length) return;
@@ -183,6 +189,7 @@ async function onRequest(m) {
       // The reloaded thread warns before the reply, naming the last turn's model (0.154.0).
       featureWarning();
       if (lastModel && lastModel !== 'gpt-6') notify('warning', { threadId: THREAD.id, message: `This session was recorded with model \`${lastModel}\` but is resuming with \`gpt-6\`. Consider switching back to \`${lastModel}\` as it may affect Codex performance.` });
+      notify('thread/reverted', { threadId: THREAD.id });
       return reply({ thread: THREAD, turnsBackwardsCursor: null, itemsBackwardsCursor: null });
     }
     default:
@@ -199,6 +206,9 @@ async function runTurn(params) {
   if (turn.interrupted) return endTurn('interrupted');
   notify('turn/started', { threadId: THREAD.id, turn: { id: turn.id, status: 'inProgress' } });
   turn.started = true;
+  notify('thread/settings/updated', { threadId: THREAD.id, threadSettings: { model: params.model ?? 'gpt-6', cwd: process.cwd() } });
+  hookRun('running');
+  hookRun('completed');
   const user = item({ type: 'userMessage', clientId: params.clientUserMessageId, content: [{ type: 'text', text: prompt }] });
   itemStarted(user);
   itemCompleted(user);
@@ -224,6 +234,7 @@ async function runTurn(params) {
 
   const reasoning = item({ type: 'reasoning', summary: [], content: [] });
   itemStarted(reasoning);
+  notify('item/reasoning/summaryPartAdded', { threadId: THREAD.id, turnId: turn.id, itemId: reasoning.id, summaryIndex: 0 });
   notify('item/reasoning/summaryTextDelta', { threadId: THREAD.id, turnId: turn.id, itemId: reasoning.id, delta: 'thinking…' });
   itemCompleted(reasoning);
 

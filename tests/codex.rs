@@ -1217,8 +1217,9 @@ async fn rollback_drops_turns_and_confirms_with_session_updated() {
     session.close().await.unwrap();
 }
 
-/// Our launch flag and a revert's echo of the session's own model stay
-/// quiet; a real model change or a host-enabled feature still surfaces.
+/// Our launch flag, a revert's echo of the session's own model, and the
+/// settings, revert, hook and summary-part notifications stay quiet; a real
+/// model change or a host-enabled feature still surfaces.
 #[tokio::test]
 async fn warnings_about_our_own_flag_and_revert_stay_quiet() {
     let one = std::num::NonZeroU32::new(1).unwrap();

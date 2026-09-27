@@ -1141,11 +1141,16 @@ impl Drive {
                     _ => Ok(()),
                 }
             }
-            // Session-state echoes and login bookkeeping the engine owns or
-            // does not need; plan deltas repeat the completed plan item.
+            // Session-state echoes, hook runs and login bookkeeping the engine
+            // owns or does not need; plan deltas repeat the completed plan item.
             "thread/started"
             | "item/plan/delta"
             | "thread/status/changed"
+            | "thread/settings/updated"
+            | "thread/reverted"
+            | "hook/started"
+            | "hook/completed"
+            | "item/reasoning/summaryPartAdded"
             | "serverRequest/resolved"
             | "remoteControl/status/changed"
             | "account/updated"
