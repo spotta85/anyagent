@@ -65,6 +65,21 @@ async fn complete_turn(session: &Session, events: &mut Events, answer: Permissio
     }
 }
 
+/// Drains events through the first one `stop` matches, returning the text
+/// of every diagnostic on the way.
+async fn diagnostics_until(events: &mut Events, stop: impl Fn(&EventKind) -> bool) -> Vec<String> {
+    let mut seen = Vec::new();
+    loop {
+        let kind = next(events).await.kind;
+        if let EventKind::Diagnostic(d) = &kind {
+            seen.push(d.message.clone());
+        }
+        if stop(&kind) {
+            return seen;
+        }
+    }
+}
+
 fn text_option(session: &anyagent::SessionInfo, id: &str) -> Option<String> {
     session.configuration.options.iter().find_map(|(k, v)| {
         (k.as_str() == id).then(|| match v {
@@ -904,6 +919,47 @@ async fn rollback_drops_turns_and_confirms_with_session_updated() {
         .err()
         .unwrap();
     assert!(matches!(err, AgentError::UnsupportedFeature(_)), "{err}");
+    session.close().await.unwrap();
+}
+
+/// Our launch flag and a revert's echo of the session's own model stay
+/// quiet; a real model change or a host-enabled feature still surfaces.
+#[tokio::test]
+async fn warnings_about_our_own_flag_and_revert_stay_quiet() {
+    let one = std::num::NonZeroU32::new(1).unwrap();
+    let scope = anyagent::RollbackScope::Conversation;
+    let turn_ended = |k: &EventKind| matches!(k, EventKind::TurnEnded { .. });
+    let updated = |k: &EventKind| matches!(k, EventKind::SessionUpdated(_));
+    let options = SessionOptions::in_dir(std::env::temp_dir()).configure("model", "gpt-6-mini");
+    let (session, mut events) = open_with("quiet", "", options).await.unwrap();
+    let mut seen = Vec::new();
+    for prompt in ["one", "two"] {
+        session.prompt(prompt).await.unwrap();
+        seen.extend(diagnostics_until(&mut events, turn_ended).await);
+    }
+    session.rollback(one, scope).await.unwrap();
+    seen.extend(diagnostics_until(&mut events, updated).await);
+    assert!(seen.is_empty(), "{seen:?}");
+
+    session.configure("model", "gpt-6").await.unwrap();
+    diagnostics_until(&mut events, updated).await;
+    session.rollback(one, scope).await.unwrap();
+    let seen = diagnostics_until(&mut events, updated).await;
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert!(seen[0].starts_with(
+        "This session was recorded with model `gpt-6-mini` but is resuming with `gpt-6`."
+    ));
+    session.close().await.unwrap();
+
+    let (session, mut events) = open("quiet-host", "--host-feature").await;
+    session.prompt("one").await.unwrap();
+    let seen = diagnostics_until(&mut events, turn_ended).await;
+    assert!(
+        seen.iter().any(|d| d.starts_with(
+            "Under-development features enabled: current_time_reminder, default_mode_request_user_input."
+        )),
+        "{seen:?}"
+    );
     session.close().await.unwrap();
 }
 

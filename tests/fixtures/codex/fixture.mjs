@@ -9,6 +9,7 @@
 // "subagent-fails" for a child turn that fails), "end-failed"/"end-aborted"
 // (the turn ends via turn/failed / turn/aborted instead of turn/completed).
 // --rename: the server renames the thread after the first turn.
+// --host-feature: the host config enables an under-development feature too.
 import { createInterface } from 'node:readline';
 
 const flag = (name) => process.argv.includes(name);
@@ -23,9 +24,22 @@ const MCP_NAMES = [...new Set(process.argv
   .flatMap((a, i) => (a === '-c' ? [process.argv[i + 1] ?? ''] : []))
   .map((kv) => kv.match(/^mcp_servers\.([^.]+)\./)?.[1])
   .filter(Boolean))];
+// `-c features.<name>=true` overrides, plus one from the host config
+// (--host-feature); the server warns about them on every thread load.
+const FEATURES = [...process.argv
+  .flatMap((a, i) => (a === '-c' ? [process.argv[i + 1] ?? ''] : []))
+  .map((kv) => kv.match(/^features\.([^=]+)=true$/)?.[1])
+  .filter(Boolean), ...(flag('--host-feature') ? ['current_time_reminder'] : [])].sort();
 let turn = null; // { id, started, interrupted, steered: [] }
 const turnIds = []; // completed turns, oldest first
+let lastModel = null; // the model the thread last ran a turn with
 const waiters = {}; // server request id -> resolver
+
+// Recorded 2026-09-26 (0.154.0): after thread/start, and again on a revert.
+function featureWarning() {
+  if (!FEATURES.length) return;
+  notify('warning', { threadId: THREAD.id, message: `Under-development features enabled: ${FEATURES.join(', ')}. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set \`suppress_unstable_features_warning = true\` in /Users/user/.codex/config.toml.` });
+}
 
 const MODELS = [
   { id: 'gpt-6', model: 'gpt-6', displayName: 'GPT-6', description: 'Frontier model.', serviceTiers: [{ id: 'priority', name: 'Fast', description: '1.5x speed' }], defaultServiceTier: 'priority', hidden: false, isDefault: true, defaultReasoningEffort: 'medium', supportedReasoningEfforts: [{ reasoningEffort: 'low', description: 'Fast' }, { reasoningEffort: 'medium', description: 'Balanced' }, { reasoningEffort: 'high', description: 'Deep' }] },
@@ -106,7 +120,8 @@ async function onRequest(m) {
       if (flag('--logged-out')) return refuse('codex account authentication required to read rate limits');
       return reply({ rateLimits: RATE_LIMITS });
     case 'thread/start':
-      return reply(threadResult(m.params));
+      reply(threadResult(m.params));
+      return featureWarning();
     case 'thread/resume':
       THREAD.id = m.params.threadId;
       turnIds.push('turn-prev'); // the thread's history rides the bind
@@ -118,6 +133,7 @@ async function onRequest(m) {
     case 'turn/start': {
       if (turn) return refuse('phantom: turn/start while a turn is running'); // adapters must steer instead
       turn = { id: `turn-${turnN++}`, started: false, interrupted: false };
+      lastModel = m.params.model ?? 'gpt-6';
       reply({ turn: { id: turn.id, status: 'inProgress' } });
       runTurn(m.params).catch(() => process.exit(1));
       return;
@@ -152,6 +168,10 @@ async function onRequest(m) {
       const at = turnIds.indexOf(m.params.beforeTurnId);
       if (at < 0) return refuse(`unknown turn \`${m.params.beforeTurnId}\``);
       rolled += turnIds.splice(at).length;
+      // The reloaded thread warns before the reply (0.154.0), naming the
+      // last turn's model against the config default.
+      featureWarning();
+      if (lastModel && lastModel !== 'gpt-6') notify('warning', { threadId: THREAD.id, message: `This session was recorded with model \`${lastModel}\` but is resuming with \`gpt-6\`. Consider switching back to \`${lastModel}\` as it may affect Codex performance.` });
       return reply({ thread: THREAD, turnsBackwardsCursor: null, itemsBackwardsCursor: null });
     }
     default:
