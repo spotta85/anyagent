@@ -314,8 +314,8 @@ fn supports_fast(models: &Value, model: &str) -> bool {
         .any(|entry| entry["value"].as_str() == Some(model) && entry["supportsFastMode"] == true)
 }
 
-/// The current model's effort levels as a live option (`apply_flag_settings`
-/// switches it); `None` when the catalog has none.
+/// A catalog model's effort levels as choices (the first entry's for an
+/// unknown model); empty when it has none.
 fn effort_levels(models: &Value, model: &str) -> Vec<ConfigChoice> {
     let Some(entries) = models.as_array() else {
         return Vec::new();
