@@ -89,6 +89,7 @@ impl Adapter for ClaudeAdapter {
                 configs: Vec::new(),
                 usage_request: None,
                 mcp_request: None,
+                skills_request: None,
                 interrupt_id: None,
                 turn_uuid: None,
                 turn_assistant: None,
@@ -235,8 +236,8 @@ fn map_resume(start: &SessionStart, e: AgentError) -> AgentError {
     }
 }
 
-/// `initialize` (carrying the instructions) then `get_binary_version`, both
-/// over the control channel.
+/// `initialize` (carrying the instructions), `get_binary_version`, then
+/// `get_skills_dialog`, all over the control channel.
 async fn handshake(
     wire: &mut Wire,
     request: &ConnectRequest,
@@ -256,7 +257,12 @@ async fn handshake(
         .await
         .ok()
         .and_then(|v| v["version"].as_str().map(str::to_owned));
-    let info = driver_info(&init, version, request);
+    // Which commands are skills (~5 ms); a CLI that refuses it marks none.
+    let skills = wire
+        .roundtrip(json!({ "subtype": "get_skills_dialog" }))
+        .await
+        .unwrap_or_default();
+    let info = driver_info(&init, &skills, version, request);
     if requested_fast(request)
         && !info
             .configuration
@@ -440,10 +446,16 @@ fn account_status(account: &Value, request: &ConnectRequest) -> AuthStatus {
     AuthStatus::Unknown
 }
 
-/// What the `initialize` response tells us, folded into the engine vocabulary.
-fn driver_info(init: &Value, version: Option<String>, request: &ConnectRequest) -> DriverInfo {
+/// What the `initialize` response and the skills rows tell us, folded into
+/// the engine vocabulary.
+fn driver_info(
+    init: &Value,
+    skills: &Value,
+    version: Option<String>,
+    request: &ConnectRequest,
+) -> DriverInfo {
     let auth = account_status(&init["account"], request);
-    let commands = slash_commands(&init["commands"]);
+    let commands = slash_commands(&init["commands"], skills);
     // The CLI's fixed permission modes, current from `initialize`.
     let mode = init["current_permission_mode"]
         .as_str()
@@ -580,6 +592,8 @@ struct Drive {
     usage_request: Option<String>,
     /// The in-flight `mcp_set_servers`, whose receipt names servers that failed.
     mcp_request: Option<String>,
+    /// The in-flight `get_skills_dialog` and the changed command list it sources.
+    skills_request: Option<(String, Value)>,
     /// The last `interrupt` control request, whose receipt may name a
     /// cancelled queued prompt.
     interrupt_id: Option<String>,
@@ -1000,6 +1014,17 @@ impl Drive {
             }
             return Ok(());
         }
+        // The skills rows for a changed command list; a refusal marks none as skills.
+        let skills_request = self
+            .skills_request
+            .take_if(|(id, _)| response["request_id"].as_str() == Some(id));
+        if let Some((_, commands)) = skills_request {
+            self.info.details.commands = slash_commands(&commands, &response["response"]);
+            return self
+                .events
+                .send(DriverEvent::InfoChanged(self.info.clone()))
+                .await;
+        }
         // The declared servers' receipt: a Warning per server that failed, or for a refusal.
         let for_mcp = self
             .mcp_request
@@ -1167,6 +1192,7 @@ impl Drive {
                 self.tools.clear();
                 self.requests.clear();
                 self.usage_request = None;
+                self.skills_request = None;
                 self.configs.clear();
                 self.interrupt_id = None;
                 self.info.resume_token = None;
@@ -1285,12 +1311,15 @@ impl Drive {
                 Ok(())
             }
             // The CLI pushes its whole slash-command list when it changes
-            // (2.1.261); it replaces the one from `initialize`.
+            // (2.1.261); it replaces the one from `initialize` once the
+            // fresh skills rows arrive in `on_control_response`.
             "commands_changed" => {
-                self.info.details.commands = slash_commands(&frame["commands"]);
-                self.events
-                    .send(DriverEvent::InfoChanged(self.info.clone()))
-                    .await
+                let id = self
+                    .wire
+                    .control(json!({ "subtype": "get_skills_dialog" }))
+                    .await?;
+                self.skills_request = Some((id, frame["commands"].clone()));
+                Ok(())
             }
             "status" if frame["status"].as_str() == Some("compacting") => {
                 self.events
@@ -1719,22 +1748,43 @@ fn question_response(
     json!({ "behavior": "allow", "updatedInput": updated })
 }
 
-/// The CLI's `commands` array (from `initialize` or `commands_changed`).
-fn slash_commands(commands: &Value) -> Vec<SlashCommand> {
+/// The CLI's `commands` array (from `initialize` or `commands_changed`),
+/// each sourced from the `get_skills_dialog` reply.
+fn slash_commands(commands: &Value, skills: &Value) -> Vec<SlashCommand> {
     commands
         .as_array()
         .into_iter()
         .flatten()
-        .map(|c| SlashCommand {
-            name: c["name"].as_str().unwrap_or_default().to_owned(),
-            description: c["description"].as_str().unwrap_or_default().to_owned(),
-            input_hint: c["argumentHint"]
-                .as_str()
-                .filter(|h| !h.is_empty())
-                .map(str::to_owned),
-            source: crate::agent::CommandSource::Builtin,
+        .map(|c| {
+            let name = c["name"].as_str().unwrap_or_default();
+            SlashCommand {
+                name: name.to_owned(),
+                description: c["description"].as_str().unwrap_or_default().to_owned(),
+                input_hint: c["argumentHint"]
+                    .as_str()
+                    .filter(|h| !h.is_empty())
+                    .map(str::to_owned),
+                source: command_source(skills, name),
+            }
         })
         .collect()
+}
+
+/// A skill when a `/skills` menu row shows `name`, scoped by the row's source
+/// label ("user", "project", "plugin"); built in otherwise.
+fn command_source(skills: &Value, name: &str) -> crate::agent::CommandSource {
+    // Rows carry no path (probed 2026-09-27, 2.1.283); `display_name` is the command's name.
+    skills["skills"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|row| row["display_name"].as_str() == Some(name))
+        .map_or(crate::agent::CommandSource::Builtin, |row| {
+            crate::agent::CommandSource::Skill {
+                path: None,
+                scope: row["source"].as_str().map(str::to_owned),
+            }
+        })
 }
 
 /// The `result` frame's usage: the whole turn, cache reads and writes

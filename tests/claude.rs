@@ -8,10 +8,11 @@ use std::time::Duration;
 use futures::StreamExt;
 
 use anyagent::{
-    AgentError, AgentInstallation, Answer, AuthKind, AuthStatus, Capability, ConfigId, ConfigKind,
-    ConfigValue, DeliveryKind, DiagnosticLevel, Event, EventKind, Events, Input, LoginMethod,
-    McpServer, MessageId, PermissionChoice, PlanStatus, QuestionAnswer, Request, RollbackScope,
-    Runtime, Session, SessionOptions, StopReason, ToolKind, ToolStatus, TurnOrigin,
+    AgentError, AgentInstallation, Answer, AuthKind, AuthStatus, Capability, CommandSource,
+    ConfigId, ConfigKind, ConfigValue, DeliveryKind, DiagnosticLevel, Event, EventKind, Events,
+    Input, LoginMethod, McpServer, MessageId, PermissionChoice, PlanStatus, QuestionAnswer,
+    Request, RollbackScope, Runtime, Session, SessionOptions, StopReason, ToolKind, ToolStatus,
+    TurnOrigin,
 };
 
 mod common;
@@ -537,7 +538,19 @@ async fn the_handshake_fills_details() {
     }
     // The CLI queues mid-turn messages; it cannot steer.
     assert!(!details.capabilities.supports(Capability::Steer));
-    assert!(details.commands.iter().any(|c| c.name == "compact"));
+    // A `/skills` menu row makes a command a skill, scoped by its source label.
+    let source = |name: &str| {
+        let command = details.commands.iter().find(|c| c.name == name).unwrap();
+        command.source.clone()
+    };
+    assert_eq!(source("compact"), CommandSource::Builtin);
+    assert_eq!(
+        source("review"),
+        CommandSource::Skill {
+            path: None,
+            scope: Some("project".into())
+        }
+    );
     // The model catalog from `initialize` becomes the `model` option.
     let model = details
         .config_options
@@ -580,6 +593,28 @@ async fn the_handshake_fills_details() {
     assert_eq!(fast.current, Some(ConfigValue::Bool(false)));
     // The adapter mints the session id, so the token exists before any turn.
     assert!(session.info().resume_token.is_some());
+    session.close().await.unwrap();
+}
+
+/// A command list the CLI pushes mid-session is sourced from fresh `/skills` rows.
+#[tokio::test]
+async fn a_skill_found_mid_session_is_a_skill() {
+    let (session, mut events) = open("new-skill", "").await;
+    session.prompt("new-skill").await.unwrap();
+    let fresh = loop {
+        next(&mut events).await;
+        let commands = session.info().details.commands;
+        if let Some(fresh) = commands.into_iter().find(|c| c.name == "fresh") {
+            break fresh;
+        }
+    };
+    assert_eq!(
+        fresh.source,
+        CommandSource::Skill {
+            path: None,
+            scope: Some("user".into())
+        }
+    );
     session.close().await.unwrap();
 }
 
