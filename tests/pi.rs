@@ -11,7 +11,7 @@ use anyagent::{
     AgentError, AgentInstallation, Answer, AuthKind, AuthStatus, Capability, ConfigKind,
     ConfigValue, DeliveryKind, Event, EventKind, Events, McpServer, QuestionAnswer, Request,
     ResumeToken, Runtime, Session, SessionOptions, StopReason, ToolInput, ToolKind, ToolStatus,
-    TurnUsage,
+    TurnOrigin, TurnUsage,
 };
 
 mod common;
@@ -75,6 +75,14 @@ fn usage_of(calls: u64) -> TurnUsage {
         input_tokens: 1200 * calls,
         cached_input_tokens: 150 * calls,
         output_tokens: 34 * calls,
+    }
+}
+
+/// The usage the turn's closing `TurnEnded` carries.
+fn usage_at_end(kinds: &[EventKind]) -> Option<TurnUsage> {
+    match kinds.last() {
+        Some(EventKind::TurnEnded { usage, .. }) => *usage,
+        other => panic!("turn did not end: {other:?}"),
     }
 }
 
@@ -279,18 +287,32 @@ async fn a_turn_streams_text_reasoning_tools_and_usage_then_settles() {
     session.close().await.unwrap();
 }
 
-/// A second prompt sums its own model calls only.
+/// A later turn, prompted or started by pi itself, sums its own model calls only.
 #[tokio::test]
-async fn a_second_turn_never_inherits_the_first_turn_s_usage() {
+async fn a_later_turn_never_inherits_an_earlier_turn_s_usage() {
     let (session, mut events) = open("usage-reset", "").await;
-    for _ in 0..2 {
-        session.prompt("run the tool").await.unwrap();
-        let kinds = drain_turn(&mut events).await;
-        assert!(
-            matches!(kinds.last(), Some(EventKind::TurnEnded { usage: Some(u), .. }) if *u == usage_of(2)),
-            "{kinds:?}"
-        );
-    }
+    session.prompt("run the tool, then wake").await.unwrap();
+    assert_eq!(
+        usage_at_end(&drain_turn(&mut events).await),
+        Some(usage_of(2))
+    );
+    // The unprompted run opens an agent turn with one model call.
+    let woken = drain_turn(&mut events).await;
+    assert!(
+        woken.iter().any(|k| matches!(
+            k,
+            EventKind::TurnStarted {
+                origin: TurnOrigin::Agent
+            }
+        )),
+        "{woken:?}"
+    );
+    assert_eq!(usage_at_end(&woken), Some(usage_of(1)));
+    session.prompt("run the tool").await.unwrap();
+    assert_eq!(
+        usage_at_end(&drain_turn(&mut events).await),
+        Some(usage_of(2))
+    );
     session.close().await.unwrap();
 }
 

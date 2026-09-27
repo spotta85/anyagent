@@ -448,7 +448,7 @@ struct Drive {
     aborting: bool,
     /// Session cost so far, summed over assistant messages.
     cost: f64,
-    /// What the running turn has spent, summed over its assistant messages.
+    /// What the current run has spent, summed over its assistant messages.
     turn_usage: TurnUsage,
     next_message: u64,
     next_request: u64,
@@ -493,7 +493,6 @@ impl Drive {
                 // A cancel that raced the previous turn's natural end must
                 // not bleed into this one.
                 self.aborting = false;
-                self.turn_usage = TurnUsage::default();
                 let id = self.send_input("prompt", &input).await?;
                 self.pending.insert(id, Pending::Prompt);
             }
@@ -871,6 +870,8 @@ impl Drive {
         // a settled run is still coming, so its bookkeeping goes with it.
         self.tools.clear();
         self.streamed.clear();
+        // Reset here, not at `StartTurn`: a run pi starts itself has none.
+        self.turn_usage = TurnUsage::default();
         self.events.send(DriverEvent::TurnEnded(stop)).await
     }
 
