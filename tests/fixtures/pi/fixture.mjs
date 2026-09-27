@@ -9,7 +9,8 @@
 // first prompt is refused). Prompt words steer scenarios: "tool" (a bash
 // call with streamed output), "sleep" (a tool only an abort ends), "ask"
 // (an extension select dialog mid-turn), "confirm" (a timed confirm dialog),
-// "fail" (the model errors).
+// "fail" (the model errors), "wake" (pi runs once more, unprompted, after
+// settling).
 import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -95,7 +96,10 @@ async function onCommand(cmd) {
       }
       if (streaming) return no("Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.");
       ok();
-      return run(cmd.message);
+      await run(cmd.message);
+      // An extension's `sendCustomMessage` with `triggerTurn`: a run nobody prompted.
+      if (String(cmd.message).includes('wake')) await run('woken by an extension');
+      return;
     }
     // Like pi 0.84.4: a session with nothing worth summarizing is refused
     // (probed live). The success path is modelled, not recorded: pi cannot
