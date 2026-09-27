@@ -95,13 +95,15 @@ impl Adapter for AcpAdapter {
         let mut wire = Wire::over(&mut child, recorder);
 
         // ACP never says which credential opened the session: a documented
-        // API key in the env is taken as the one in use, else the catalog's
-        // proven kind.
+        // API key in the session's env, else the process env, is taken as
+        // the one in use, else the catalog's proven kind.
         let open_auth_kind = self.profile.and_then(|p| {
-            let keyed = p
-                .api_key_env
-                .iter()
-                .any(|var| std::env::var(var).is_ok_and(|v| !v.trim().is_empty()));
+            let keyed = p.api_key_env.iter().any(|var| {
+                let session = request.options.env.get(*var).cloned();
+                session
+                    .or_else(|| std::env::var(var).ok())
+                    .is_some_and(|v| !v.trim().is_empty())
+            });
             p.open_auth_kind
                 .clone()
                 .map(|kind| if keyed { AuthKind::ApiKey } else { kind })
@@ -411,10 +413,10 @@ struct CursorAbout {
     account: Option<AccountInfo>,
 }
 
-/// Runs `about` before the ACP handshake. `userEmail: null` means logged
-/// out and fails typed with the catalog login command, since Cursor's own
-/// `authenticate` would start a browser login instead (read from the
-/// 2026.09.02 bundle). A failed or unparseable `about` reports nothing.
+/// Runs `about` with the session's env before the ACP handshake. A null
+/// `userEmail` is logged out: typed with the catalog login, since Cursor's
+/// `authenticate` would start a browser login (2026.09.02 bundle). A failed
+/// or unparseable `about` reports nothing.
 async fn cursor_about(
     installation: &AgentInstallation,
     options: &crate::agent::SessionOptions,
@@ -422,6 +424,7 @@ async fn cursor_about(
     let mut command = tokio::process::Command::new(&installation.executable_path);
     command
         .args(["about", "--format", "json"])
+        .envs(crate::adapter::launch_env(installation, options)?)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
