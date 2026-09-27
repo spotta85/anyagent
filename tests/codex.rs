@@ -8,10 +8,11 @@ use std::time::Duration;
 use futures::StreamExt;
 
 use anyagent::{
-    AgentError, AgentInstallation, Answer, AuthKind, AuthStatus, Capability, ConfigId, ConfigKind,
-    ConfigValue, DeliveryKind, DiagnosticLevel, Event, EventKind, Events, Input, LoginMethod,
-    McpServer, PermissionChoice, PermissionRequest, PlanStatus, QuestionAnswer, Request, Runtime,
-    Session, SessionOptions, StopReason, ToolInput, ToolKind, ToolStatus, ToolUpdate, TurnUsage,
+    AgentError, AgentInstallation, Answer, AuthKind, AuthStatus, Capability, CommandSource,
+    ConfigId, ConfigKind, ConfigValue, DeliveryKind, DiagnosticLevel, Event, EventKind, Events,
+    Input, LoginMethod, McpServer, PermissionChoice, PermissionRequest, PlanStatus, QuestionAnswer,
+    Request, Runtime, Session, SessionOptions, StopReason, ToolInput, ToolKind, ToolStatus,
+    ToolUpdate, TurnUsage,
 };
 
 mod common;
@@ -136,7 +137,7 @@ fn text_option(session: &anyagent::SessionInfo, id: &str) -> Option<String> {
     })
 }
 
-/// Handshake reports auth, version 0.147.0, capabilities, token, and deduped skills as commands.
+/// Handshake reports auth, version 0.147.0, capabilities, token, and deduped enabled skills (with path and scope) as commands.
 #[tokio::test]
 async fn handshake_reports_auth_version_options_and_token() {
     let (session, mut events) = open("handshake", "").await;
@@ -196,17 +197,33 @@ async fn handshake_reports_auth_version_options_and_token() {
     assert_eq!(text_option(&info, "mode").as_deref(), Some("on-request"));
     assert_eq!(text_option(&info, "sandbox").as_deref(), Some("read-only"));
 
-    // Skills are the slash commands: deduped across roots, junk dropped, and
-    // the picker-sized `interface.shortDescription` preferred.
+    // Skills are the slash commands: deduped across roots, junk and disabled
+    // ones dropped, the picker-sized `interface.shortDescription` preferred,
+    // each with its SKILL.md path and scope.
+    let skill = |path: &str, scope: &str| CommandSource::Skill {
+        path: Some(PathBuf::from(path)),
+        scope: Some(scope.into()),
+    };
     let commands: Vec<_> = info
         .details
         .commands
         .iter()
-        .map(|c| (c.name.as_str(), c.description.as_str()))
+        .map(|c| (c.name.as_str(), c.description.as_str(), c.source.clone()))
         .collect();
     assert_eq!(
         commands,
-        vec![("review", "Review a diff."), ("release", "Cut a release.")]
+        vec![
+            (
+                "review",
+                "Review a diff.",
+                skill("/repo/.codex/skills/review/SKILL.md", "repo")
+            ),
+            (
+                "release",
+                "Cut a release.",
+                skill("/home/skills/release/SKILL.md", "user")
+            ),
+        ]
     );
     session.close().await.unwrap();
 }

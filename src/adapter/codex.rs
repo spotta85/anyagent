@@ -341,6 +341,8 @@ fn parse_skill_commands(response: &Value) -> Vec<SlashCommand> {
         .into_iter()
         .flatten()
         .flat_map(|group| group["skills"].as_array().into_iter().flatten())
+        // A disabled skill still comes back, `enabled: false` (probed 2026-09-27, 0.154.0).
+        .filter(|skill| skill["enabled"].as_bool() != Some(false))
         .filter_map(|skill| {
             let name = skill["name"]
                 .as_str()
@@ -357,7 +359,11 @@ fn parse_skill_commands(response: &Value) -> Vec<SlashCommand> {
                     .unwrap_or_default()
                     .to_owned(),
                 input_hint: None,
-                source: crate::agent::CommandSource::Builtin,
+                // `path` is the SKILL.md file; `scope` is user, repo, system or admin.
+                source: crate::agent::CommandSource::Skill {
+                    path: skill["path"].as_str().map(PathBuf::from),
+                    scope: skill["scope"].as_str().map(str::to_owned),
+                },
             })
         })
         .collect()
