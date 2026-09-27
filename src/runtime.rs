@@ -208,8 +208,7 @@ impl Runtime {
     /// handshake learned, and closes. A logged-out agent is a result, not
     /// an error.
     pub async fn probe(&self, agent: &AgentInstallation) -> Result<AgentDetails, AgentError> {
-        self.probe_with(agent, SessionOptions::in_dir(std::env::temp_dir()))
-            .await
+        self.probe_with(agent, throwaway_options()).await
     }
 
     /// `probe` with the caller's options: dir, env, args, config home. Always throwaway.
@@ -274,8 +273,7 @@ impl Runtime {
     /// an API-key login) return `UnsupportedFeature`. May spawn a short-lived
     /// agent process; results are cached for 60 s.
     pub async fn plan_usage(&self, agent: &AgentInstallation) -> Result<PlanUsage, AgentError> {
-        self.plan_usage_with(agent, &SessionOptions::in_dir(std::env::temp_dir()))
-            .await
+        self.plan_usage_with(agent, &throwaway_options()).await
     }
 
     /// `plan_usage` for the login these options point at.
@@ -320,7 +318,7 @@ impl Runtime {
     }
 }
 
-/// Options for a probe: temp dir, never persisted.
+/// Default options for the probes and the quota read: temp dir, never persisted.
 fn throwaway_options() -> SessionOptions {
     let mut options = SessionOptions::in_dir(std::env::temp_dir());
     options.throwaway = true;
