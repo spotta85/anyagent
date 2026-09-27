@@ -59,7 +59,9 @@ Every gate holds the same way: an unsupported call fails typed with
 `UnsupportedFeature` instead of misbehaving.
 
 `TurnEnded.usage` (the turn's token counts) is not a capability: claude,
-codex, opencode, and pi fill it; antigravity and ACP agents leave it `None`.
+codex, opencode, pi, and antigravity over `agy` fill it; ACP agents leave it
+`None`. A compaction turn carries the summary's tokens on opencode and none on
+pi, which reports no model call for it.
 
 ## Config options by agent
 
