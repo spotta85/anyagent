@@ -1301,9 +1301,10 @@ const (
 
 // PlanUsage: Plan quota windows for the logged-in account.
 type PlanUsage struct {
-	Plan      *string       `json:"plan,omitempty"`
-	Windows   []UsageWindow `json:"windows"`
-	FetchedAt SystemTime    `json:"fetched_at"`
+	Plan         *string       `json:"plan,omitempty"`
+	Windows      []UsageWindow `json:"windows"`
+	ResetCredits *ResetCredits `json:"reset_credits,omitempty"`
+	FetchedAt    SystemTime    `json:"fetched_at"`
 }
 
 // UsageWindow is a wire type.
@@ -1311,6 +1312,12 @@ type UsageWindow struct {
 	Label       string      `json:"label"`
 	UsedPercent uint8       `json:"used_percent"`
 	ResetsAt    *SystemTime `json:"resets_at,omitempty"`
+}
+
+// ResetCredits: Limit resets the account can use now.
+type ResetCredits struct {
+	Available     uint32      `json:"available"`
+	NextExpiresAt *SystemTime `json:"next_expires_at,omitempty"`
 }
 
 // Diagnostic is a wire type.

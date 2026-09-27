@@ -28,8 +28,8 @@ use crate::error::AgentError;
 use crate::event::{
     Answer, Choice, ChoiceId, CompletionSource, Diagnostic, DiagnosticLevel, EventKind, Extensions,
     FileDiff, MessageId, PermissionChoice, PermissionRequest, PlanUsage, Question, QuestionAnswer,
-    QuestionId, QuestionRequest, RawTool, Request, RequestId, StopReason, ToolId, ToolInput,
-    ToolKind, ToolStatus, ToolUpdate, TurnUsage, UsageWindow,
+    QuestionId, QuestionRequest, RawTool, Request, RequestId, ResetCredits, StopReason, ToolId,
+    ToolInput, ToolKind, ToolStatus, ToolUpdate, TurnUsage, UsageWindow,
 };
 use crate::process::{self, Spawn};
 
@@ -116,7 +116,7 @@ impl Adapter for CodexAdapter {
             wire.roundtrip("account/rateLimits/read", json!({})).await
         };
         let result = match tokio::time::timeout(HANDSHAKE_TIMEOUT, fetch).await {
-            Ok(Ok(response)) => plan_usage(&response["rateLimits"]).ok_or_else(|| {
+            Ok(Ok(response)) => plan_usage(&response).ok_or_else(|| {
                 AgentError::UnsupportedFeature("no plan quota for this login".into())
             }),
             // Logged out: "codex account authentication required to read rate limits".
@@ -1088,7 +1088,7 @@ impl Drive {
                     .send(DriverEvent::InfoChanged(self.info.clone()))
                     .await
             }
-            "account/rateLimits/updated" => match plan_usage(&params["rateLimits"]) {
+            "account/rateLimits/updated" => match plan_usage(params) {
                 Some(usage) => self.content(EventKind::PlanUsageUpdated(usage)).await,
                 None => Ok(()),
             },
@@ -1675,12 +1675,17 @@ fn notice_text(params: &Value) -> String {
         .unwrap_or_else(|| params.to_string())
 }
 
-/// `account/rateLimits` → quota windows; `primary` and `secondary` are the
-/// plan's two windows (300 min and 10080 min observed), and `planType` names
-/// the plan. `windowDurationMins` is sometimes absent; T3 falls back to the
-/// plan's known pair (5h/weekly, the secondary monthly on free/go plans).
-fn plan_usage(rate_limits: &Value) -> Option<PlanUsage> {
+/// `account/rateLimits/read` result or `/updated` params → the plan's two
+/// windows (`primary`, `secondary`), its name, and banked resets.
+fn plan_usage(result: &Value) -> Option<PlanUsage> {
+    // The legacy `rateLimits` can name another limit; prefer codex's own.
+    let rate_limits = match &result["rateLimitsByLimitId"]["codex"] {
+        Value::Null => &result["rateLimits"],
+        codex => codex,
+    };
     let plan = rate_limits["planType"].as_str().map(str::to_owned);
+    // `windowDurationMins` is sometimes absent: fall back to the plan's known
+    // pair like T3 (5h/weekly, the secondary monthly on free/go plans).
     let monthly = matches!(plan.as_deref(), Some("free" | "go"));
     let secondary_default = if monthly { 43200 } else { 10080 };
     let windows: Vec<UsageWindow> = [("primary", 300), ("secondary", secondary_default)]
@@ -1702,7 +1707,26 @@ fn plan_usage(rate_limits: &Value) -> Option<PlanUsage> {
     (!windows.is_empty()).then(|| PlanUsage {
         plan,
         windows,
+        reset_credits: reset_credits(&result["rateLimitResetCredits"]),
         fetched_at: SystemTime::now(),
+    })
+}
+
+/// `rateLimitResetCredits` → the usable count and the soonest expiry among
+/// `available` credits. `None` when the field is absent (the notification).
+fn reset_credits(summary: &Value) -> Option<ResetCredits> {
+    let available = u32::try_from(summary["availableCount"].as_u64()?).ok()?;
+    let next_expires_at = summary["credits"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|credit| credit["status"] == "available")
+        .filter_map(|credit| credit["expiresAt"].as_u64())
+        .min()
+        .map(|secs| UNIX_EPOCH + Duration::from_secs(secs));
+    Some(ResetCredits {
+        available,
+        next_expires_at,
     })
 }
 
@@ -1947,24 +1971,67 @@ mod tests {
     #[test]
     fn plan_usage_falls_back_when_durations_are_absent() {
         // The observed shape carries durations; older frames may not.
-        let usage = plan_usage(&json!({
+        let usage = plan_usage(&json!({ "rateLimits": {
             "planType": "plus",
             "primary": { "usedPercent": 12.4 },
             "secondary": { "usedPercent": 55.6 },
-        }))
+        }}))
         .unwrap();
         let labels: Vec<&str> = usage.windows.iter().map(|w| w.label.as_str()).collect();
         assert_eq!(labels, vec!["Session", "Week"]);
         assert_eq!(usage.windows[0].used_percent, 12);
 
         // free/go plans meter the secondary window monthly.
-        let usage = plan_usage(&json!({
+        let usage = plan_usage(&json!({ "rateLimits": {
             "planType": "free",
             "primary": { "usedPercent": 1.0 },
             "secondary": { "usedPercent": 2.0 },
-        }))
+        }}))
         .unwrap();
         assert_eq!(usage.windows[1].label, "Month");
+    }
+
+    #[test]
+    fn plan_usage_reads_the_codex_limit_and_zero_credits() {
+        // Live 0.154.0 shape: the legacy field names another limit here.
+        let usage = plan_usage(&json!({
+            "rateLimits": { "limitId": "other", "primary": { "usedPercent": 90, "windowDurationMins": 300 } },
+            "rateLimitsByLimitId": { "codex": {
+                "limitId": "codex",
+                "primary": { "usedPercent": 8, "windowDurationMins": 300, "resetsAt": 1790484843 },
+            }},
+            "rateLimitResetCredits": { "availableCount": 0, "credits": [] },
+        }))
+        .unwrap();
+        assert_eq!(usage.windows[0].used_percent, 8);
+        let credits = usage.reset_credits.unwrap();
+        assert_eq!(credits.available, 0);
+        assert_eq!(credits.next_expires_at, None);
+    }
+
+    #[test]
+    fn reset_credits_expire_with_the_soonest_available_one() {
+        let usage = plan_usage(&json!({
+            "rateLimits": { "primary": { "usedPercent": 1 } },
+            "rateLimitResetCredits": { "availableCount": 1, "credits": [
+                { "id": "a", "status": "available", "expiresAt": 1_800_000_000, "grantedAt": 1, "resetType": "x" },
+                { "id": "b", "status": "redeemed", "expiresAt": 1_700_000_000, "grantedAt": 1, "resetType": "x" },
+            ]},
+        }))
+        .unwrap();
+        let credits = usage.reset_credits.unwrap();
+        assert_eq!(credits.available, 1);
+        assert_eq!(
+            credits.next_expires_at,
+            Some(UNIX_EPOCH + Duration::from_secs(1_800_000_000))
+        );
+    }
+
+    #[test]
+    fn rate_limit_notification_carries_no_credits() {
+        let usage =
+            plan_usage(&json!({ "rateLimits": { "primary": { "usedPercent": 1 } } })).unwrap();
+        assert_eq!(usage.reset_credits, None);
     }
 
     #[test]

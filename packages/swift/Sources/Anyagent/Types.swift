@@ -1412,17 +1412,20 @@ public enum SessionStatus: String, Codable, Sendable, Equatable {
 public struct PlanUsage: Codable, Sendable, Equatable {
     public var plan: String?
     public var windows: [UsageWindow]
+    public var resetCredits: ResetCredits?
     public var fetchedAt: SystemTime
 
-    public init(plan: String? = nil, windows: [UsageWindow], fetchedAt: SystemTime) {
+    public init(plan: String? = nil, windows: [UsageWindow], resetCredits: ResetCredits? = nil, fetchedAt: SystemTime) {
         self.plan = plan
         self.windows = windows
+        self.resetCredits = resetCredits
         self.fetchedAt = fetchedAt
     }
 
     enum CodingKeys: String, CodingKey {
         case plan
         case windows
+        case resetCredits = "reset_credits"
         case fetchedAt = "fetched_at"
     }
 }
@@ -1442,6 +1445,22 @@ public struct UsageWindow: Codable, Sendable, Equatable {
         case label
         case usedPercent = "used_percent"
         case resetsAt = "resets_at"
+    }
+}
+
+/// Limit resets the account can use now.
+public struct ResetCredits: Codable, Sendable, Equatable {
+    public var available: UInt32
+    public var nextExpiresAt: SystemTime?
+
+    public init(available: UInt32, nextExpiresAt: SystemTime? = nil) {
+        self.available = available
+        self.nextExpiresAt = nextExpiresAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case available
+        case nextExpiresAt = "next_expires_at"
     }
 }
 

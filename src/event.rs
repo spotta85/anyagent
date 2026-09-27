@@ -368,6 +368,9 @@ pub struct PlanUsage {
     /// The plan the quota belongs to ("max", "edu"), when the agent names it.
     pub plan: Option<String>,
     pub windows: Vec<UsageWindow>,
+    /// Banked limit resets on the account. `None` when this report does not carry them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_credits: Option<ResetCredits>,
     pub fetched_at: SystemTime,
 }
 
@@ -378,6 +381,15 @@ pub struct UsageWindow {
     pub label: String,
     pub used_percent: u8,
     pub resets_at: Option<SystemTime>,
+}
+
+/// Limit resets the account can use now.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ResetCredits {
+    pub available: u32,
+    /// When the next one to be used expires.
+    pub next_expires_at: Option<SystemTime>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

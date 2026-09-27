@@ -2202,6 +2202,17 @@
             "$ref": "#/definitions/UsageWindow"
           }
         },
+        "reset_credits": {
+          "description": "Banked limit resets on the account. `None` when this report does not carry them.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResetCredits"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "fetched_at": {
           "$ref": "#/definitions/SystemTime"
         }
@@ -2238,6 +2249,31 @@
       "required": [
         "label",
         "used_percent"
+      ]
+    },
+    "ResetCredits": {
+      "description": "Limit resets the account can use now.",
+      "type": "object",
+      "properties": {
+        "available": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "next_expires_at": {
+          "description": "When the next one to be used expires.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SystemTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "available"
       ]
     },
     "Diagnostic": {
