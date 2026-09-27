@@ -788,6 +788,54 @@ async fn a_question_is_typed_and_the_answer_reaches_the_agent() {
     session.close().await.unwrap();
 }
 
+/// ExitPlanMode's plan arrives as `PlanProposed` right before its permission
+/// request; an empty plan leaves only the request.
+#[tokio::test]
+async fn exit_plan_mode_proposes_the_plan_before_its_request() {
+    let (session, mut events) = open("plan", "--plan").await;
+    for (prompt, plan) in [
+        ("plan it", Some("# Plan\n\n1. Add README.md")),
+        ("no-plan", None),
+    ] {
+        session.prompt(prompt).await.unwrap();
+        let mut kinds = Vec::new();
+        loop {
+            let kind = next(&mut events).await.kind;
+            if let EventKind::RequestOpened(Request::Permission(request)) = &kind {
+                assert_eq!(request.tool.title, "ExitPlanMode");
+                session.answer(request.id.clone(), allow()).await.unwrap();
+            }
+            let ended = matches!(kind, EventKind::TurnEnded { .. });
+            kinds.push(kind);
+            if ended {
+                break;
+            }
+        }
+        let proposed: Vec<_> = kinds
+            .iter()
+            .filter_map(|kind| match kind {
+                EventKind::PlanProposed { markdown } => Some(markdown.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(proposed, Vec::from_iter(plan));
+        let request = kinds
+            .iter()
+            .position(|kind| matches!(kind, EventKind::RequestOpened(_)))
+            .unwrap();
+        assert_eq!(
+            matches!(kinds[request - 1], EventKind::PlanProposed { .. }),
+            plan.is_some(),
+            "{kinds:?}"
+        );
+        assert!(kinds.contains(&EventKind::TextDelta {
+            message_id: MessageId::new("msg_1"),
+            text: "plan=allow".into(),
+        }));
+    }
+    session.close().await.unwrap();
+}
+
 /// Agent death mid-turn fails turn and yields ProcessExited status 3 with stderr.
 #[tokio::test]
 async fn agent_death_mid_turn_fails_the_turn() {
