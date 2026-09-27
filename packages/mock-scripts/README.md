@@ -19,6 +19,8 @@ from its start.
 | `plan.json` | a live `mode` option (default, plan); a turn that proposes a plan, then a text turn | T3 port |
 | `rollback-refused.json` | advertises `Rollback`; every rollback is refused with a reason | T3 port |
 | `plan-exit.json` | opens in `plan`; a turn that proposes a plan and asks to leave plan mode, then a turn with an ordinary permission | T3 port |
+| `live-events.json` | a running MCP tool, its `ToolProgress`, a `TurnDiff`, a `ModelRerouted`, the tool completing, end | T3 port |
+| `subagent.json` | a `Subagent` tool with `subagent` info (role, model, summary, tokens), a nested `ToolProgress` under it, its completion, end | T3 port |
 
 The format is the mock's `Script` as JSON; every field is optional.
 Steps: `{"Emit": <EventKind>}`, `"AwaitAnswer"`, `{"End": <StopReason>}`,
