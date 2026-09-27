@@ -536,8 +536,8 @@ async fn open_thread(
     })
 }
 
-/// The effective config (`config/read`, 0.154.0) under the `configure` choices, shaped like the
-/// `thread/start` reply. Unset values read as codex's defaults (a trusted dir's thread: workspace-write).
+/// `config/read` (0.154.0) under the `configure` choices, shaped like `thread/start`'s reply.
+/// Unset values read as codex's defaults (a trusted dir's thread would say workspace-write).
 async fn effective_config(
     wire: &mut Wire,
     request: &ConnectRequest,
@@ -1686,8 +1686,8 @@ impl Drive {
         Ok(items)
     }
 
-    /// `turn/start` params: the selected options (a `default` tier left out), plan mode as the
-    /// collaboration mode, the output schema. `summary` turns on reasoning summaries (probed 2026-09-03).
+    /// `turn/start` params: selected options (no `default` tier), plan mode, the output schema.
+    /// `summary` turns on reasoning summaries (probed 2026-09-03).
     fn turn_params(&mut self, items: Vec<Value>) -> Value {
         let mut params = json!({
             "threadId": self.thread_id,

@@ -162,22 +162,15 @@ impl Runtime {
                 options: options.clone(),
             })
             .await?;
-        // Only an adapter that advertises it honours a schema; the dropped connection stops the agent.
+        // Only an adapter that advertises it honours a schema; the dropped connection stops it.
         let capabilities = &connection.info.details.capabilities;
         if options.output_schema.is_some() && !capabilities.supports(Capability::OutputSchema) {
             return Err(AgentError::UnsupportedFeature("output schema".into()));
         }
         Ok(session::start(agent.clone(), connection, &options))
     }
-    /// One-shot generation: prompt in, the agent's reply text out. Opens a
-    /// throwaway session with tools disabled where the wire allows (claude,
-    /// pi) and every permission declined elsewhere, gathers the text until
-    /// the turn ends, and closes. Requires a new session; a tool event or a
-    /// question requiring a choice cancels generation. Include context
-    /// inline: path attachments cannot be opened without tools. Like the
-    /// probes, the session is never persisted (claude, codex, pi) or is
-    /// deleted at close (opencode), so it stays out of the user's history.
-    /// With an output schema the reply is the turn's final message only.
+    /// One-shot text: a throwaway, hands-off session (no tools, or every request declined) runs one
+    /// prompt; a tool event fails it. With an output schema the reply is the final message only.
     pub async fn generate(
         &self,
         agent: &AgentInstallation,
@@ -211,9 +204,8 @@ impl Runtime {
         reply
     }
 
-    /// Opens a throwaway session in the temp dir, reads the details the
-    /// handshake learned, and closes (codex stops before its thread). A
-    /// logged-out agent is a result, not an error.
+    /// The details a throwaway handshake in the temp dir learns (codex opens no thread).
+    /// A logged-out agent is a result, not an error.
     pub async fn probe(&self, agent: &AgentInstallation) -> Result<AgentDetails, AgentError> {
         self.probe_with(agent, throwaway_options()).await
     }
@@ -348,9 +340,8 @@ fn require_new(options: &SessionOptions, call: &str) -> Result<(), AgentError> {
     }
 }
 
-/// Sends the prompt and gathers the agent's own text (not subagents') until
-/// the turn ends, or only its last message's with `final_only`. Requests are
-/// declined so the agent stays hands-off.
+/// Sends the prompt and gathers the agent's own text (not subagents', only the last message's
+/// with `final_only`) until the turn ends, declining requests to stay hands-off.
 async fn collect_reply(
     session: &Session,
     events: &mut Events,
