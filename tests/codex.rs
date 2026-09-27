@@ -1076,6 +1076,28 @@ async fn progress_diff_and_reroute_are_events() {
     session.close().await.unwrap();
 }
 
+/// A diff and a reroute that trail `turn/completed` are dropped: no agent turn
+/// opens that no `turn/completed` would end, and the session stays idle.
+#[tokio::test]
+async fn a_late_diff_and_reroute_open_no_turn() {
+    let (session, mut events) = open("late-events", "").await;
+    session.prompt("late-events please").await.unwrap();
+    complete_turn(&session, &mut events, PermissionChoice::AllowOnce).await;
+    let mut late = Vec::new();
+    while let Ok(Some(event)) =
+        tokio::time::timeout(Duration::from_millis(300), events.next()).await
+    {
+        late.push(event.unwrap().kind);
+    }
+    assert!(
+        late.iter()
+            .all(|k| matches!(k, EventKind::StatusChanged(_))),
+        "{late:?}"
+    );
+    assert_eq!(session.status(), anyagent::SessionStatus::Idle);
+    session.close().await.unwrap();
+}
+
 /// Steer sent before turn/started is held until accepted and folded via Steered delivery.
 #[tokio::test]
 async fn a_steer_folds_into_the_running_turn() {

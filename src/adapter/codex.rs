@@ -1135,6 +1135,9 @@ impl Drive {
                 })
                 .await
             }
+            // Outside a turn these are late or replayed; content would open a turn
+            // that no `turn/completed` ever ends.
+            "turn/diff/updated" | "model/rerouted" if !self.turn_started => Ok(()),
             // The turn's whole diff so far (probed 2026-09-27, 0.154.0).
             "turn/diff/updated" => {
                 let unified = params["diff"].as_str().unwrap_or_default().to_owned();
