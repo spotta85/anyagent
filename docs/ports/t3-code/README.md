@@ -36,13 +36,10 @@ Server `provider/` folder, hand-written, before → after: 48,893 → 16,955 lin
 
 | Row | claude | codex |
 |---|---|---|
-| discover, open+stream, tool+diff, permission, deny, question, model switch, cancel, resume, rollback, generate | PASS | PASS |
-| subagent (task events, nested tools, no subagent text in the chat) | PASS | SKIP (claude only) |
-| usage (per-turn tokens) | FAIL: gaps row "Per-turn token usage" | same |
+| discover, open+stream, tool+diff, permission, deny, question, model switch, cancel, resume, rollback, usage, generate | PASS | PASS |
+| subagent | PASS | SKIP (the prompt names claude's Agent tool) |
 
-Full matrix from Task 4. After the final review fixes, rerun: claude open+stream, tool+diff, subagent, resume, generate and codex resume, all PASS.
-
-T3's server suite: 307/307 files green on the fork at Task 4; after the final review fixes, the `provider/anyagent/` suite (77 tests) and the server and scripts typecheck. Typecheck green on all 13 workspace projects at Task 4.
+T3's server suite: 307/307 files green on the fork. Typecheck green on all 13 workspace projects.
 
 ## Reproduce
 
@@ -59,7 +56,6 @@ bash /path/to/anyagent/docs/ports/t3-code/measure.sh   # the per-bucket table ab
 
 ## Known limits of the fork
 
-- Codex gets no T3 MCP tools (browser, devices, PR linking) until anyagent fixes the `-c` flag order and moves the bearer token out of argv (gaps row "Codex ignores declared MCP servers").
 - Threads created before the port, and threads whose resume token the agent no longer knows, reopen a fresh provider session on their next turn, with one warning.
 - Antigravity's in-app sign-in is gone; anyagent reports the login command instead (gaps row "In-app login").
 - Background provider refresh opens a throwaway session per agent (gaps row "Session-free status check").
