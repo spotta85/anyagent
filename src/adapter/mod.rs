@@ -489,9 +489,11 @@ pub(crate) fn first_prompt_instructions(options: &SessionOptions) -> Option<Stri
 }
 
 /// Puts owed instructions before the prompt's text, separated by a blank
-/// line; later prompts pass through untouched.
+/// line. A slash command passes untouched and leaves them for the next prompt.
 pub(crate) fn with_instructions(owed: &mut Option<String>, mut input: Input) -> Input {
-    if let Some(text) = owed.take() {
+    if !input.text.starts_with('/')
+        && let Some(text) = owed.take()
+    {
         input.text = format!("{text}\n\n{}", input.text);
     }
     input
