@@ -42,8 +42,8 @@ use crate::event::Extensions;
 use crate::event::{
     Answer, Choice, ChoiceId, CompletionSource, DiagnosticLevel, EventKind, MessageId,
     PermissionChoice, PermissionRequest, Question, QuestionAnswer, QuestionId, QuestionRequest,
-    RawTool, Request, RequestId, StopReason, ToolId, ToolInput, ToolKind, ToolStatus, ToolUpdate,
-    TurnUsage,
+    RawTool, Request, RequestId, StopReason, SubagentInfo, ToolId, ToolInput, ToolKind, ToolStatus,
+    ToolUpdate, TurnUsage,
 };
 use crate::process::{self, Spawn};
 
@@ -1795,10 +1795,20 @@ fn mcp_kind(name: &str, servers: &[String]) -> Option<ToolKind> {
         })
 }
 
-/// Applies a tool state snapshot: status, decoded input, and output.
+/// Applies a tool state snapshot: status, decoded input, output, and a task's subagent.
 fn apply_state(tool: &mut ToolUpdate, name: &str, state: &Value) {
     let input = &state["input"];
     apply_input(tool, name, input);
+    // A task names its agent in `input.subagent_type` and its model in `metadata.model` (live 1.18.29, 2026-09-27).
+    let role = input["subagent_type"].as_str().map(str::to_owned);
+    let model = model_value(&state["metadata"]["model"]);
+    if name == "task" && (role.is_some() || model.is_some()) {
+        tool.subagent = Some(SubagentInfo {
+            role,
+            model,
+            ..SubagentInfo::default()
+        });
+    }
     match state["status"].as_str().unwrap_or_default() {
         "pending" => tool.status = ToolStatus::Pending,
         "running" => tool.status = ToolStatus::Running,

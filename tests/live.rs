@@ -1208,7 +1208,7 @@ async fn opencode_child_session_permissions_reach_the_caller() {
         )
         .await
         .unwrap();
-    let mut approved = 0;
+    let (mut approved, mut info) = (0, None);
     loop {
         let event = next(&mut events, "opencode: child permission").await;
         match event.kind {
@@ -1216,10 +1216,17 @@ async fn opencode_child_session_permissions_reach_the_caller() {
                 approved += 1;
                 session.answer(request.id, allow()).await.unwrap();
             }
+            EventKind::ToolUpdated(tool) if tool.kind == ToolKind::Subagent => {
+                println!("opencode: subagent {:?} {:?}", tool.status, tool.subagent);
+                info = tool.subagent.or(info);
+            }
             EventKind::TurnEnded { .. } => break,
             _ => {}
         }
     }
+    // The task names its agent and the child's model.
+    let info = info.expect("opencode: no subagent info");
+    assert!(info.role.is_some() && info.model.is_some(), "{info:?}");
     // The task tool asks on the root, its bash on the child.
     assert!(
         approved >= 2,
