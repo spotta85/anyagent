@@ -51,6 +51,24 @@ The live checks and reviews corrected the plan in these places. The task text be
 | 6 | prepend to the first prompt | A first prompt that starts with `/` is sent untouched; the instructions go with the next one |
 | 8 | reuse the MCP live test server | None existed. A stdio fixture server and the live test `mcp_server_tools_are_called` were added |
 
+## Decisions made while building
+
+Made without asking, to keep the work moving. Each one is small to undo.
+
+| Decision | Why | Cost if wrong |
+|---|---|---|
+| claude banked resets come only from the CLI's own reply; no direct API call with the login token | anyagent never reads credentials | claude shows no banked resets until the CLI reports them |
+| The request that approves a proposed plan always reaches the app, even under `AutoApprove` | A plan exists to be reviewed; T3's default mode maps to `AutoApprove` | A full-access app answers one request per plan |
+| T3 declines claude's exit-plan request itself | Upstream T3 did; its "Implement plan" button expects the turn to stop at the plan | A user cannot approve a plan inside the same turn |
+| A first prompt that starts with `/` is sent untouched; instructions go with the next prompt (ACP agents, antigravity) | A slash command with text in front of it silently stops being a command | Instructions arrive one prompt late in that case |
+| claude instructions and MCP servers ride the control channel, not the command line | Arguments are readable by other local users | None found; both live-verified |
+| The wire recording writes `<redacted>` for declared MCP servers' header and env values | T3 keeps the recording on for every session | The recording is not byte-exact for those frames |
+| `cancel_turn` with a stale turn id does nothing, `clear_queue` included | The caller aimed at a turn that is gone | An app that wants the queue cleared anyway calls `cancel(true)` |
+| opencode's larger session updates are accepted (66 KB to 160 KB with 564 models) | Shrinking them would change the wire for existing callers | About 90 KB more per opencode session update, a few per session |
+| antigravity turn usage was built only after a live probe showed how its tokens are counted | No guessed wire facts | None |
+| cursor is not forced into its read-only `ask` mode for approval-required threads | The adapter hard-codes no agent mode name other than `plan` | On cursor, approval-required threads write files without asking |
+| Left out: withdraw a permission, login, redeem, feedback upload, tool progress, model rerouted, turn diff, subagent progress, output schema, session-free probe for codex and ACP | Keep it clean | Those rows stay open in [gaps.md](gaps.md) |
+
 ## Global Constraints
 
 These bind every task.
