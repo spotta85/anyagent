@@ -1683,9 +1683,15 @@ fn plan_usage(result: &Value) -> Option<PlanUsage> {
         Value::Null => &result["rateLimits"],
         codex => codex,
     };
+    // Another limit's snapshot (a model-specific one) is not the account's.
+    if rate_limits["limitId"]
+        .as_str()
+        .is_some_and(|id| id != "codex")
+    {
+        return None;
+    }
     let plan = rate_limits["planType"].as_str().map(str::to_owned);
-    // `windowDurationMins` is sometimes absent: fall back to the plan's known
-    // pair like T3 (5h/weekly, the secondary monthly on free/go plans).
+    // Durations can be absent: fall back to 5h/weekly (monthly secondary on free/go).
     let monthly = matches!(plan.as_deref(), Some("free" | "go"));
     let secondary_default = if monthly { 43200 } else { 10080 };
     let windows: Vec<UsageWindow> = [("primary", 300), ("secondary", secondary_default)]
@@ -1715,7 +1721,7 @@ fn plan_usage(result: &Value) -> Option<PlanUsage> {
 /// `rateLimitResetCredits` → the usable count and the soonest expiry among
 /// `available` credits. `None` when the field is absent (the notification).
 fn reset_credits(summary: &Value) -> Option<ResetCredits> {
-    let available = u32::try_from(summary["availableCount"].as_u64()?).ok()?;
+    let available = u32::try_from(summary["availableCount"].as_u64()?).unwrap_or(u32::MAX);
     let next_expires_at = summary["credits"]
         .as_array()
         .into_iter()
@@ -1993,7 +1999,7 @@ mod tests {
 
     #[test]
     fn plan_usage_reads_the_codex_limit_and_zero_credits() {
-        // Live 0.154.0 shape: the legacy field names another limit here.
+        // The 0.154.0 shape, with the legacy field set to another limit.
         let usage = plan_usage(&json!({
             "rateLimits": { "limitId": "other", "primary": { "usedPercent": 90, "windowDurationMins": 300 } },
             "rateLimitsByLimitId": { "codex": {
@@ -2032,6 +2038,15 @@ mod tests {
         let usage =
             plan_usage(&json!({ "rateLimits": { "primary": { "usedPercent": 1 } } })).unwrap();
         assert_eq!(usage.reset_credits, None);
+    }
+
+    #[test]
+    fn a_push_for_another_limit_is_skipped() {
+        let other =
+            json!({ "rateLimits": { "limitId": "other", "primary": { "usedPercent": 1 } } });
+        assert_eq!(plan_usage(&other), None);
+        let unnamed = json!({ "rateLimits": { "primary": { "usedPercent": 1 } } });
+        assert_eq!(plan_usage(&unnamed).unwrap().windows.len(), 1);
     }
 
     #[test]
