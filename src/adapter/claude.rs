@@ -1630,11 +1630,11 @@ fn title(name: &str, input: &Value) -> String {
     }
 }
 
-/// Applies a `tool_result` block and its typed `tool_use_result`. A result
-/// carrying a `backgroundTaskId` means the tool keeps running in the
-/// background; `task_notification` finishes it later.
+/// Applies a `tool_result` block and its typed `tool_use_result`. A backgrounded
+/// tool keeps running; `task_notification` finishes it later.
 fn complete_tool(tool: &mut ToolUpdate, block: &Value, typed: &Value) {
-    tool.status = if typed["backgroundTaskId"].is_string() {
+    // Bash names a `backgroundTaskId`; a background Agent says `async_launched` (2.1.283).
+    tool.status = if typed["backgroundTaskId"].is_string() || typed["status"] == "async_launched" {
         ToolStatus::Running
     } else if block["is_error"].as_bool().unwrap_or(false) {
         ToolStatus::Failed

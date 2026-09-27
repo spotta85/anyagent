@@ -1,7 +1,8 @@
 // Claude stream-json fixture agent, shaped like the recordings in this
 // directory (claude 2.1.241). Flags: --question (AskUserQuestion turn),
 // --eof (die mid-turn), --wake (background task wakes an agent-originated
-// turn), --subagent (nested transcript with parent_tool_use_id),
+// turn), --subagent (nested transcript with parent_tool_use_id and task
+// frames), --bg-subagent (a background Agent reports after its turn ended),
 // --logged-out (initialize reports no token source), --api-key (an env
 // key supplies auth, still with `tokenSource: "none"`), --bedrock (an
 // AWS cloud-provider login, no Anthropic identity at all),
@@ -295,6 +296,31 @@ async function runTurn(m) {
     delta({ type: 'text_delta', text: 'BG-DONE' });
     ev({ type: 'message_stop' });
     resultFrame({ user_message_uuid: null, result: 'BG-DONE' });
+    turn = null;
+    return;
+  }
+
+  // A background Agent (probed 2026-09-27, 2.1.283): its tool_result only says
+  // `async_launched`; progress and the notification arrive after the turn ended.
+  if (flag('--bg-subagent')) {
+    msgStart('msg_1');
+    assistantTool('toolu_bga', 'Agent', { description: 'pong check', subagent_type: 'general-purpose', model: 'haiku', run_in_background: true, prompt: 'Reply PONG.' });
+    task('task_started', { description: 'pong check', subagent_type: 'general-purpose', is_backgrounded: true, task_type: 'local_agent' }, 'toolu_bga');
+    send({ type: 'user', message: { role: 'user', content: [{ tool_use_id: 'toolu_bga', type: 'tool_result', content: [{ type: 'text', text: 'Async agent launched successfully.' }] }] }, session_id: S, uuid: uid(), parent_tool_use_id: null, tool_use_result: { isAsync: true, status: 'async_launched', agentId: 'a1', description: 'pong check', resolvedModel: 'claude-haiku-4-5-20251001' } });
+    delta({ type: 'text_delta', text: 'launched' });
+    ev({ type: 'message_stop' });
+    resultFrame({ user_message_uuid: u });
+    life(u, 'completed');
+    turn = null;
+    await sleep(150);
+    task('task_progress', { description: 'Running Echo the word hi', subagent_type: 'general-purpose', usage: { total_tokens: 20584, tool_uses: 1, duration_ms: 1610 }, last_tool_name: 'Bash' }, 'toolu_bga');
+    task('task_notification', { status: 'completed', summary: 'PONG', usage: { total_tokens: 21582, tool_uses: 1, duration_ms: 2716 } }, 'toolu_bga');
+    // The finished agent wakes the parent with no user frame.
+    turn = { interrupted: false };
+    msgStart('msg_w');
+    delta({ type: 'text_delta', text: 'PONG' });
+    ev({ type: 'message_stop' });
+    resultFrame({ user_message_uuid: null, result: 'PONG' });
     turn = null;
     return;
   }
