@@ -686,10 +686,17 @@ enum Pending {
 /// A server→client request waiting for `answer`.
 struct PendingRequest {
     wire_id: u64,
-    /// Present when the request is a `requestUserInput`.
-    questions: Option<Vec<Question>>,
-    /// An MCP tool-call approval: replies carry an elicitation `action`.
-    elicitation: bool,
+    reply: Reply,
+}
+
+/// The reply shape a server request takes.
+enum Reply {
+    /// A command or file approval: `{decision}`.
+    Decision,
+    /// An MCP tool-call approval elicitation: `{action}`.
+    Action,
+    /// A `requestUserInput`: answers keyed by these questions.
+    Answers(Vec<Question>),
 }
 
 struct Drive {
@@ -792,10 +799,10 @@ impl Drive {
             DriverCommand::Cancel => {
                 self.pending_steer = None;
                 for (_, pending) in std::mem::take(&mut self.requests) {
-                    let response = match pending.questions {
-                        Some(_) => json!({ "answers": {} }),
-                        None if pending.elicitation => json!({ "action": "cancel" }),
-                        None => json!({ "decision": "cancel" }),
+                    let response = match pending.reply {
+                        Reply::Decision => json!({ "decision": "cancel" }),
+                        Reply::Action => json!({ "action": "cancel" }),
+                        Reply::Answers(_) => json!({ "answers": {} }),
                     };
                     self.wire.respond(pending.wire_id, response).await?;
                 }
@@ -1330,14 +1337,9 @@ impl Drive {
             // names only the item; the preceding `item/started` carries the
             // command or the diff.
             "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
-                self.requests.insert(
-                    id.clone(),
-                    PendingRequest {
-                        wire_id,
-                        questions: None,
-                        elicitation: false,
-                    },
-                );
+                let reply = Reply::Decision;
+                self.requests
+                    .insert(id.clone(), PendingRequest { wire_id, reply });
                 Request::Permission(PermissionRequest {
                     id,
                     tool: self.tool_for(method, params),
@@ -1353,14 +1355,9 @@ impl Drive {
             "mcpServer/elicitation/request"
                 if params["_meta"]["codex_approval_kind"] == "mcp_tool_call" =>
             {
-                self.requests.insert(
-                    id.clone(),
-                    PendingRequest {
-                        wire_id,
-                        questions: None,
-                        elicitation: true,
-                    },
-                );
+                let reply = Reply::Action;
+                self.requests
+                    .insert(id.clone(), PendingRequest { wire_id, reply });
                 // `persist` lists the remember forms offered; only "session" maps to a choice.
                 let persist = &params["_meta"]["persist"];
                 let session = *persist == "session"
@@ -1383,14 +1380,9 @@ impl Drive {
             }
             "item/tool/requestUserInput" => {
                 let questions = questions(&params["questions"]);
-                self.requests.insert(
-                    id.clone(),
-                    PendingRequest {
-                        wire_id,
-                        questions: Some(questions.clone()),
-                        elicitation: false,
-                    },
-                );
+                let reply = Reply::Answers(questions.clone());
+                self.requests
+                    .insert(id.clone(), PendingRequest { wire_id, reply });
                 Request::Question(QuestionRequest { id, questions })
             }
             other => {
@@ -1416,16 +1408,17 @@ impl Drive {
         let Some(pending) = self.requests.remove(&request) else {
             return Ok(());
         };
-        let response = match (&pending.questions, answer) {
-            (None, Answer::Permission(choice)) if pending.elicitation => {
-                elicitation_response(choice)
-            }
-            (None, Answer::Permission(choice)) => json!({ "decision": match choice {
+        let response = match (&pending.reply, answer) {
+            (Reply::Decision, Answer::Permission(choice)) => json!({ "decision": match choice {
                 PermissionChoice::AllowOnce => "accept",
                 PermissionChoice::AllowAlways => "acceptForSession",
                 _ => "decline",
             }}),
-            (Some(questions), Answer::Question(answers)) => question_response(questions, &answers),
+            (Reply::Action, Answer::Permission(choice)) => elicitation_response(choice),
+            (Reply::Answers(questions), Answer::Question(answers)) => {
+                question_response(questions, &answers)
+            }
+            // A shape mismatch; the engine refuses these before they get here.
             _ => json!({ "decision": "decline" }),
         };
         self.wire.respond(pending.wire_id, response).await?;
