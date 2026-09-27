@@ -433,6 +433,25 @@ async fn rollback_reverts_at_the_dropped_turns_user_message() {
     session.close().await.unwrap();
 }
 
+/// A failed message listing refuses the rollback with the real failure,
+/// not "nothing to roll back".
+#[tokio::test]
+async fn rollback_reports_a_failed_message_listing() {
+    let (session, mut events) = open("rollback-list-fails", "--messages-fail").await;
+    session.prompt("one").await.unwrap();
+    complete_turn(&session, &mut events, PermissionChoice::AllowOnce).await;
+    let err = session
+        .rollback(NonZeroU32::new(1).unwrap(), RollbackScope::Conversation)
+        .await
+        .err()
+        .unwrap();
+    assert!(
+        matches!(&err, AgentError::InvalidRequest(r) if r.starts_with("rollback rejected:") && r.contains("500")),
+        "{err}"
+    );
+    session.close().await.unwrap();
+}
+
 /// Fork cuts after the anchor message; no anchor forks at the tip.
 #[tokio::test]
 async fn fork_cuts_after_the_anchor_or_at_the_tip() {
