@@ -2435,7 +2435,7 @@
           ]
         },
         "source": {
-          "description": "Where the command comes from.",
+          "description": "Where the command comes from; absent on the wire means `Builtin`.",
           "allOf": [
             {
               "$ref": "#/definitions/CommandSource"
@@ -2452,7 +2452,7 @@
       "description": "Where a slash command comes from.",
       "oneOf": [
         {
-          "description": "Part of the agent.",
+          "description": "Not reported as a skill by the agent.",
           "type": "string",
           "const": "Builtin"
         },

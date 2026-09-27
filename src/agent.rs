@@ -417,7 +417,7 @@ pub struct SlashCommand {
     pub name: String,
     pub description: String,
     pub input_hint: Option<String>,
-    /// Where the command comes from.
+    /// Where the command comes from; absent on the wire means `Builtin`.
     #[serde(default, skip_serializing_if = "CommandSource::is_builtin")]
     pub source: CommandSource,
 }
@@ -427,7 +427,7 @@ pub struct SlashCommand {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum CommandSource {
-    /// Part of the agent.
+    /// Not reported as a skill by the agent.
     #[default]
     Builtin,
     /// A skill on disk. `scope` is the agent's own word for where it lives ("user", "repo").
