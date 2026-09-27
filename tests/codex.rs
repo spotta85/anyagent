@@ -1073,6 +1073,35 @@ async fn plan_usage_probe_reads_the_windows() {
     assert!(matches!(err, AgentError::AuthRequired { .. }), "{err}");
 }
 
+/// `plan_usage_with` launches with the options' config home, env and args,
+/// and caches per login: a new config home or env probes again, new args do not.
+#[tokio::test]
+async fn plan_usage_with_applies_the_options_and_caches_per_login() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.jsonl");
+    let runtime = Runtime::new();
+    let agent = AgentInstallation::at("codex", wrapper("usage-with", ""));
+    let base = SessionOptions::in_dir(dir.path()).env("FIXTURE_ARGV_LOG", log.to_string_lossy());
+    let home = dir.path().join("home");
+    let calls = [
+        base.clone().arg("--extra-flag"),
+        base.clone().arg("--other-flag"),
+        base.clone().config_home(&home),
+        base.clone().env("OTHER", "1"),
+    ];
+    for options in &calls {
+        runtime.plan_usage_with(&agent, options).await.unwrap();
+    }
+    let argv = common::logged_args(&log);
+    assert_eq!(
+        argv.len(),
+        3,
+        "the args-only change hit the cache: {argv:?}"
+    );
+    assert_eq!(argv[0], ["app-server", "--extra-flag"]);
+    assert!(home.is_dir(), "CODEX_HOME is created before the spawn");
+}
+
 /// requestUserInput question translates both ways even though capability not advertised.
 #[tokio::test]
 async fn a_question_request_translates_both_ways() {

@@ -171,13 +171,14 @@ pub(crate) trait Adapter: Send + Sync {
     /// Launch, handshake, and create the provider session.
     async fn connect(&self, request: ConnectRequest) -> Result<DriverConnection, AgentError>;
 
-    /// Plan quota for the logged-in account, from a short-lived process.
-    /// Default: this agent has no quota to report.
+    /// Plan quota for the login `options` point at, from a short-lived
+    /// process. Default: this agent has no quota to report.
     async fn plan_usage(
         &self,
         installation: &AgentInstallation,
+        options: &SessionOptions,
     ) -> Result<crate::event::PlanUsage, AgentError> {
-        let _ = installation;
+        let _ = (installation, options);
         Err(AgentError::UnsupportedFeature("plan usage".into()))
     }
 }

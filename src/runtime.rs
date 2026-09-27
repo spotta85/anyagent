@@ -5,7 +5,7 @@
 //! `open` connects and starts the engine, `generate` runs one prompt to text,
 //! `plan_usage` reads account quota.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -35,9 +35,12 @@ pub struct Runtime {
     /// Installations known without discovery (tests and pinned agents).
     pinned: Vec<AgentInstallation>,
     profiles: &'static [crate::catalog::AgentProfile],
-    /// `plan_usage` results per installation, kept for `USAGE_CACHE_TTL`.
-    usage_cache: Mutex<HashMap<(AgentId, PathBuf), (Instant, PlanUsage)>>,
+    /// `plan_usage` results per installation and login, kept for `USAGE_CACHE_TTL`.
+    usage_cache: Mutex<HashMap<UsageKey, (Instant, PlanUsage)>>,
 }
+
+/// One cached login: agent, executable, config home, env. Args are not part of it.
+type UsageKey = (AgentId, PathBuf, Option<PathBuf>, BTreeMap<String, String>);
 
 impl Default for Runtime {
     fn default() -> Self {
@@ -175,11 +178,7 @@ impl Runtime {
         options: SessionOptions,
         prompt: impl Into<Input>,
     ) -> Result<String, AgentError> {
-        if !matches!(options.start, SessionStart::New) {
-            return Err(AgentError::InvalidConfiguration(
-                "generate requires a new session".into(),
-            ));
-        }
+        require_new(&options, "generate")?;
         // Hands-off regardless of the caller's mode: AutoApprove would let
         // the agent run tools before any request reached this loop.
         let mut options = options.permission_mode(PermissionMode::Ask);
@@ -209,7 +208,19 @@ impl Runtime {
     /// handshake learned, and closes. A logged-out agent is a result, not
     /// an error.
     pub async fn probe(&self, agent: &AgentInstallation) -> Result<AgentDetails, AgentError> {
-        let opened = self.open(agent, throwaway_options()).await;
+        self.probe_with(agent, SessionOptions::in_dir(std::env::temp_dir()))
+            .await
+    }
+
+    /// `probe` with the caller's options: dir, env, args, config home. Always throwaway.
+    pub async fn probe_with(
+        &self,
+        agent: &AgentInstallation,
+        mut options: SessionOptions,
+    ) -> Result<AgentDetails, AgentError> {
+        require_new(&options, "probe")?;
+        options.throwaway = true;
+        let opened = self.open(agent, options).await;
         // Not logged is reported as a detail.
         let (session, mut events) = match opened {
             Err(AgentError::AuthRequired { login }) => {
@@ -263,7 +274,23 @@ impl Runtime {
     /// an API-key login) return `UnsupportedFeature`. May spawn a short-lived
     /// agent process; results are cached for 60 s.
     pub async fn plan_usage(&self, agent: &AgentInstallation) -> Result<PlanUsage, AgentError> {
-        let key = (agent.id.clone(), agent.executable_path.clone());
+        self.plan_usage_with(agent, &SessionOptions::in_dir(std::env::temp_dir()))
+            .await
+    }
+
+    /// `plan_usage` for the login these options point at.
+    pub async fn plan_usage_with(
+        &self,
+        agent: &AgentInstallation,
+        options: &SessionOptions,
+    ) -> Result<PlanUsage, AgentError> {
+        require_new(options, "plan usage")?;
+        let key = (
+            agent.id.clone(),
+            agent.executable_path.clone(),
+            options.config_home.clone(),
+            options.env.clone(),
+        );
         if let Some((at, usage)) = self.usage_cache.lock().unwrap().get(&key)
             && at.elapsed() < USAGE_CACHE_TTL
         {
@@ -273,7 +300,7 @@ impl Runtime {
             .adapters
             .get(&agent.id)
             .ok_or_else(|| AgentError::UnsupportedFeature("plan usage".into()))?;
-        let usage = adapter.plan_usage(agent).await?;
+        let usage = adapter.plan_usage(agent, options).await?;
         self.usage_cache
             .lock()
             .unwrap()
@@ -298,6 +325,16 @@ fn throwaway_options() -> SessionOptions {
     let mut options = SessionOptions::in_dir(std::env::temp_dir());
     options.throwaway = true;
     options
+}
+
+/// Refuses a resume or fork for a call that only ever starts a new session.
+fn require_new(options: &SessionOptions, call: &str) -> Result<(), AgentError> {
+    match options.start {
+        SessionStart::New => Ok(()),
+        _ => Err(AgentError::InvalidConfiguration(format!(
+            "{call} requires a new session"
+        ))),
+    }
 }
 
 /// Sends the prompt and gathers the agent's own text (not subagents') until
@@ -506,8 +543,10 @@ mod tests {
         }
     }
 
+    /// `generate`, `probe_with` and `plan_usage_with` refuse a resume or fork
+    /// before anything launches.
     #[tokio::test]
-    async fn generate_rejects_existing_sessions_before_launch() {
+    async fn one_shot_calls_reject_existing_sessions_before_launch() {
         let runtime = Runtime::new();
         let agent = AgentInstallation::at("pi", "/nonexistent/pi");
         for start in [
@@ -520,7 +559,15 @@ mod tests {
             let mut options = SessionOptions::in_dir(std::env::temp_dir());
             options.start = start;
             assert!(matches!(
-                runtime.generate(&agent, options, "go").await,
+                runtime.generate(&agent, options.clone(), "go").await,
+                Err(AgentError::InvalidConfiguration(_))
+            ));
+            assert!(matches!(
+                runtime.probe_with(&agent, options.clone()).await,
+                Err(AgentError::InvalidConfiguration(_))
+            ));
+            assert!(matches!(
+                runtime.plan_usage_with(&agent, &options).await,
                 Err(AgentError::InvalidConfiguration(_))
             ));
         }

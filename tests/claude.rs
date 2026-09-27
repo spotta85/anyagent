@@ -446,6 +446,24 @@ async fn runtime_plan_usage_probes_without_a_session_and_caches() {
     assert_eq!(again.fetched_at, usage.fetched_at);
 }
 
+/// `plan_usage_with` spawns its short-lived process with the options' env
+/// and args.
+#[tokio::test]
+async fn plan_usage_with_applies_env_and_args() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.jsonl");
+    let agent = AgentInstallation::at("claude", wrapper("usage-with", ""));
+    let options = SessionOptions::in_dir(dir.path())
+        .env("FIXTURE_ARGV_LOG", log.to_string_lossy())
+        .arg("--extra-flag");
+    Runtime::new()
+        .plan_usage_with(&agent, &options)
+        .await
+        .unwrap();
+    let argv = common::logged_args(&log);
+    assert_eq!(argv[0].last().unwrap(), "--extra-flag", "{argv:?}");
+}
+
 /// Handshake fills version, auth, 9 capabilities (!Steer), commands, and model/effort selects.
 #[tokio::test]
 async fn the_handshake_fills_details() {
