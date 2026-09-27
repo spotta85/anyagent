@@ -102,8 +102,11 @@ anyagent starts `opencode serve` on a private localhost port per session,
 gated by a per-session secret, and drives its HTTP + SSE wire. Task-tool
 child sessions nest as subagents. No steer (mid-turn prompts queue) and no
 plan quota. Pass a model as `configure("model", "provider/id")`; opencode's
-free `opencode/…` models need no key. To drive it over ACP instead:
-`AgentInstallation::acp("opencode", path, ["acp"])`.
+free `opencode/…` models need no key. Client MCP servers (stdio, HTTP, SSE)
+are added with `POST /mcp` at open. opencode keeps them per server process,
+and each session has its own, so they last for that session. A server
+opencode cannot connect fails `open` with `InvalidConfiguration`. To drive it
+over ACP instead: `AgentInstallation::acp("opencode", path, ["acp"])`.
 </Accordion>
 
 <Accordion title="pi">

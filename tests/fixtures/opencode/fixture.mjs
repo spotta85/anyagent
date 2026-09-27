@@ -7,6 +7,7 @@
 // tool), "sleep" (only an abort ends the turn), "child" (a task-tool child
 // session runs and asks permission), "die" (exit mid-turn).
 import { createServer } from 'node:http';
+import { existsSync } from 'node:fs';
 
 const flag = (name) => process.argv.includes(name);
 const argAfter = (name) => { const i = process.argv.indexOf(name); return i > -1 ? process.argv[i + 1] : undefined; };
@@ -20,6 +21,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sessions = {};
 let sesN = 0, msgN = 0, partN = 0, askN = 0;
 const bus = new Set();
+// `POST /mcp` bodies as received (echoed into the turn) and the status map.
+const mcpAdds = [], mcpStatus = {};
 const busy = {};
 const waiters = {};
 const emit = (type, properties) => { const line = `data: ${JSON.stringify({ type, properties })}\n\n`; for (const res of bus) res.write(line); };
@@ -66,6 +69,7 @@ async function runTurn(ses, body, text) {
   if (prompt.includes('Attached files:')) say('ref=1 ');
   if (ses.reverted) say(`reverted=${ses.reverted} `);
   if (ses.fork !== undefined) say(`fork=${ses.fork ?? 'tip'} `);
+  if (mcpAdds.length) say(`mcp=${JSON.stringify(mcpAdds)}\n`);
   if (prompt.includes('sleep')) {
     const bash = part(sid, asst.id, { type: 'tool', tool: 'bash', callID: `call_${partN}`, state: { status: 'running', input: { command: 'sleep 45' } } });
     partUpdated(sid, bash);
@@ -149,6 +153,15 @@ createServer(async (req, res) => {
     bus.add(res);
     req.on('close', () => bus.delete(res));
     return;
+  }
+  // Like 1.18.29: the reply is every server's status; a local command not on
+  // disk is refused as `failed` with the spawn error.
+  if (req.method === 'POST' && url.pathname === '/mcp') {
+    const cmd = body.config.type === 'local' ? body.config.command[0] : undefined;
+    const missing = cmd !== undefined && !existsSync(cmd);
+    mcpStatus[body.name] = missing ? { status: 'failed', error: `ENOENT: no such file or directory, posix_spawn '${cmd}'` } : { status: 'connected' };
+    if (!missing) mcpAdds.push(body);
+    return json(res, 200, mcpStatus);
   }
   if (req.method === 'POST' && url.pathname === '/session') { const s = newSession(); return json(res, 200, { id: s.id, title: s.title, model: s.model }); }
   if (req.method === 'POST' && p[0] === 'question' && p[2] === 'reply') { waiters[p[1]]?.(body.answers); delete waiters[p[1]]; return json(res, 200, true); }

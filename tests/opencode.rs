@@ -10,9 +10,9 @@ use futures::StreamExt;
 
 use anyagent::{
     AgentError, AgentInstallation, Answer, AuthStatus, Capability, ConfigId, ConfigKind,
-    ConfigValue, Event, EventKind, Events, Input, MessageId, PermissionChoice, QuestionAnswer,
-    Request, RollbackScope, Runtime, Session, SessionOptions, StopReason, ToolKind, ToolStatus,
-    TurnOrigin, TurnUsage,
+    ConfigValue, Event, EventKind, Events, Input, McpServer, McpTransport, MessageId,
+    PermissionChoice, QuestionAnswer, Request, RollbackScope, Runtime, Session, SessionOptions,
+    StopReason, ToolKind, ToolStatus, TurnOrigin, TurnUsage,
 };
 
 mod common;
@@ -645,6 +645,52 @@ async fn a_dead_server_surfaces_the_exit() {
     }
     assert!(failed && exited);
     let _ = session;
+}
+
+/// Declared MCP servers are added with `POST /mcp` in the shape opencode
+/// takes; the fixture echoes the request bodies it recorded.
+#[tokio::test]
+async fn mcp_servers_are_added_through_post_mcp() {
+    let exe = std::env::current_exe().unwrap();
+    let options = SessionOptions::in_dir(std::env::temp_dir())
+        .mcp_server(McpServer::stdio("tool", &exe, ["--serve"]).with("K", "V"))
+        .mcp_server(
+            McpServer::http("voice", "http://127.0.0.1:1/mcp").with("Authorization", "Bearer x"),
+        )
+        .mcp_server(McpServer::sse("events", "http://127.0.0.1:1/sse"));
+    let (session, mut events) = open_with("mcp", "", options).await.unwrap();
+    assert_eq!(
+        session.info().details.capabilities.mcp_transports,
+        vec![McpTransport::Stdio, McpTransport::Http, McpTransport::Sse]
+    );
+    session.prompt("hi").await.unwrap();
+    let text = complete_turn(&session, &mut events, PermissionChoice::AllowOnce).await;
+    let recorded = text.split("mcp=").nth(1).and_then(|r| r.lines().next());
+    let recorded: serde_json::Value = serde_json::from_str(recorded.unwrap()).unwrap();
+    assert_eq!(
+        recorded,
+        serde_json::json!([
+            { "name": "tool", "config": { "type": "local", "command": [exe, "--serve"], "environment": { "K": "V" } } },
+            { "name": "voice", "config": { "type": "remote", "url": "http://127.0.0.1:1/mcp", "headers": { "Authorization": "Bearer x" } } },
+            { "name": "events", "config": { "type": "remote", "url": "http://127.0.0.1:1/sse", "headers": {} } },
+        ])
+    );
+    session.close().await.unwrap();
+}
+
+/// A server opencode refuses fails the open typed, with the agent's reason.
+#[tokio::test]
+async fn a_refused_mcp_server_fails_the_open() {
+    let options = SessionOptions::in_dir(std::env::temp_dir()).mcp_server(McpServer::stdio(
+        "bad",
+        "/nonexistent/mcp-cmd",
+        ["--serve"],
+    ));
+    let err = open_with("mcp-refused", "", options).await.err().unwrap();
+    assert!(
+        matches!(&err, AgentError::InvalidConfiguration(m) if m.contains("`bad`") && m.contains("ENOENT")),
+        "{err:?}"
+    );
 }
 
 /// Probe reads the same details an open does, without leaving a session.

@@ -12,9 +12,9 @@
 //! too; the engine queues prompts instead. All routes and event names live in
 //! this file so a future v2 swap is contained.
 //!
-//! High level: `connect` → `launch` (spawn, health, bus, `handshake`) →
-//! `driver_info`; then `Drive::run` turns commands into HTTP calls and SSE
-//! frames into events (`handle_command`, `handle_frame`, `on_*`).
+//! High level: `connect` → `launch` (spawn, health, bus, MCP servers,
+//! `handshake`) → `driver_info`; then `Drive::run` turns commands into HTTP
+//! calls and SSE frames into events (`handle_command`, `handle_frame`, `on_*`).
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -32,8 +32,9 @@ use crate::adapter::{
 };
 use crate::agent::{
     AgentDetails, AuthKind, AuthStatus, Capabilities, Capability, ConfigChoice, ConfigId,
-    ConfigKind, ConfigOption, ConfigValue, Input, LoginMethod, PermissionMode, ResumeToken,
-    SessionConfiguration, SessionOptions, SessionStart, SlashCommand,
+    ConfigKind, ConfigOption, ConfigValue, Input, LoginMethod, McpConnection, McpServer,
+    McpTransport, PermissionMode, ResumeToken, SessionConfiguration, SessionOptions, SessionStart,
+    SlashCommand,
 };
 use crate::error::AgentError;
 use crate::event::Extensions;
@@ -144,13 +145,6 @@ async fn launch_once(
     request: &ConnectRequest,
     recorder: Option<WireRecorder>,
 ) -> Result<Launched, AgentError> {
-    if !request.options.mcp_servers.is_empty() {
-        // Client MCP servers would need a `POST /mcp` per server after open;
-        // deferred until a consumer needs it.
-        return Err(AgentError::UnsupportedFeature(
-            "client-declared MCP servers on opencode".into(),
-        ));
-    }
     let port = free_port()?;
     let secret = secret();
     let mut server = spawn_server(request, port, &secret).await?;
@@ -168,6 +162,8 @@ async fn launch_once(
     let boot = async {
         let version = await_health(&http).await?;
         let frames = open_bus(&http, recorder.clone()).await?;
+        // Before the session exists, so a refused server leaves none behind.
+        add_mcp_servers(&http, &request.options.mcp_servers).await?;
         let (info, session_id, windows, variants) =
             handshake(&http, request, recorder, version).await?;
         Ok((frames, info, session_id, windows, variants))
@@ -320,6 +316,42 @@ async fn await_health(http: &Http) -> Result<Option<String>, AgentError> {
     }
 }
 
+/// Adds each declared MCP server with `POST /mcp`. opencode keeps them per
+/// server process (one per session here); a refused one fails the open.
+async fn add_mcp_servers(http: &Http, servers: &[McpServer]) -> Result<(), AgentError> {
+    for server in servers {
+        let body = json!({ "name": server.name, "config": mcp_config(&server.connection) });
+        // The reply maps every server name to its status; a refusal is
+        // `{ status: "failed", error }` (probed 1.18.29).
+        let statuses = http.post("/mcp", body).await?;
+        let status = &statuses[server.name.as_str()];
+        if status["status"] != "connected" {
+            let reason = status["error"].as_str().or(status["status"].as_str());
+            return Err(AgentError::InvalidConfiguration(format!(
+                "opencode refused MCP server `{}`: {}",
+                server.name,
+                reason.unwrap_or("not added")
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// One server as opencode's `local` or `remote` config. A remote server is
+/// tried over streamable HTTP, then SSE, on the same URL (probed 1.18.29).
+fn mcp_config(connection: &McpConnection) -> Value {
+    match connection {
+        McpConnection::Stdio { command, args, env } => {
+            let mut argv = vec![command.to_string_lossy().into_owned()];
+            argv.extend(args.iter().cloned());
+            json!({ "type": "local", "command": argv, "environment": env })
+        }
+        McpConnection::Http { url, headers } | McpConnection::Sse { url, headers } => {
+            json!({ "type": "remote", "url": url, "headers": headers })
+        }
+    }
+}
+
 /// Creates, resumes, or forks the provider session and returns its record.
 async fn bind_session(http: &Http, request: &ConnectRequest) -> Result<Value, AgentError> {
     match &request.options.start {
@@ -423,19 +455,24 @@ fn driver_info(
             auth,
             // Steer is absent (v1 queues); RollbackFiles and PlanUsage are
             // not on this wire. Subagents are task-tool child sessions.
-            capabilities: Capabilities::new([
-                Capability::Images,
-                Capability::Resume,
-                Capability::Fork,
-                Capability::Permissions,
-                Capability::Questions,
-                Capability::Rollback,
-                Capability::Compact,
-                Capability::SlashCommands,
-                Capability::Plan,
-                Capability::ContextUsage,
-                Capability::Subagents,
-            ]),
+            capabilities: {
+                let mut capabilities = Capabilities::new([
+                    Capability::Images,
+                    Capability::Resume,
+                    Capability::Fork,
+                    Capability::Permissions,
+                    Capability::Questions,
+                    Capability::Rollback,
+                    Capability::Compact,
+                    Capability::SlashCommands,
+                    Capability::Plan,
+                    Capability::ContextUsage,
+                    Capability::Subagents,
+                ]);
+                capabilities.mcp_transports =
+                    vec![McpTransport::Stdio, McpTransport::Http, McpTransport::Sse];
+                capabilities
+            },
             config_options,
             commands: slash_commands(commands),
         },
