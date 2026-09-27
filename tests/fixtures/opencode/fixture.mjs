@@ -23,8 +23,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sessions = {};
 let sesN = 0, msgN = 0, partN = 0, askN = 0;
 const bus = new Set();
-// Every MCP server's status (the user's "my docs" plus added ones), the
-// `POST /mcp` bodies as received (echoed into the turn), and `GET /mcp` count.
+// MCP: every server's status (user "my docs" + added), added bodies, GET count.
 const mcpStatus = { 'my docs': { status: 'connected' } }, mcpAdds = [];
 let mcpGets = 0;
 const busy = {};
@@ -162,8 +161,7 @@ createServer(async (req, res) => {
     req.on('close', () => bus.delete(res));
     return;
   }
-  // Like 1.18.29: the reply is every server's status; a local command not on
-  // disk is refused as `failed` with the spawn error.
+  // Like 1.18.29: replies every status; a missing local command is `failed`.
   if (req.method === 'POST' && url.pathname === '/mcp') {
     const cmd = body.config.type === 'local' ? body.config.command[0] : undefined;
     const missing = cmd !== undefined && !existsSync(cmd);
