@@ -75,6 +75,8 @@ async function runTurn(ses, body, text) {
   const bash = part(sid, asst.id, { type: 'tool', tool: 'bash', callID: `call_${partN}`, state: { status: 'pending', input: {} } });
   partUpdated(sid, bash);
   partUpdated(sid, { ...bash, state: { status: 'completed', input: { command: 'echo PEAR' }, output: 'PEAR\n' } });
+  // The tool call closes a step; its tokens are that step's alone (1.18.29).
+  partUpdated(sid, part(sid, asst.id, { type: 'step-finish', tokens: { total: 900, input: 600, output: 40, reasoning: 20, cache: { write: 40, read: 200 } }, cost: 0 }));
   if (prompt.includes('write-file')) {
     const write = part(sid, asst.id, { type: 'tool', tool: 'write', callID: `call_${partN + 1}`, state: { status: 'running', input: { filePath: 'fruit.txt', content: 'PEAR' } } });
     partUpdated(sid, write);
@@ -91,7 +93,7 @@ async function runTurn(ses, body, text) {
   if (prompt.includes('child')) await runChild(ses, asst, say);
   partUpdated(sid, part(sid, asst.id, { type: 'tool', tool: 'todowrite', callID: `call_${partN + 1}`, state: { status: 'completed', input: { todos: [{ content: 'step 1', status: 'in_progress' }] }, output: '' } }));
   say('done');
-  partUpdated(sid, part(sid, asst.id, { type: 'step-finish', tokens: { total: 1200, input: 1000, output: 200 }, cost: 0.01 }));
+  partUpdated(sid, part(sid, asst.id, { type: 'step-finish', tokens: { total: 1200, input: 700, output: 150, reasoning: 50, cache: { write: 0, read: 300 } }, cost: 0.01 }));
   emit('message.updated', { sessionID: sid, info: { ...asst, time: { ...asst.time, completed: 2 } } });
   busy[sid] = false;
   emit('session.idle', { sessionID: sid });
@@ -163,6 +165,7 @@ createServer(async (req, res) => {
     const m = message(ses.id, 'assistant');
     emit('message.updated', { sessionID: ses.id, info: m });
     partUpdated(ses.id, part(ses.id, m.id, { type: 'text', text: 'summary' }));
+    partUpdated(ses.id, part(ses.id, m.id, { type: 'step-finish', tokens: { total: 150, input: 100, output: 30, reasoning: 20, cache: { write: 0, read: 0 } }, cost: 0 }));
     emit('message.updated', { sessionID: ses.id, info: { ...m, time: { ...m.time, completed: 5 } } });
     emit('session.compacted', { sessionID: ses.id });
     busy[ses.id] = false;

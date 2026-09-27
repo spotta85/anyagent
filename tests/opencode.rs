@@ -12,7 +12,7 @@ use anyagent::{
     AgentError, AgentInstallation, Answer, AuthStatus, Capability, ConfigId, ConfigKind,
     ConfigValue, Event, EventKind, Events, Input, MessageId, PermissionChoice, QuestionAnswer,
     Request, RollbackScope, Runtime, Session, SessionOptions, StopReason, ToolKind, ToolStatus,
-    TurnOrigin,
+    TurnOrigin, TurnUsage,
 };
 
 mod common;
@@ -67,6 +67,15 @@ async fn complete_turn(session: &Session, events: &mut Events, answer: Permissio
             }
             EventKind::TurnEnded { .. } => return text,
             _ => {}
+        }
+    }
+}
+
+/// Drives one turn to its end and returns the usage its `TurnEnded` carries.
+async fn turn_usage(events: &mut Events) -> Option<TurnUsage> {
+    loop {
+        if let EventKind::TurnEnded { usage, .. } = next(events).await.kind {
+            return usage;
         }
     }
 }
@@ -178,8 +187,16 @@ async fn logged_out_reports_unauthenticated_with_no_models() {
     session.close().await.unwrap();
 }
 
+/// The fixture turn's two steps summed: cache counts as input, reasoning as output.
+const TURN_USAGE: TurnUsage = TurnUsage {
+    input_tokens: 1840,
+    cached_input_tokens: 500,
+    output_tokens: 260,
+};
+
 /// A full turn maps text, reasoning, the bash tool with output, the plan,
-/// usage with the model's window, one MessageEnded, and a protocol end.
+/// usage with the model's window, one MessageEnded, and a protocol end
+/// carrying the turn's summed usage.
 #[tokio::test]
 async fn a_full_turn_maps_every_frame_kind() {
     let (session, mut events) = open("full", "").await;
@@ -211,13 +228,14 @@ async fn a_full_turn_maps_every_frame_kind() {
                 assert!(event.extensions.contains_key("opencode/fork_point"));
                 ended.push(message_id);
             }
-            EventKind::TurnEnded { stop, .. } => {
+            EventKind::TurnEnded { stop, usage, .. } => {
                 assert_eq!(
                     stop,
                     StopReason::Completed {
                         source: anyagent::CompletionSource::Protocol
                     }
                 );
+                assert_eq!(usage, Some(TURN_USAGE));
                 break;
             }
             _ => {}
@@ -239,6 +257,24 @@ async fn a_full_turn_maps_every_frame_kind() {
     assert_eq!(plan, ["step 1"]);
     assert_eq!(usage, Some((1200, Some(128000), Some(0.01))));
     assert_eq!(ended, vec![MessageId::new("m1")]);
+    session.close().await.unwrap();
+}
+
+/// A second turn and a compaction each sum their own steps only.
+#[tokio::test]
+async fn a_later_turn_never_inherits_an_earlier_turn_s_usage() {
+    let (session, mut events) = open("usage-reset", "").await;
+    session.prompt("one").await.unwrap();
+    assert_eq!(turn_usage(&mut events).await, Some(TURN_USAGE));
+    session.prompt("two").await.unwrap();
+    assert_eq!(turn_usage(&mut events).await, Some(TURN_USAGE));
+    session.compact().await.unwrap();
+    let summary = TurnUsage {
+        input_tokens: 100,
+        cached_input_tokens: 0,
+        output_tokens: 50,
+    };
+    assert_eq!(turn_usage(&mut events).await, Some(summary));
     session.close().await.unwrap();
 }
 
