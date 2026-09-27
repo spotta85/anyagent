@@ -266,7 +266,7 @@ SessionOptions::in_dir(".")
 |---|---|---|
 | claude | `appendSystemPrompt` on the `initialize` control request, so not in argv | anyagent's flags |
 | codex | `developerInstructions` on thread start, resume and fork | `app-server` and anyagent's `-c` overrides |
-| opencode | `system` on every prompt | `serve` and its bind flags |
+| opencode | `system` on every plain prompt; a slash command goes to opencode's command route, which has no `system`, so it carries none | `serve` and its bind flags |
 | pi | the `--append-system-prompt` launch flag: visible in `ps` and bound by the OS argument-length limit; pi reads it as a file when the text is an existing path | anyagent's flags |
 | antigravity (agy), ACP agents | before a new session's first prompt, then a blank line; a first prompt starting with `/` goes untouched and the next one carries them; a resumed session gets none | anyagent's flags |
 
