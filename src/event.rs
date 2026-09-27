@@ -362,6 +362,12 @@ pub enum Answer {
     Permission(PermissionChoice),
     /// One entry per question, in order.
     Question(Vec<QuestionAnswer>),
+    /// Deny a permission once and tell the agent why.
+    Deny {
+        message: String,
+    },
+    /// Take the request back without choosing. The agent stops waiting for it.
+    Cancel,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

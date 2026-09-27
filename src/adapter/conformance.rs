@@ -926,6 +926,74 @@ async fn auto_approve_forwards_the_request_that_approves_a_plan() {
     assert_eq!(forwarded, [RequestId::new("r1")]);
 }
 
+/// `Deny` needs a request that offers `DenyOnce`; a refused one stays open.
+#[tokio::test]
+async fn deny_is_refused_without_deny_once_and_the_request_stays_open() {
+    let mut request = permission("r1");
+    let EventKind::RequestOpened(crate::Request::Permission(allow_only)) = &mut request else {
+        unreachable!()
+    };
+    allow_only.options = vec![PermissionChoice::AllowOnce];
+    let script = Script::default().turn(vec![
+        Step::Emit(request),
+        Step::AwaitAnswer,
+        Step::End(completed()),
+    ]);
+    let (session, mut events) = open(MockAdapter::new(script), None).await;
+    session.prompt("go").await.unwrap();
+    let _started = next(&mut events).await;
+    let _opened = next(&mut events).await;
+    let deny = Answer::Deny {
+        message: "no".into(),
+    };
+    assert!(matches!(
+        session.answer(RequestId::new("r1"), deny).await,
+        Err(crate::AgentError::InvalidRequest(_))
+    ));
+    session.answer(RequestId::new("r1"), allow()).await.unwrap();
+    let kinds = collect(&mut events, 2).await;
+    assert!(matches!(kinds[0], EventKind::RequestClosed { .. }));
+    assert!(matches!(kinds[1], EventKind::TurnEnded { .. }));
+}
+
+/// `Cancel` closes any open request: a permission and a question alike.
+#[tokio::test]
+async fn cancel_closes_a_permission_and_a_question() {
+    use crate::{Question, QuestionId, QuestionRequest, Request};
+    let question = EventKind::RequestOpened(Request::Question(QuestionRequest {
+        id: RequestId::new("r2"),
+        questions: vec![Question {
+            id: QuestionId::new("q1"),
+            text: "Proceed?".into(),
+            header: None,
+            choices: Vec::new(),
+            multi_select: false,
+            allows_free_text: true,
+        }],
+    }));
+    let script = Script::default().turn(vec![
+        Step::Emit(permission("r1")),
+        Step::AwaitAnswer,
+        Step::Emit(question),
+        Step::AwaitAnswer,
+        Step::End(completed()),
+    ]);
+    let (session, mut events) = open(MockAdapter::new(script), None).await;
+    session.prompt("go").await.unwrap();
+    let mut closed = Vec::new();
+    loop {
+        match next(&mut events).await.kind {
+            EventKind::RequestOpened(request) => {
+                session.answer(request.id(), Answer::Cancel).await.unwrap()
+            }
+            EventKind::RequestClosed { request_id } => closed.push(request_id),
+            EventKind::TurnEnded { .. } => break,
+            _ => {}
+        }
+    }
+    assert_eq!(closed, [RequestId::new("r1"), RequestId::new("r2")]);
+}
+
 /// A permission request for an Edit tool offering `allow` or a one-time deny.
 fn edit_permission(id: &str, allow: PermissionChoice) -> EventKind {
     let mut request = permission(id);
