@@ -285,6 +285,13 @@ class RawTool(TypedDict):
     input: Any
 
 
+class SubagentInfo(TypedDict):
+    role: NotRequired[str | None]
+    model: NotRequired[str | None]
+    summary: NotRequired[str | None]
+    tokens: NotRequired[int | None]
+
+
 PlanStatus: TypeAlias = Literal['Pending', 'InProgress', 'Completed']
 
 
@@ -490,6 +497,7 @@ class ToolUpdate(TypedDict):
     diffs: list[FileDiff]
     locations: list[str]
     raw: NotRequired[RawTool | None]
+    subagent: NotRequired[SubagentInfo | None]
 
 
 class PlanEntry(TypedDict):

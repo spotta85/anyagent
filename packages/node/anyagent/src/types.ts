@@ -585,6 +585,10 @@ export interface ToolUpdate {
    * Agent's own tool name and raw input, for unknown or MCP tools.
    */
   raw?: RawTool | null;
+  /**
+   * For a `Subagent` tool: who runs and what it reports.
+   */
+  subagent?: SubagentInfo | null;
 }
 export interface FileDiff {
   path: string;
@@ -597,6 +601,24 @@ export interface FileDiff {
 export interface RawTool {
   name: string;
   input: unknown;
+}
+/**
+ * What a subagent tool reports about the agent it spawned.
+ */
+export interface SubagentInfo {
+  /**
+   * The kind of agent, as the parent named it ("general-purpose").
+   */
+  role?: string | null;
+  model?: string | null;
+  /**
+   * Its latest progress line.
+   */
+  summary?: string | null;
+  /**
+   * Token count the agent reports for this subagent so far.
+   */
+  tokens?: number | null;
 }
 export interface PlanEntry {
   text: string;

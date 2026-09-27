@@ -1989,6 +1989,7 @@ fn blank_tool(id: &str) -> ToolUpdate {
         diffs: Vec::new(),
         locations: Vec::new(),
         raw: None,
+        subagent: None,
     }
 }
 

@@ -641,8 +641,9 @@ public struct ToolUpdate: Codable, Sendable, Equatable {
     public var diffs: [FileDiff]
     public var locations: [String]
     public var raw: RawTool?
+    public var subagent: SubagentInfo?
 
-    public init(id: String, kind: ToolKind, title: String, status: ToolStatus, input: ToolInput, output: String? = nil, diffs: [FileDiff], locations: [String], raw: RawTool? = nil) {
+    public init(id: String, kind: ToolKind, title: String, status: ToolStatus, input: ToolInput, output: String? = nil, diffs: [FileDiff], locations: [String], raw: RawTool? = nil, subagent: SubagentInfo? = nil) {
         self.id = id
         self.kind = kind
         self.title = title
@@ -652,6 +653,7 @@ public struct ToolUpdate: Codable, Sendable, Equatable {
         self.diffs = diffs
         self.locations = locations
         self.raw = raw
+        self.subagent = subagent
     }
 }
 
@@ -850,6 +852,21 @@ public struct RawTool: Codable, Sendable, Equatable {
     public init(name: String, input: JSONValue) {
         self.name = name
         self.input = input
+    }
+}
+
+/// What a subagent tool reports about the agent it spawned.
+public struct SubagentInfo: Codable, Sendable, Equatable {
+    public var role: String?
+    public var model: String?
+    public var summary: String?
+    public var tokens: UInt64?
+
+    public init(role: String? = nil, model: String? = nil, summary: String? = nil, tokens: UInt64? = nil) {
+        self.role = role
+        self.model = model
+        self.summary = summary
+        self.tokens = tokens
     }
 }
 

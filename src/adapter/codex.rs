@@ -1741,6 +1741,7 @@ fn tool_update(item: &Value) -> ToolUpdate {
             name: item_type.to_owned(),
             input: item.clone(),
         }),
+        subagent: None,
     }
 }
 
@@ -1820,6 +1821,7 @@ fn approval_stub(id: &str, kind: ToolKind) -> ToolUpdate {
         diffs: Vec::new(),
         locations: Vec::new(),
         raw: None,
+        subagent: None,
     }
 }
 

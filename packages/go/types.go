@@ -597,15 +597,16 @@ func (v *TurnOrigin) UnmarshalJSON(b []byte) error {
 
 // ToolUpdate: Cumulative snapshot of one tool call.
 type ToolUpdate struct {
-	ID        string     `json:"id"`
-	Kind      ToolKind   `json:"kind"`
-	Title     string     `json:"title"`
-	Status    ToolStatus `json:"status"`
-	Input     ToolInput  `json:"input"`
-	Output    *string    `json:"output,omitempty"`
-	Diffs     []FileDiff `json:"diffs"`
-	Locations []string   `json:"locations"`
-	Raw       *RawTool   `json:"raw,omitempty"`
+	ID        string        `json:"id"`
+	Kind      ToolKind      `json:"kind"`
+	Title     string        `json:"title"`
+	Status    ToolStatus    `json:"status"`
+	Input     ToolInput     `json:"input"`
+	Output    *string       `json:"output,omitempty"`
+	Diffs     []FileDiff    `json:"diffs"`
+	Locations []string      `json:"locations"`
+	Raw       *RawTool      `json:"raw,omitempty"`
+	Subagent  *SubagentInfo `json:"subagent,omitempty"`
 }
 
 // Mcp is a wire type.
@@ -846,6 +847,14 @@ type FileDiff struct {
 type RawTool struct {
 	Name  string `json:"name"`
 	Input any    `json:"input"`
+}
+
+// SubagentInfo: What a subagent tool reports about the agent it spawned.
+type SubagentInfo struct {
+	Role    *string `json:"role,omitempty"`
+	Model   *string `json:"model,omitempty"`
+	Summary *string `json:"summary,omitempty"`
+	Tokens  *uint64 `json:"tokens,omitempty"`
 }
 
 // PlanEntry is a wire type.

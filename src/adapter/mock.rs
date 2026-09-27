@@ -438,6 +438,7 @@ pub fn tool(id: &str, status: ToolStatus) -> EventKind {
         diffs: Vec::new(),
         locations: Vec::new(),
         raw: None,
+        subagent: None,
     })
 }
 

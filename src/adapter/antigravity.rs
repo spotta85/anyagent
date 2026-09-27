@@ -698,6 +698,7 @@ fn tool(step: &Value) -> ToolUpdate {
                 false => params.clone(),
             },
         }),
+        subagent: None,
     }
 }
 

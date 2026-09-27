@@ -1541,6 +1541,7 @@ fn fresh_tool(block: &Value) -> ToolUpdate {
             name: name.to_owned(),
             input: input.clone(),
         }),
+        subagent: None,
     }
 }
 
