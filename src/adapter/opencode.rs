@@ -357,8 +357,7 @@ async fn bind_session(http: &Http, request: &ConnectRequest) -> Result<Value, Ag
     match &request.options.start {
         SessionStart::New => http.post("/session", json!({})).await,
         // Re-adopting the id IS the resume: opencode scopes history by it.
-        // Only a 404 means a dead token (1.18.29: an unknown `ses_` id; a
-        // malformed id is a 500); other failures keep their own error.
+        // Only a 404 is a dead token (1.18.29; a malformed id is a 500).
         SessionStart::Resume(token) => http
             .get(&format!("/session/{}", token.as_str()))
             .await
@@ -1575,8 +1574,7 @@ impl Drive {
             )
             .await;
         match reverted {
-            // Nothing advertised changes (the session rewinds in place), but
-            // `SessionUpdated` still marks it before `RolledBack` settles the call.
+            // `SessionUpdated` marks the rewind; `RolledBack` then settles the call.
             Ok(_) => {
                 self.events
                     .send(DriverEvent::InfoChanged(self.info.clone()))
