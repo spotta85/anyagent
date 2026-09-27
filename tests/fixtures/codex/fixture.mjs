@@ -101,8 +101,6 @@ rl.on('line', (line) => {
     delete waiters[m.id];
     return r?.(m.result ?? m.error);
   }
-  // FIXTURE_REQUEST_LOG, set through the session's env: log each request's method and params there.
-  if (process.env.FIXTURE_REQUEST_LOG) appendFileSync(process.env.FIXTURE_REQUEST_LOG, JSON.stringify({ method: m.method, params: m.params }) + '\n');
   if (m.id !== undefined) onRequest(m).catch(() => process.exit(1));
 });
 rl.on('close', () => process.exit(0));
