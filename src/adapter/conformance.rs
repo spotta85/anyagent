@@ -293,7 +293,9 @@ async fn bookkeeping_after_turn_end_is_not_a_turn_and_late_stops_are_diagnostics
         Step::Emit(tool("bg", ToolStatus::Running)),
         Step::End(completed()),
         Step::Emit(tool("bg", ToolStatus::Running)),
+        Step::Emit(progress("bg")),
         Step::Nested(ToolId::new("bg"), tool("sub", ToolStatus::Running)),
+        Step::Nested(ToolId::new("bg"), progress("sub")),
         Step::Emit(tool("bg", ToolStatus::Completed)),
         Step::End(completed()),
     ]);
@@ -308,20 +310,62 @@ async fn bookkeeping_after_turn_end_is_not_a_turn_and_late_stops_are_diagnostics
         EventKind::TurnEnded { background, .. } if *background == vec![ToolId::new("bg")]
     ));
     let late = [
-        ("bg", ToolStatus::Running),
-        ("sub", ToolStatus::Running),
-        ("bg", ToolStatus::Completed),
+        tool("bg", ToolStatus::Running),
+        progress("bg"),
+        tool("sub", ToolStatus::Running),
+        progress("sub"),
+        tool("bg", ToolStatus::Completed),
     ];
-    for (id, status) in late {
+    for kind in late {
         let late_tool = next(&mut events).await;
-        assert!(
-            matches!(&late_tool.kind, EventKind::ToolUpdated(t) if t.id.as_str() == id && t.status == status),
-            "{late_tool:?}"
-        );
+        assert_eq!(late_tool.kind, kind);
         assert!(late_tool.turn_info.is_none(), "bookkeeping carries no turn");
     }
     let late_stop = next(&mut events).await;
     assert!(matches!(late_stop.kind, EventKind::Diagnostic(_)));
+}
+
+/// Tool progress, the turn diff and a reroute are content: after the prompted
+/// turn ended, each opens an agent turn and rides it.
+#[tokio::test]
+async fn live_events_ride_the_running_turn() {
+    let diff = EventKind::TurnDiff {
+        unified: "diff --git a/a.txt b/a.txt".into(),
+    };
+    let reroute = EventKind::ModelRerouted {
+        from: "big".into(),
+        to: "small".into(),
+        reason: Some("highRiskCyberActivity".into()),
+    };
+    for kind in [progress("t1"), diff, reroute] {
+        let script = Script::default().turn(vec![
+            Step::End(completed()),
+            Step::Emit(kind.clone()),
+            Step::End(completed()),
+        ]);
+        let (session, mut events) = open(MockAdapter::new(script), None).await;
+        session.prompt("go").await.unwrap();
+        let _prompted = collect(&mut events, 2).await;
+        let started = next(&mut events).await;
+        assert_eq!(
+            started.kind,
+            EventKind::TurnStarted {
+                origin: TurnOrigin::Agent
+            }
+        );
+        let event = next(&mut events).await;
+        assert_eq!(event.kind, kind);
+        assert_eq!(event.turn_info, started.turn_info);
+    }
+}
+
+/// A progress report of tool `id` after one second.
+fn progress(id: &str) -> EventKind {
+    EventKind::ToolProgress {
+        tool_id: ToolId::new(id),
+        message: None,
+        elapsed_ms: Some(1000),
+    }
 }
 
 /// Slow consumer with 1000 deltas (<1024) loses nothing and preserves sequence order.

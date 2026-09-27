@@ -88,6 +88,22 @@ pub enum EventKind {
         tool_id: ToolId,
         text: String,
     },
+    /// A running tool reports what it is doing, or for how long it has run.
+    ToolProgress {
+        tool_id: ToolId,
+        message: Option<String>,
+        elapsed_ms: Option<u64>,
+    },
+    /// The whole turn's changes so far as one unified diff; replaces the previous one.
+    TurnDiff {
+        unified: String,
+    },
+    /// The agent answered with another model than the selected one.
+    ModelRerouted {
+        from: String,
+        to: String,
+        reason: Option<String>,
+    },
     /// The agent's full current task list; replaces the previous one.
     PlanUpdated {
         entries: Vec<PlanEntry>,

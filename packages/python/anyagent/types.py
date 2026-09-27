@@ -202,11 +202,43 @@ class EventKind7(TypedDict):
     ToolOutputDelta: ToolOutputDelta
 
 
+class ToolProgress(TypedDict):
+    tool_id: str
+    message: NotRequired[str | None]
+    elapsed_ms: NotRequired[int | None]
+
+
+class EventKind8(TypedDict):
+    ToolProgress: ToolProgress
+
+
+class TurnDiff(TypedDict):
+    unified: str
+
+
+class EventKind9(TypedDict):
+    TurnDiff: TurnDiff
+
+
+ModelRerouted = TypedDict(
+    'ModelRerouted',
+    {
+        'from': str,
+        'to': str,
+        'reason': NotRequired[str | None],
+    },
+)
+
+
+class EventKind10(TypedDict):
+    ModelRerouted: ModelRerouted
+
+
 class PlanProposed(TypedDict):
     markdown: str
 
 
-class EventKind9(TypedDict):
+class EventKind12(TypedDict):
     PlanProposed: PlanProposed
 
 
@@ -214,7 +246,7 @@ class RequestClosed(TypedDict):
     request_id: str
 
 
-class EventKind11(TypedDict):
+class EventKind14(TypedDict):
     RequestClosed: RequestClosed
 
 
@@ -224,7 +256,7 @@ class ContextUsage(TypedDict):
     cost_usd: NotRequired[float | None]
 
 
-class EventKind14(TypedDict):
+class EventKind17(TypedDict):
     ContextUsage: ContextUsage
 
 
@@ -491,7 +523,7 @@ class EventKind1(TypedDict):
     TurnStarted: TurnStarted
 
 
-class EventKind13(TypedDict):
+class EventKind16(TypedDict):
     StatusChanged: SessionStatus
 
 
@@ -696,15 +728,15 @@ class PlanUpdated(TypedDict):
     entries: list[PlanEntry]
 
 
-class EventKind8(TypedDict):
+class EventKind11(TypedDict):
     PlanUpdated: PlanUpdated
 
 
-class EventKind15(TypedDict):
+class EventKind18(TypedDict):
     PlanUsageUpdated: PlanUsage
 
 
-class EventKind16(TypedDict):
+class EventKind19(TypedDict):
     Diagnostic: Diagnostic
 
 
@@ -714,7 +746,7 @@ class TurnEnded(TypedDict):
     usage: NotRequired[TurnUsage | None]
 
 
-class EventKind17(TypedDict):
+class EventKind20(TypedDict):
     TurnEnded: TurnEnded
 
 
@@ -734,7 +766,7 @@ class Request2(TypedDict):
 Request: TypeAlias = Request1 | Request2
 
 
-class EventKind10(TypedDict):
+class EventKind13(TypedDict):
     RequestOpened: Request
 
 
@@ -766,11 +798,11 @@ class Event(TypedDict):
     extensions: dict[str, Any]
 
 
-class EventKind12(TypedDict):
+class EventKind15(TypedDict):
     SessionUpdated: SessionInfo
 
 
-EventKind: TypeAlias = EventKind1 | EventKind2 | EventKind3 | EventKind4 | EventKind5 | EventKind6 | EventKind7 | EventKind8 | EventKind9 | EventKind10 | EventKind11 | EventKind12 | EventKind13 | EventKind14 | Literal['ContextCompacted'] | EventKind15 | EventKind16 | EventKind17
+EventKind: TypeAlias = EventKind1 | EventKind2 | EventKind3 | EventKind4 | EventKind5 | EventKind6 | EventKind7 | EventKind8 | EventKind9 | EventKind10 | EventKind11 | EventKind12 | EventKind13 | EventKind14 | EventKind15 | EventKind16 | EventKind17 | Literal['ContextCompacted'] | EventKind18 | EventKind19 | EventKind20
 
 
 class SessionInfo(TypedDict):

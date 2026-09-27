@@ -271,6 +271,25 @@ export type EventKind =
       };
     }
   | {
+      ToolProgress: {
+        tool_id: string;
+        message?: string | null;
+        elapsed_ms?: number | null;
+      };
+    }
+  | {
+      TurnDiff: {
+        unified: string;
+      };
+    }
+  | {
+      ModelRerouted: {
+        from: string;
+        to: string;
+        reason?: string | null;
+      };
+    }
+  | {
       PlanUpdated: {
         entries: PlanEntry[];
       };

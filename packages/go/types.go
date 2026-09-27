@@ -400,6 +400,25 @@ type ToolOutputDelta struct {
 	Text   string `json:"text"`
 }
 
+// ToolProgress is a wire type.
+type ToolProgress struct {
+	ToolID    string  `json:"tool_id"`
+	Message   *string `json:"message,omitempty"`
+	ElapsedMs *uint64 `json:"elapsed_ms,omitempty"`
+}
+
+// TurnDiff is a wire type.
+type TurnDiff struct {
+	Unified string `json:"unified"`
+}
+
+// ModelRerouted is a wire type.
+type ModelRerouted struct {
+	From   string  `json:"from"`
+	To     string  `json:"to"`
+	Reason *string `json:"reason,omitempty"`
+}
+
 // PlanUpdated is a wire type.
 type PlanUpdated struct {
 	Entries []PlanEntry `json:"entries"`
@@ -438,6 +457,9 @@ type EventKind struct {
 	MessageEnded     *MessageEnded    `json:"MessageEnded"`
 	ToolUpdated      *ToolUpdate      `json:"ToolUpdated"`
 	ToolOutputDelta  *ToolOutputDelta `json:"ToolOutputDelta"`
+	ToolProgress     *ToolProgress    `json:"ToolProgress"`
+	TurnDiff         *TurnDiff        `json:"TurnDiff"`
+	ModelRerouted    *ModelRerouted   `json:"ModelRerouted"`
 	PlanUpdated      *PlanUpdated     `json:"PlanUpdated"`
 	PlanProposed     *PlanProposed    `json:"PlanProposed"`
 	RequestOpened    *Request         `json:"RequestOpened"`
@@ -469,6 +491,12 @@ func (v EventKind) Name() string {
 		return "ToolUpdated"
 	case v.ToolOutputDelta != nil:
 		return "ToolOutputDelta"
+	case v.ToolProgress != nil:
+		return "ToolProgress"
+	case v.TurnDiff != nil:
+		return "TurnDiff"
+	case v.ModelRerouted != nil:
+		return "ModelRerouted"
 	case v.PlanUpdated != nil:
 		return "PlanUpdated"
 	case v.PlanProposed != nil:
@@ -511,6 +539,12 @@ func (v EventKind) MarshalJSON() ([]byte, error) {
 		return json.Marshal(map[string]any{"ToolUpdated": v.ToolUpdated})
 	case v.ToolOutputDelta != nil:
 		return json.Marshal(map[string]any{"ToolOutputDelta": v.ToolOutputDelta})
+	case v.ToolProgress != nil:
+		return json.Marshal(map[string]any{"ToolProgress": v.ToolProgress})
+	case v.TurnDiff != nil:
+		return json.Marshal(map[string]any{"TurnDiff": v.TurnDiff})
+	case v.ModelRerouted != nil:
+		return json.Marshal(map[string]any{"ModelRerouted": v.ModelRerouted})
 	case v.PlanUpdated != nil:
 		return json.Marshal(map[string]any{"PlanUpdated": v.PlanUpdated})
 	case v.PlanProposed != nil:
