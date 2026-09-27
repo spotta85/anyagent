@@ -106,17 +106,23 @@ impl Adapter for ClaudeAdapter {
         })
     }
 
-    /// Quota probe: spawn with the options' config home, env and args,
-    /// `initialize`, `get_usage`, shut down (~1-2 s).
+    /// Quota probe: spawn isolated like a throwaway session with the options'
+    /// config home, env and args, `initialize`, `get_usage`, shut down (~1-2 s).
     async fn plan_usage(
         &self,
         installation: &crate::agent::AgentInstallation,
         options: &crate::agent::SessionOptions,
     ) -> Result<PlanUsage, AgentError> {
+        // Only the throwaway flags: no other session option applies to a quota read.
+        let mut throwaway = crate::agent::SessionOptions::in_dir(std::env::temp_dir());
+        throwaway.throwaway = true;
         let args = BASE_ARGS.iter().map(|s| (*s).to_owned());
         let mut child = process::spawn(Spawn {
             exec_path: installation.executable_path.clone(),
-            args: args.chain(options.args.iter().cloned()).collect(),
+            args: args
+                .chain(option_args(&throwaway)?)
+                .chain(options.args.iter().cloned())
+                .collect(),
             cwd: std::env::temp_dir(),
             env: crate::adapter::launch_env(installation, options)?,
         })
