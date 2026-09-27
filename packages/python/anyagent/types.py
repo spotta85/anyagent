@@ -330,12 +330,6 @@ Capability: TypeAlias = Literal['Images', 'Resume', 'Steer', 'Permissions', 'Que
 McpTransport: TypeAlias = Literal['Stdio', 'Http', 'Sse']
 
 
-class ConfigChoice(TypedDict):
-    value: str
-    label: str
-    description: NotRequired[str | None]
-
-
 class SlashCommand(TypedDict):
     name: str
     description: str
@@ -534,17 +528,6 @@ class Capabilities(TypedDict):
     mcp_transports: list[McpTransport]
 
 
-class Select(TypedDict):
-    choices: list[ConfigChoice]
-
-
-class ConfigKind1(TypedDict):
-    Select: Select
-
-
-ConfigKind: TypeAlias = Literal['Boolean'] | ConfigKind1
-
-
 class PlanUsage(TypedDict):
     plan: NotRequired[str | None]
     windows: list[UsageWindow]
@@ -668,15 +651,6 @@ class QuestionRequest(TypedDict):
     questions: list[Question]
 
 
-class ConfigOption(TypedDict):
-    id: str
-    name: str
-    category: NotRequired[str | None]
-    kind: ConfigKind
-    current: NotRequired[ConfigValue | None]
-    live: bool
-
-
 class Request2(TypedDict):
     Question: QuestionRequest
 
@@ -684,49 +658,8 @@ class Request2(TypedDict):
 Request: TypeAlias = Request1 | Request2
 
 
-class AgentDetails(TypedDict):
-    version: NotRequired[str | None]
-    auth: AuthStatus
-    capabilities: Capabilities
-    config_options: list[ConfigOption]
-    commands: list[SlashCommand]
-
-
 class EventKind9(TypedDict):
     RequestOpened: Request
-
-
-class SessionInfo(TypedDict):
-    id: str
-    agent: AgentInstallation
-    details: AgentDetails
-    configuration: SessionConfiguration
-    resume_token: NotRequired[str | None]
-    title: NotRequired[str | None]
-    status: NotRequired[SessionStatus]
-
-
-class EventKind11(TypedDict):
-    SessionUpdated: SessionInfo
-
-
-EventKind: TypeAlias = EventKind1 | EventKind2 | EventKind3 | EventKind4 | EventKind5 | EventKind6 | EventKind7 | EventKind8 | EventKind9 | EventKind10 | EventKind11 | EventKind12 | EventKind13 | Literal['ContextCompacted'] | EventKind14 | EventKind15 | EventKind16
-
-
-class Event(TypedDict):
-    sequence: int
-    occurred_at: NotRequired[SystemTime]
-    session_id: str
-    turn_info: NotRequired[TurnContext | None]
-    kind: EventKind
-    extensions: dict[str, Any]
-
-
-class Line4(TypedDict):
-    event: Event
-
-
-Line: TypeAlias = Line1 | Line2 | Line3 | Line4 | Line5 | Line6
 
 
 class Protocol(TypedDict):
@@ -739,3 +672,71 @@ class Protocol(TypedDict):
     plan_usage: PlanUsage
     session_info: SessionInfo
     delivery: Delivery
+
+
+class Line4(TypedDict):
+    event: Event
+
+
+Line: TypeAlias = Line1 | Line2 | Line3 | Line4 | Line5 | Line6
+
+
+class Event(TypedDict):
+    sequence: int
+    occurred_at: NotRequired[SystemTime]
+    session_id: str
+    turn_info: NotRequired[TurnContext | None]
+    kind: EventKind
+    extensions: dict[str, Any]
+
+
+class EventKind11(TypedDict):
+    SessionUpdated: SessionInfo
+
+
+EventKind: TypeAlias = EventKind1 | EventKind2 | EventKind3 | EventKind4 | EventKind5 | EventKind6 | EventKind7 | EventKind8 | EventKind9 | EventKind10 | EventKind11 | EventKind12 | EventKind13 | Literal['ContextCompacted'] | EventKind14 | EventKind15 | EventKind16
+
+
+class SessionInfo(TypedDict):
+    id: str
+    agent: AgentInstallation
+    details: AgentDetails
+    configuration: SessionConfiguration
+    resume_token: NotRequired[str | None]
+    title: NotRequired[str | None]
+    status: NotRequired[SessionStatus]
+
+
+class AgentDetails(TypedDict):
+    version: NotRequired[str | None]
+    auth: AuthStatus
+    capabilities: Capabilities
+    config_options: list[ConfigOption]
+    commands: list[SlashCommand]
+
+
+class ConfigOption(TypedDict):
+    id: str
+    name: str
+    category: NotRequired[str | None]
+    kind: ConfigKind
+    current: NotRequired[ConfigValue | None]
+    live: bool
+
+
+class Select(TypedDict):
+    choices: list[ConfigChoice]
+
+
+class ConfigKind1(TypedDict):
+    Select: Select
+
+
+ConfigKind: TypeAlias = Literal['Boolean'] | ConfigKind1
+
+
+class ConfigChoice(TypedDict):
+    value: str
+    label: str
+    description: NotRequired[str | None]
+    options: NotRequired[list[ConfigOption]]

@@ -641,6 +641,10 @@ export interface ConfigChoice {
   value: string;
   label: string;
   description?: string | null;
+  /**
+   * For a `model` choice: the options this model offers once selected.
+   */
+  options?: ConfigOption[];
 }
 export interface SlashCommand {
   name: string;
