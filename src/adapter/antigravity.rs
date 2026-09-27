@@ -39,7 +39,7 @@ use crate::catalog::AgentProfile;
 use crate::error::AgentError;
 use crate::event::{
     CompletionSource, DiagnosticLevel, EventKind, MessageId, RawTool, StopReason, ToolId,
-    ToolInput, ToolKind, ToolStatus, ToolUpdate,
+    ToolInput, ToolKind, ToolStatus, ToolUpdate, TurnUsage,
 };
 use crate::process::{self, Spawn};
 
@@ -96,6 +96,7 @@ impl Adapter for AntigravityAdapter {
                 next_message: 0,
                 tools: BTreeMap::new(),
                 last_usage: None,
+                turn_usage: TurnUsage::default(),
             }
             .run(cmd_rx),
         );
@@ -388,6 +389,8 @@ struct Drive {
     /// Context occupancy from the turn's last model call: `result.usage`
     /// sums every step's snapshot instead (recorded), so it is not the size.
     last_usage: Option<u64>,
+    /// What the running turn has spent, summed over its model calls.
+    turn_usage: TurnUsage,
 }
 
 impl Drive {
@@ -455,6 +458,7 @@ impl Drive {
         self.child.shutdown(CLOSE_GRACE).await;
         self.message = None;
         self.last_usage = None;
+        self.turn_usage = TurnUsage::default();
         self.settle_tools().await?;
         self.events
             .send(DriverEvent::TurnEnded(StopReason::Cancelled))
@@ -495,6 +499,10 @@ impl Drive {
             // A message exists once text arrives: a step with no text (a
             // tool-only response) opens nothing to end.
             "agent_response" => {
+                // Only a DONE step carries `usage`, once per model call.
+                if step["usage"].is_object() {
+                    self.add_turn_usage(&step["usage"]).await?;
+                }
                 if let Some(used) = step["usage"]["total_tokens"].as_u64().filter(|t| *t > 0) {
                     self.last_usage = Some(used);
                 }
@@ -537,6 +545,19 @@ impl Drive {
         }
     }
 
+    /// Adds one model call's tokens to the turn and reports the sum. agy's
+    /// `input_tokens` leaves the cache out; `output_tokens` holds thinking (probed 1.1.27).
+    async fn add_turn_usage(&mut self, usage: &Value) -> Result<(), Gone> {
+        let count = |key: &str| usage[key].as_u64().unwrap_or(0);
+        let cached = count("cache_read_tokens");
+        self.turn_usage.input_tokens += count("input_tokens") + cached;
+        self.turn_usage.cached_input_tokens += cached;
+        self.turn_usage.output_tokens += count("output_tokens");
+        self.events
+            .send(DriverEvent::TurnUsage(self.turn_usage))
+            .await
+    }
+
     /// Exactly one `result` per turn: usage, then the turn's end.
     async fn on_result(&mut self, result: &Value) -> Result<(), Gone> {
         if let Some(message_id) = self.message.take() {
@@ -554,6 +575,7 @@ impl Drive {
                 })
                 .await?;
         }
+        self.turn_usage = TurnUsage::default();
         let stop = match result["status"].as_str() {
             Some("SUCCESS") => StopReason::Completed {
                 source: CompletionSource::Protocol,

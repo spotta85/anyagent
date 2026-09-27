@@ -11,7 +11,7 @@ use futures::StreamExt;
 use anyagent::{
     AgentError, AgentInstallation, AuthKind, AuthStatus, Capability, ConfigKind, ConfigValue,
     DiagnosticLevel, Event, EventKind, Events, LoginMethod, McpServer, PermissionMode, ResumeToken,
-    Runtime, Session, SessionOptions, StopReason, ToolInput, ToolKind, ToolStatus,
+    Runtime, Session, SessionOptions, StopReason, ToolInput, ToolKind, ToolStatus, TurnUsage,
 };
 
 mod common;
@@ -81,6 +81,14 @@ fn tools_of(kinds: &[EventKind]) -> Vec<&anyagent::ToolUpdate> {
 fn ended(kinds: &[EventKind]) -> &StopReason {
     match kinds.last() {
         Some(EventKind::TurnEnded { stop, .. }) => stop,
+        other => panic!("turn did not end: {other:?}"),
+    }
+}
+
+/// The usage the turn's closing `TurnEnded` carries.
+fn usage_at_end(kinds: &[EventKind]) -> Option<TurnUsage> {
+    match kinds.last() {
+        Some(EventKind::TurnEnded { usage, .. }) => *usage,
         other => panic!("turn did not end: {other:?}"),
     }
 }
@@ -165,6 +173,36 @@ async fn a_turn_streams_text_reports_usage_and_ends_once() {
         }
     )));
     assert!(matches!(ended(&kinds), StopReason::Completed { .. }));
+    session.close().await.unwrap();
+}
+
+/// TurnEnded sums the turn's own model calls: cache reads count as input,
+/// thinking is already in output. The next turn, and the one after a
+/// cancel, start from zero.
+#[tokio::test]
+async fn turn_usage_sums_each_turn_s_own_model_calls() {
+    let thought = TurnUsage {
+        input_tokens: 19456 + 3324 + 16297,
+        cached_input_tokens: 16297,
+        output_tokens: 62 + 4935,
+    };
+    let (session, mut events) = open("usage").await;
+    for _ in 0..2 {
+        session.prompt("think").await.unwrap();
+        assert_eq!(usage_at_end(&drain_turn(&mut events).await), Some(thought));
+    }
+    // The killed turn keeps what its spoken step spent.
+    session.prompt("sleep a while").await.unwrap();
+    while !matches!(next(&mut events).await.kind, EventKind::ToolUpdated(_)) {}
+    session.cancel(true).await.unwrap();
+    let spoken = TurnUsage {
+        input_tokens: 13762,
+        cached_input_tokens: 0,
+        output_tokens: 1,
+    };
+    assert_eq!(usage_at_end(&drain_turn(&mut events).await), Some(spoken));
+    session.prompt("think").await.unwrap();
+    assert_eq!(usage_at_end(&drain_turn(&mut events).await), Some(thought));
     session.close().await.unwrap();
 }
 
