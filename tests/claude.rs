@@ -618,6 +618,31 @@ async fn a_skill_found_mid_session_is_a_skill() {
     session.close().await.unwrap();
 }
 
+/// A CLI that refuses `get_skills_dialog` leaves every command `Builtin`, at
+/// the handshake and after a pushed command list.
+#[tokio::test]
+async fn a_refused_skills_dialog_leaves_every_command_builtin() {
+    let (session, mut events) = open("skills-refused", "--skills-refused").await;
+    let all_builtin = |session: &Session| {
+        let commands = session.info().details.commands;
+        assert!(!commands.is_empty());
+        commands.iter().all(|c| c.source == CommandSource::Builtin)
+    };
+    assert!(all_builtin(&session));
+    session.prompt("new-skill").await.unwrap();
+    while !session
+        .info()
+        .details
+        .commands
+        .iter()
+        .any(|c| c.name == "fresh")
+    {
+        next(&mut events).await;
+    }
+    assert!(all_builtin(&session));
+    session.close().await.unwrap();
+}
+
 /// Probe reports identical details to open for explorer use.
 #[tokio::test]
 async fn probe_reports_the_same_details_as_open() {
