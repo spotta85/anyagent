@@ -1013,7 +1013,7 @@ async fn deny_declines_and_cancel_withdraws() {
 }
 
 /// An MCP tool-call elicitation asks on the tracked MCP tool: allow completes
-/// it (the session form rides `persist`), deny fails it and the turn goes on.
+/// it (the session form rides `persist`); deny, `Deny` and `Cancel` fail it and the turn goes on.
 #[tokio::test]
 async fn an_mcp_tool_approval_maps_to_a_permission() {
     let (session, mut events) = open("mcp-approve", "").await;
@@ -1021,26 +1021,32 @@ async fn an_mcp_tool_approval_maps_to_a_permission() {
         server: "probe".into(),
         tool: "secret_word".into(),
     };
-    for (choice, reply, status) in [
+    let choice = Answer::Permission;
+    let deny = Answer::Deny {
+        message: "not now".into(),
+    };
+    for (answer, reply, status) in [
         (
-            PermissionChoice::AllowOnce,
+            choice(PermissionChoice::AllowOnce),
             "mcpcall=accept ",
             ToolStatus::Completed,
         ),
         (
-            PermissionChoice::AllowAlways,
+            choice(PermissionChoice::AllowAlways),
             "mcpcall=accept/session ",
             ToolStatus::Completed,
         ),
         (
-            PermissionChoice::DenyOnce,
+            choice(PermissionChoice::DenyOnce),
             "mcpcall=decline ",
             ToolStatus::Failed,
         ),
+        // `Deny` sends `decline` (no message), `Cancel` sends `cancel`.
+        (deny, "mcpcall=decline ", ToolStatus::Failed),
+        (Answer::Cancel, "mcpcall=cancel ", ToolStatus::Failed),
     ] {
-        let answer = Some(Answer::Permission(choice));
         let (text, requests, states, stop) =
-            mcp_turn(&session, &mut events, "mcp-tool please", answer).await;
+            mcp_turn(&session, &mut events, "mcp-tool please", Some(answer)).await;
         // The request names no item; its tool is the call `item/started` opened.
         assert_eq!(requests[0].tool.id, states[0].id);
         assert_eq!(requests[0].tool.kind, mcp);
@@ -1072,26 +1078,6 @@ async fn an_mcp_tool_approval_maps_to_a_permission() {
         requests[0].options,
         vec![PermissionChoice::AllowOnce, PermissionChoice::DenyOnce]
     );
-    session.close().await.unwrap();
-}
-
-/// On an MCP approval `Deny` sends action `decline` (no message) and `Cancel`
-/// sends action `cancel`; both fail the call.
-#[tokio::test]
-async fn an_mcp_approval_takes_deny_and_cancel() {
-    let (session, mut events) = open("mcp-deny-cancel", "").await;
-    let deny = Answer::Deny {
-        message: "not now".into(),
-    };
-    for (answer, reply) in [
-        (deny, "mcpcall=decline "),
-        (Answer::Cancel, "mcpcall=cancel "),
-    ] {
-        let (text, _, states, _) =
-            mcp_turn(&session, &mut events, "mcp-tool please", Some(answer)).await;
-        assert!(text.contains(reply), "{text}");
-        assert_eq!(states.last().unwrap().status, ToolStatus::Failed);
-    }
     session.close().await.unwrap();
 }
 
