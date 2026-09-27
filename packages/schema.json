@@ -1922,7 +1922,7 @@
           ]
         },
         "tokens": {
-          "description": "Token count the agent reports for this subagent so far.",
+          "description": "Tokens as the agent reports them: claude the latest call's size, codex the child thread's total.",
           "type": [
             "integer",
             "null"
