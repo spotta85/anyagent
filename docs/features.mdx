@@ -74,7 +74,9 @@ match &details.auth {
 **Confirms:** `AgentDetails`. The same struct is available later as
 `session.info().details`.
 **Gates:** none. `probe_with(&agent, options)` probes with your dir, env,
-args and config home. On claude a probe skips the user's configured hooks
+args and config home; in a workspace's dir it returns that workspace's
+commands, and each command's `source` tells a skill (`Skill { path, scope }`)
+from a built-in. On claude a probe skips the user's configured hooks
 and MCP servers (servers the app declares still load), so the user's
 MCP-provided prompts are not in `commands`.
 
