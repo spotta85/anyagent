@@ -102,7 +102,8 @@ async fn launch(
 ) -> Result<(process::Child, Wire, DriverInfo, Option<u64>), AgentError> {
     let mut args = vec!["--mode".to_owned(), "rpc".to_owned()];
     args.extend(launch_args(&request.options)?);
-    let env = crate::adapter::config_home_env(&request.installation, &request.options)?;
+    args.extend(request.options.args.iter().cloned());
+    let env = crate::adapter::launch_env(&request.installation, &request.options)?;
     let mut child = process::spawn(Spawn {
         exec_path: request.installation.executable_path.clone(),
         args,

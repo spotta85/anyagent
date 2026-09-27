@@ -14,7 +14,10 @@
 import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { appendFileSync } from 'node:fs';
 
+// FIXTURE_ARGV_LOG, set through the session's env: log the launch args there.
+if (process.env.FIXTURE_ARGV_LOG) appendFileSync(process.env.FIXTURE_ARGV_LOG, JSON.stringify(process.argv.slice(2)) + '\n');
 const flag = (name) => process.argv.includes(name);
 const send = (frame) => process.stdout.write(JSON.stringify(frame) + '\n');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

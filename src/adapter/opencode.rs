@@ -221,7 +221,7 @@ async fn spawn_server(
     port: u16,
     secret: &str,
 ) -> Result<process::Child, AgentError> {
-    let mut env = crate::adapter::config_home_env(&request.installation, &request.options)?;
+    let mut env = crate::adapter::launch_env(&request.installation, &request.options)?;
     // The server's basic-auth gate: a per-session secret, so no other local
     // process can drive the port.
     env.push(("OPENCODE_SERVER_USERNAME".into(), "opencode".into()));
@@ -230,15 +230,17 @@ async fn spawn_server(
         "OPENCODE_CONFIG_CONTENT".into(),
         config_content(request.options.permission_mode).to_string(),
     ));
+    let mut args = vec![
+        "serve".into(),
+        "--hostname".into(),
+        "127.0.0.1".into(),
+        "--port".into(),
+        port.to_string(),
+    ];
+    args.extend(request.options.args.iter().cloned());
     process::spawn(Spawn {
         exec_path: request.installation.executable_path.clone(),
-        args: vec![
-            "serve".into(),
-            "--hostname".into(),
-            "127.0.0.1".into(),
-            "--port".into(),
-            port.to_string(),
-        ],
+        args,
         cwd: request.options.cwd().clone(),
         env,
     })

@@ -767,3 +767,18 @@ async fn probe_reports_details() {
     assert_eq!(details.version.as_deref(), Some("1.18.24"));
     assert!(details.commands.iter().any(|c| c.name == "init"));
 }
+
+/// `env` reaches the server; `arg` lands after `serve` and its bind flags.
+#[tokio::test]
+async fn env_and_args_reach_the_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.jsonl");
+    let options = SessionOptions::in_dir(dir.path())
+        .env("FIXTURE_ARGV_LOG", log.to_string_lossy())
+        .arg("--extra-flag");
+    let (session, _events) = open_with("env-args", "", options).await.unwrap();
+    let argv = common::logged_args(&log);
+    assert_eq!(argv[0][0], "serve", "{argv:?}");
+    assert_eq!(argv[0].last().unwrap(), "--extra-flag", "{argv:?}");
+    session.close().await.unwrap();
+}

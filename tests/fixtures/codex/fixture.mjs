@@ -15,7 +15,10 @@
 // A turn/start in the `plan` collaboration mode also yields a `plan` item
 // ("no-plan": one with empty text).
 import { createInterface } from 'node:readline';
+import { appendFileSync } from 'node:fs';
 
+// FIXTURE_ARGV_LOG, set through the session's env: log the launch args there.
+if (process.env.FIXTURE_ARGV_LOG) appendFileSync(process.env.FIXTURE_ARGV_LOG, JSON.stringify(process.argv.slice(2)) + '\n');
 const flag = (name) => process.argv.includes(name);
 const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\n');
 const notify = (method, params) => send({ method, params });

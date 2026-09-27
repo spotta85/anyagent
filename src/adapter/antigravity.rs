@@ -70,16 +70,14 @@ impl Adapter for AntigravityAdapter {
         let events = Emitter::new(ev_tx);
         let recorder = WireRecorder::for_session(&request.options, &events).await;
         let env = crate::adapter::config_home_env(&request.installation, &request.options)?;
-        let (child, wire, info) = launch(&request, recorder.clone(), &env)
-            .await
-            .map_err(|e| {
-                auth_hinted(
-                    e,
-                    Some(self.profile),
-                    &request.installation.executable_path,
-                    &env,
-                )
-            })?;
+        let (child, wire, info) = launch(&request, recorder.clone()).await.map_err(|e| {
+            auth_hinted(
+                e,
+                Some(self.profile),
+                &request.installation.executable_path,
+                &env,
+            )
+        })?;
         // A cancel respawns on the conversation this open landed on.
         if let Some(token) = &info.resume_token {
             request.options.start = SessionStart::Resume(token.clone());
@@ -117,13 +115,13 @@ impl Adapter for AntigravityAdapter {
 async fn launch(
     request: &ConnectRequest,
     recorder: Option<WireRecorder>,
-    env: &[(String, String)],
 ) -> Result<(process::Child, LineWire, DriverInfo), AgentError> {
     let exe = &request.installation.executable_path;
+    let env = crate::adapter::launch_env(&request.installation, &request.options)?;
     let (started, models, version) = tokio::join!(
         start(request, recorder),
-        models(exe, env),
-        version(exe, env)
+        models(exe, &env),
+        version(exe, &env)
     );
     let (child, wire, init) = started?;
     Ok((
@@ -169,11 +167,12 @@ async fn spawn(request: &ConnectRequest) -> Result<process::Child, AgentError> {
         cwd.to_string_lossy().into_owned(),
     ];
     args.extend(launch_args(&request.options)?);
+    args.extend(request.options.args.iter().cloned());
     process::spawn(Spawn {
         exec_path: request.installation.executable_path.clone(),
         args,
         cwd,
-        env: crate::adapter::config_home_env(&request.installation, &request.options)?,
+        env: crate::adapter::launch_env(&request.installation, &request.options)?,
     })
     .await
 }

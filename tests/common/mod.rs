@@ -61,6 +61,16 @@ fn write_stub(dir: &Path, name: &str) -> PathBuf {
     path
 }
 
+/// The launch args each fixture process logged to the `FIXTURE_ARGV_LOG`
+/// file the test set through `SessionOptions::env`, one list per process.
+pub fn logged_args(log: &Path) -> Vec<Vec<String>> {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
 /// The variable `std::env::home_dir` reads, for tests that redirect home.
 #[cfg(unix)]
 pub const HOME_VAR: &str = "HOME";

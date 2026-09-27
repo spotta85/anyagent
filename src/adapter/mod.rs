@@ -467,6 +467,17 @@ pub(crate) fn config_home_env(
     }
 }
 
+/// The child's env: the config-home variable, then the caller's `env` pairs,
+/// which win on a shared name (the child keeps its inherited env too).
+pub(crate) fn launch_env(
+    installation: &AgentInstallation,
+    options: &SessionOptions,
+) -> Result<Vec<(String, String)>, AgentError> {
+    let mut env = config_home_env(installation, options)?;
+    env.extend(options.env.clone());
+    Ok(env)
+}
+
 /// Runnable login methods from the catalog, for a logged-out handshake and
 /// for mid-session auth loss. Given the session's options they carry its
 /// config-home variable, so the login lands where the session looks.

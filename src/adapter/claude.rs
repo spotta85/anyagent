@@ -180,7 +180,8 @@ async fn launch(
     if request.options.throwaway {
         args.push("--no-session-persistence".into());
     }
-    let mut env = crate::adapter::config_home_env(&request.installation, &request.options)?;
+    args.extend(request.options.args.iter().cloned());
+    let mut env = crate::adapter::launch_env(&request.installation, &request.options)?;
     // Free until used (probed 2026-08-27): enables `rewind_files` for the
     // files rollback scope. Env-only, so it must be set at spawn.
     env.push((

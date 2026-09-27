@@ -87,9 +87,9 @@ impl Adapter for AcpAdapter {
         };
         let mut child = process::spawn(Spawn {
             exec_path: request.installation.executable_path.clone(),
-            args: self.args.clone(),
+            args: [&self.args[..], &request.options.args].concat(),
             cwd: request.options.cwd().clone(),
-            env: env.clone(),
+            env: crate::adapter::launch_env(&request.installation, &request.options)?,
         })
         .await?;
         let mut wire = Wire::over(&mut child, recorder);
