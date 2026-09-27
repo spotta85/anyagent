@@ -1283,6 +1283,7 @@ const (
 	CapabilityPlanUsage     Capability = "PlanUsage"
 	CapabilityRollbackFiles Capability = "RollbackFiles"
 	CapabilityCompact       Capability = "Compact"
+	CapabilityOutputSchema  Capability = "OutputSchema"
 )
 
 // McpTransport is a wire type.

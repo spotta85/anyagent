@@ -171,6 +171,8 @@ pub enum Capability {
     Subagents,
     ContextUsage,
     PlanUsage,
+    /// `SessionOptions::output_schema` is honored.
+    OutputSchema,
 }
 
 /// What `rollback` rewinds: conversation context only, or also the files
@@ -495,6 +497,7 @@ pub struct SessionOptions {
     pub(crate) config_home: Option<PathBuf>,
     pub(crate) record_wire: Option<PathBuf>,
     pub(crate) instructions: Option<String>,
+    pub(crate) output_schema: Option<serde_json::Value>,
     pub(crate) env: EnvVars,
     pub(crate) args: Vec<String>,
 }
@@ -539,6 +542,7 @@ impl SessionOptions {
             config_home: None,
             record_wire: None,
             instructions: None,
+            output_schema: None,
             env: EnvVars::default(),
             args: Vec::new(),
         }
@@ -609,6 +613,13 @@ impl SessionOptions {
     /// Extra instructions for the agent, added to its system prompt.
     pub fn instructions(mut self, text: impl Into<String>) -> Self {
         self.instructions = Some(text.into());
+        self
+    }
+
+    /// A JSON schema the agent's final message of each turn must match.
+    /// Requires `Capability::OutputSchema`; `open` fails typed without it.
+    pub fn output_schema(mut self, schema: serde_json::Value) -> Self {
+        self.output_schema = Some(schema);
         self
     }
 

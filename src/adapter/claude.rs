@@ -190,6 +190,10 @@ async fn launch(
     if request.options.throwaway {
         args.push("--no-session-persistence".into());
     }
+    // A schema is no secret, so argv is fine (`--json-schema`, 2.1.283).
+    if let Some(schema) = &request.options.output_schema {
+        args.extend(["--json-schema".into(), schema.to_string()]);
+    }
     args.extend(request.options.args.iter().cloned());
     let mut env = crate::adapter::launch_env(&request.installation, &request.options)?;
     // Free until used (probed 2026-08-27): enables `rewind_files` for the
@@ -514,6 +518,7 @@ fn driver_info(
                     Capability::SlashCommands,
                     Capability::Resume,
                     Capability::Plan,
+                    Capability::OutputSchema,
                 ]);
                 capabilities.mcp_transports =
                     vec![McpTransport::Stdio, McpTransport::Http, McpTransport::Sse];
@@ -864,6 +869,21 @@ impl Drive {
                 },
                 // Questions surface through `can_use_tool`, not as a tool.
                 "AskUserQuestion" => continue,
+                // `--json-schema`'s reply is this call's input: a message of its own,
+                // after any text the model wrote first (live 2026-09-27, 2.1.283).
+                "StructuredOutput" => {
+                    let message_id = MessageId::new(block["id"].as_str().unwrap_or("m0"));
+                    let text = block["input"].to_string();
+                    let kind = EventKind::TextDelta {
+                        message_id: message_id.clone(),
+                        text,
+                    };
+                    let parent_tool = parent.clone().map(ToolId::new);
+                    self.events
+                        .content(kind, parent_tool, Extensions::new())
+                        .await?;
+                    EventKind::MessageEnded { message_id }
+                }
                 _ => {
                     let tool = fresh_tool(block);
                     self.tools.insert(tool.id.as_str().to_owned(), tool.clone());

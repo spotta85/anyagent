@@ -25,6 +25,12 @@ export type Frame1 =
         [k: string]: ConfigValue;
       };
       instructions?: string | null;
+      /**
+       * A JSON schema each turn's final message must match (`open`, `generate`).
+       */
+      output_schema?: {
+        [k: string]: unknown;
+      };
       env?: {
         [k: string]: string;
       };
@@ -44,6 +50,12 @@ export type Frame1 =
         [k: string]: ConfigValue;
       };
       instructions?: string | null;
+      /**
+       * A JSON schema each turn's final message must match (`open`, `generate`).
+       */
+      output_schema?: {
+        [k: string]: unknown;
+      };
       env?: {
         [k: string]: string;
       };
@@ -66,6 +78,12 @@ export type Frame1 =
         [k: string]: ConfigValue;
       };
       instructions?: string | null;
+      /**
+       * A JSON schema each turn's final message must match (`open`, `generate`).
+       */
+      output_schema?: {
+        [k: string]: unknown;
+      };
       env?: {
         [k: string]: string;
       };
@@ -86,6 +104,12 @@ export type Frame1 =
         [k: string]: ConfigValue;
       };
       instructions?: string | null;
+      /**
+       * A JSON schema each turn's final message must match (`open`, `generate`).
+       */
+      output_schema?: {
+        [k: string]: unknown;
+      };
       env?: {
         [k: string]: string;
       };
@@ -456,7 +480,8 @@ export type Capability =
       | "PlanUsage"
     )
   | "RollbackFiles"
-  | "Compact";
+  | "Compact"
+  | "OutputSchema";
 export type McpTransport = "Stdio" | "Http" | "Sse";
 export type ConfigKind =
   | "Boolean"

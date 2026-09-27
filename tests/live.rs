@@ -658,6 +658,36 @@ async fn generate_returns_text_without_a_session() {
     }
 }
 
+/// `generate` with an output schema returns text that parses as JSON matching it. Codex's
+/// API takes only strict schemas: without `additionalProperties: false` it fails the turn
+/// with `invalid_json_schema` (live 2026-09-27, 0.154.0).
+#[tokio::test]
+#[ignore = "live: talks to real agents"]
+async fn generate_matches_an_output_schema() {
+    let schema = serde_json::json!({ "type": "object", "properties": { "title": { "type": "string" } }, "required": ["title"], "additionalProperties": false });
+    for h in enabled().await {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = Runtime::new();
+        let report = runtime.discover().await;
+        let agent = report
+            .require(h)
+            .unwrap_or_else(|_| panic!("{h}: not discovered"));
+        let options = options(h, dir.path()).output_schema(schema.clone());
+        let text = match runtime.generate(agent, options, TITLE).await {
+            Ok(text) => text,
+            Err(AgentError::UnsupportedFeature(why)) => {
+                println!("SKIP {h}: output schema unsupported (typed): {why}");
+                continue;
+            }
+            Err(e) => panic!("{h}: generate failed: {e}"),
+        };
+        let reply: serde_json::Value =
+            serde_json::from_str(&text).unwrap_or_else(|e| panic!("{h}: not JSON ({e}): {text:?}"));
+        assert!(reply["title"].is_string(), "{h}: no title: {text:?}");
+        pass(h, &format!("generate matched the schema: {text}"));
+    }
+}
+
 /// `instructions` reach the agent: the reply follows a rule the prompt never
 /// mentions, and still does after a resume with the same instructions.
 #[tokio::test]

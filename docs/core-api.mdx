@@ -78,6 +78,7 @@ can change later goes through `Session::configure` instead.
 | `permission_mode(mode)` | `Ask` (forward requests), `AcceptEdits` (allow file edits, forward the rest) or `AutoApprove` |
 | `config_home(dir)` | Separate config directory, for several logins of one agent |
 | `instructions(text)` | Extra instructions added to the agent's system prompt ([per agent](/agents#launch-options)) |
+| `output_schema(schema)` | A JSON schema each turn's final message must match. Needs `OutputSchema`; `open` fails `UnsupportedFeature` without it. Codex takes only strict schemas (`additionalProperties: false`) |
 | `env(key, value)` | One env var for the agent process, over the inherited ones and `config_home`'s |
 | `arg(arg)` | One extra launch argument, after anyagent's own. Passed as is; a bad one fails `open` with the agent's error |
 | `quiet_window(dur)` | How long silence may run before completion is inferred |
@@ -332,6 +333,7 @@ capabilities over different wires. The full matrix is on the
 | `Subagents` | Nested `Subagent` tools with `parent_tool_id` on their events |
 | `ContextUsage` | `ContextUsage` events |
 | `PlanUsage` | `runtime.plan_usage` returns real numbers |
+| `OutputSchema` | `SessionOptions::output_schema` |
 
 ## Errors
 

@@ -384,7 +384,7 @@ class LoginMethod2(TypedDict):
 LoginMethod: TypeAlias = LoginMethod1 | LoginMethod2
 
 
-Capability: TypeAlias = Literal['Images', 'Resume', 'Steer', 'Permissions', 'Questions', 'Rollback', 'Fork', 'SlashCommands', 'Plan', 'Subagents', 'ContextUsage', 'PlanUsage'] | Literal['RollbackFiles'] | Literal['Compact']
+Capability: TypeAlias = Literal['Images', 'Resume', 'Steer', 'Permissions', 'Questions', 'Rollback', 'Fork', 'SlashCommands', 'Plan', 'Subagents', 'ContextUsage', 'PlanUsage'] | Literal['RollbackFiles'] | Literal['Compact'] | Literal['OutputSchema']
 
 
 McpTransport: TypeAlias = Literal['Stdio', 'Http', 'Sse']
@@ -647,6 +647,7 @@ class Frame2(TypedDict):
     mcp_servers: NotRequired[list[McpServer]]
     configure: NotRequired[dict[str, ConfigValue]]
     instructions: NotRequired[str | None]
+    output_schema: NotRequired[Any]
     env: NotRequired[dict[str, str]]
     args: NotRequired[list[str]]
     config_home: NotRequired[str | None]
@@ -664,6 +665,7 @@ class Frame3(TypedDict):
     mcp_servers: NotRequired[list[McpServer]]
     configure: NotRequired[dict[str, ConfigValue]]
     instructions: NotRequired[str | None]
+    output_schema: NotRequired[Any]
     env: NotRequired[dict[str, str]]
     args: NotRequired[list[str]]
     config_home: NotRequired[str | None]
@@ -684,6 +686,7 @@ class Frame4(TypedDict):
     mcp_servers: NotRequired[list[McpServer]]
     configure: NotRequired[dict[str, ConfigValue]]
     instructions: NotRequired[str | None]
+    output_schema: NotRequired[Any]
     env: NotRequired[dict[str, str]]
     args: NotRequired[list[str]]
     config_home: NotRequired[str | None]
@@ -702,6 +705,7 @@ class Frame5(TypedDict):
     mcp_servers: NotRequired[list[McpServer]]
     configure: NotRequired[dict[str, ConfigValue]]
     instructions: NotRequired[str | None]
+    output_schema: NotRequired[Any]
     env: NotRequired[dict[str, str]]
     args: NotRequired[list[str]]
     config_home: NotRequired[str | None]

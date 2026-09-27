@@ -132,6 +132,9 @@
                 "null"
               ]
             },
+            "output_schema": {
+              "description": "A JSON schema each turn's final message must match (`open`, `generate`)."
+            },
             "env": {
               "type": "object",
               "additionalProperties": {
@@ -222,6 +225,9 @@
                 "string",
                 "null"
               ]
+            },
+            "output_schema": {
+              "description": "A JSON schema each turn's final message must match (`open`, `generate`)."
             },
             "env": {
               "type": "object",
@@ -327,6 +333,9 @@
                 "null"
               ]
             },
+            "output_schema": {
+              "description": "A JSON schema each turn's final message must match (`open`, `generate`)."
+            },
             "env": {
               "type": "object",
               "additionalProperties": {
@@ -422,6 +431,9 @@
                 "string",
                 "null"
               ]
+            },
+            "output_schema": {
+              "description": "A JSON schema each turn's final message must match (`open`, `generate`)."
             },
             "env": {
               "type": "object",
@@ -2465,6 +2477,11 @@
           "description": "`compact` can summarize the session's context on demand.",
           "type": "string",
           "const": "Compact"
+        },
+        {
+          "description": "`SessionOptions::output_schema` is honored.",
+          "type": "string",
+          "const": "OutputSchema"
         }
       ]
     },

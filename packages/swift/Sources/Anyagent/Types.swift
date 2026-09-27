@@ -1389,6 +1389,7 @@ public enum Capability: String, Codable, Sendable, Equatable {
     case planUsage = "PlanUsage"
     case rollbackFiles = "RollbackFiles"
     case compact = "Compact"
+    case outputSchema = "OutputSchema"
     /// A value this package does not know (a newer binary).
     case unrecognized
 

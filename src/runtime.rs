@@ -162,6 +162,11 @@ impl Runtime {
                 options: options.clone(),
             })
             .await?;
+        // Only an adapter that advertises it honours a schema; the dropped connection stops the agent.
+        let capabilities = &connection.info.details.capabilities;
+        if options.output_schema.is_some() && !capabilities.supports(Capability::OutputSchema) {
+            return Err(AgentError::UnsupportedFeature("output schema".into()));
+        }
         Ok(session::start(agent.clone(), connection, &options))
     }
     /// One-shot generation: prompt in, the agent's reply text out. Opens a
@@ -172,6 +177,7 @@ impl Runtime {
     /// inline: path attachments cannot be opened without tools. Like the
     /// probes, the session is never persisted (claude, codex, pi) or is
     /// deleted at close (opencode), so it stays out of the user's history.
+    /// With an output schema the reply is the turn's final message only.
     pub async fn generate(
         &self,
         agent: &AgentInstallation,
@@ -179,6 +185,7 @@ impl Runtime {
         prompt: impl Into<Input>,
     ) -> Result<String, AgentError> {
         require_new(&options, "generate")?;
+        let final_only = options.output_schema.is_some();
         // Hands-off regardless of the caller's mode: AutoApprove would let
         // the agent run tools before any request reached this loop.
         let mut options = options.permission_mode(PermissionMode::Ask);
@@ -199,7 +206,7 @@ impl Runtime {
                 "generate requires tool permissions or launch-time tool disabling".into(),
             ));
         }
-        let reply = collect_reply(&session, &mut events, prompt.into()).await;
+        let reply = collect_reply(&session, &mut events, prompt.into(), final_only).await;
         session.close().await.ok();
         reply
     }
@@ -340,14 +347,17 @@ fn require_new(options: &SessionOptions, call: &str) -> Result<(), AgentError> {
 }
 
 /// Sends the prompt and gathers the agent's own text (not subagents') until
-/// the turn ends. Requests are declined so the agent stays hands-off.
+/// the turn ends, or only its last message's with `final_only`. Requests are
+/// declined so the agent stays hands-off.
 async fn collect_reply(
     session: &Session,
     events: &mut Events,
     prompt: Input,
+    final_only: bool,
 ) -> Result<String, AgentError> {
     session.prompt(prompt).await?;
     let mut text = String::new();
+    let mut message = None;
     while let Some(event) = events.next().await {
         let event = event?;
         let nested = event
@@ -355,7 +365,17 @@ async fn collect_reply(
             .as_ref()
             .is_some_and(|t| t.parent_tool_id.is_some());
         match event.kind {
-            EventKind::TextDelta { text: delta, .. } if !nested => text.push_str(&delta),
+            EventKind::TextDelta {
+                message_id,
+                text: delta,
+            } if !nested => {
+                // A new message starts the reply over when only the last one counts.
+                if final_only && message.as_ref() != Some(&message_id) {
+                    text.clear();
+                }
+                message = Some(message_id);
+                text.push_str(&delta);
+            }
             // Stop even on a proposed tool call; generation is text-only.
             EventKind::ToolUpdated(_) => {
                 session.cancel(true).await?;
@@ -573,6 +593,27 @@ mod tests {
                 Err(AgentError::InvalidConfiguration(_))
             ));
         }
+    }
+
+    /// An agent that does not advertise `OutputSchema` refuses a schema typed,
+    /// at `open` and so at `generate`.
+    #[tokio::test]
+    async fn an_output_schema_is_refused_without_the_capability() {
+        use crate::adapter::mock::MockAdapter;
+        let runtime = Runtime::with_test_adapter(MockAdapter::permission_flow());
+        let agent = runtime.discover().await.require("mock").unwrap().clone();
+        let options = SessionOptions::in_dir(std::env::temp_dir())
+            .output_schema(serde_json::json!({ "type": "object" }));
+        let refused = runtime.open(&agent, options.clone()).await.err();
+        assert!(
+            matches!(&refused, Some(AgentError::UnsupportedFeature(f)) if f == "output schema"),
+            "{refused:?}"
+        );
+        let refused = runtime.generate(&agent, options, "go").await;
+        assert!(
+            matches!(refused, Err(AgentError::UnsupportedFeature(_))),
+            "{refused:?}"
+        );
     }
 
     #[tokio::test]

@@ -246,6 +246,23 @@ async function runTurn(m) {
     turn = null;
   };
 
+  // `--json-schema` (live 2026-09-27, 2.1.283): the model may answer in text first; the CLI then
+  // makes it call `StructuredOutput`, whose input is the reply the `result` frame carries.
+  if (argAfter('--json-schema')) {
+    msgStart('msg_1');
+    delta({ type: 'text_delta', text: 'Here are a few options.' });
+    ev({ type: 'message_stop' });
+    send({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[structured-output-enforce] You MUST call the StructuredOutput tool to complete this request. Call this tool now.' }] }, parent_tool_use_id: null, session_id: S, uuid: uid(), isSynthetic: true });
+    msgStart('msg_2');
+    assistantTool('toolu_so', 'StructuredOutput', { title: 'Fix flaky login test' });
+    send({ type: 'user', message: { role: 'user', content: [{ tool_use_id: 'toolu_so', type: 'tool_result', content: 'Structured output provided successfully' }] }, parent_tool_use_id: null, session_id: S, uuid: uid(), tool_use_result: 'Structured output provided successfully' });
+    ev({ type: 'message_stop' });
+    resultFrame({ user_message_uuid: u, stop_reason: 'tool_use', result: '{"title":"Fix flaky login test"}', structured_output: { title: 'Fix flaky login test' } });
+    life(u, 'completed');
+    turn = null;
+    return;
+  }
+
   if (flag('--question')) {
     msgStart('msg_1');
     const resp = await ask({ subtype: 'can_use_tool', tool_name: 'AskUserQuestion', display_name: 'AskUserQuestion', input: { questions: [{ question: 'Which color do you prefer?', header: 'Color', options: [{ label: 'Red', description: 'Prefer red' }, { label: 'Blue', description: 'Prefer blue' }], multiSelect: false }] }, tool_use_id: 'toolu_q', requires_user_interaction: true });

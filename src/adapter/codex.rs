@@ -701,6 +701,7 @@ fn driver_info(
                     Capability::SlashCommands,
                     Capability::ContextUsage,
                     Capability::PlanUsage,
+                    Capability::OutputSchema,
                 ]);
                 capabilities.mcp_transports = vec![McpTransport::Stdio, McpTransport::Http];
                 capabilities
@@ -1675,8 +1676,8 @@ impl Drive {
         Ok(items)
     }
 
-    /// `turn/start` params: the selected options (a `default` tier left out), and plan mode as
-    /// the collaboration mode. `summary` turns on reasoning summaries (probed 2026-09-03).
+    /// `turn/start` params: the selected options (a `default` tier left out), plan mode as the
+    /// collaboration mode, the output schema. `summary` turns on reasoning summaries (probed 2026-09-03).
     fn turn_params(&mut self, items: Vec<Value>) -> Value {
         let mut params = json!({
             "threadId": self.thread_id,
@@ -1716,6 +1717,10 @@ impl Drive {
             == Some(&ConfigValue::Bool(true));
         if fast && let Some(tier) = option("model").and_then(|m| fast_tier(&self.models, &m)) {
             params["serviceTier"] = json!(tier);
+        }
+        // `outputSchema` holds for one turn (0.154.0 schema), so it rides every one.
+        if let Some(schema) = &self.request.options.output_schema {
+            params["outputSchema"] = schema.clone();
         }
         params
     }

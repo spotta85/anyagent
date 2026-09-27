@@ -286,6 +286,31 @@ async fn a_probe_opens_no_thread() {
     assert_eq!(current("sandbox"), "workspace-write");
 }
 
+/// An output schema rides every `turn/start` as `outputSchema`: it holds for one turn only.
+#[tokio::test]
+async fn an_output_schema_rides_every_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("requests.jsonl");
+    let schema = serde_json::json!({ "type": "object", "properties": { "title": { "type": "string" } }, "required": ["title"] });
+    let options = SessionOptions::in_dir(dir.path())
+        .output_schema(schema.clone())
+        .env("FIXTURE_REQUEST_LOG", log.to_string_lossy());
+    let (session, mut events) = open_with("schema", "", options).await.unwrap();
+    let capabilities = session.info().details.capabilities;
+    assert!(capabilities.supports(Capability::OutputSchema));
+    for _ in 0..2 {
+        session.prompt("hi").await.unwrap();
+        complete_turn(&session, &mut events, PermissionChoice::AllowOnce).await;
+    }
+    let sent: Vec<_> = logged_requests(&log)
+        .into_iter()
+        .filter(|r| r["method"] == "turn/start")
+        .map(|r| r["params"]["outputSchema"].clone())
+        .collect();
+    assert_eq!(sent, [schema.clone(), schema]);
+    session.close().await.unwrap();
+}
+
 /// A subagent's child thread runs a whole turn inside the parent's: its
 /// content must ride the subagent tool and its bookkeeping must not touch the
 /// parent turn.

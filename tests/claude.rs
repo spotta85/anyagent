@@ -485,6 +485,28 @@ async fn throwaway_sessions_skip_user_hooks_and_mcp_servers() {
     assert_eq!(settings(open), [serde_json::json!({ "fastMode": true })]);
 }
 
+/// An output schema rides `--json-schema`; the `StructuredOutput` call is the
+/// turn's final message, so `generate` returns just the JSON.
+#[tokio::test]
+async fn an_output_schema_rides_the_launch_and_generate_returns_the_structured_reply() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.jsonl");
+    let schema = serde_json::json!({ "type": "object", "properties": { "title": { "type": "string" } }, "required": ["title"] });
+    let agent = AgentInstallation::at("claude", wrapper("schema", ""));
+    let options = SessionOptions::in_dir(dir.path())
+        .output_schema(schema.clone())
+        .env("FIXTURE_ARGV_LOG", log.to_string_lossy());
+    let text = Runtime::new()
+        .generate(&agent, options, "title this")
+        .await
+        .unwrap();
+    assert_eq!(text, r#"{"title":"Fix flaky login test"}"#);
+    let argv = &common::logged_args(&log)[0];
+    let at = argv.iter().position(|a| a == "--json-schema").unwrap();
+    let sent: serde_json::Value = serde_json::from_str(&argv[at + 1]).unwrap();
+    assert_eq!(sent, schema);
+}
+
 /// `plan_usage_with` spawns its short-lived process isolated like a
 /// throwaway session, with the options' env and args and nothing else.
 #[tokio::test]
