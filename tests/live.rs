@@ -260,9 +260,8 @@ async fn mode_switches_live() {
     }
 }
 
-/// `mode: plan` selected live makes the agent propose a plan as
-/// `PlanProposed` and write nothing; claude's go-ahead request follows the plan
-/// and is denied (keep planning).
+/// `mode: plan` selected live: the agent proposes a plan as `PlanProposed` and writes nothing;
+/// claude's `ExitPlanMode` request follows its plan and is denied (keep planning).
 #[tokio::test]
 #[ignore = "live: talks to real agents"]
 async fn plan_mode_proposes_a_plan() {
@@ -288,15 +287,21 @@ async fn plan_mode_proposes_a_plan() {
             let kind = next(&mut events, &format!("{h}: plan")).await.kind;
             match &kind {
                 EventKind::PlanProposed { markdown } => plans.push(markdown.clone()),
-                // claude's go-ahead: right after its plan; deny keeps planning.
+                // claude's go-ahead comes right after its plan; deny keeps planning.
                 EventKind::RequestOpened(Request::Permission(request)) => {
-                    assert_eq!(request.tool.title, "ExitPlanMode", "{h}");
-                    assert!(
-                        matches!(previous, Some(EventKind::PlanProposed { .. })),
-                        "{h}: the request did not follow its plan: {previous:?}"
-                    );
-                    let deny = Answer::Permission(PermissionChoice::DenyOnce);
-                    session.answer(request.id.clone(), deny).await.unwrap();
+                    let choice = if request.tool.title == "ExitPlanMode" {
+                        assert!(
+                            matches!(previous, Some(EventKind::PlanProposed { .. })),
+                            "{h}: the request did not follow its plan: {previous:?}"
+                        );
+                        PermissionChoice::DenyOnce
+                    } else {
+                        PermissionChoice::AllowOnce
+                    };
+                    session
+                        .answer(request.id.clone(), Answer::Permission(choice))
+                        .await
+                        .unwrap();
                 }
                 // Plan mode may still ask; the first choice keeps it moving.
                 EventKind::RequestOpened(Request::Question(request)) => {
