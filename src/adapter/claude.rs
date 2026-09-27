@@ -106,16 +106,19 @@ impl Adapter for ClaudeAdapter {
         })
     }
 
-    /// Quota probe: spawn, `initialize`, `get_usage`, shut down (~1-2 s).
+    /// Quota probe: spawn with the options' config home, env and args,
+    /// `initialize`, `get_usage`, shut down (~1-2 s).
     async fn plan_usage(
         &self,
         installation: &crate::agent::AgentInstallation,
+        options: &crate::agent::SessionOptions,
     ) -> Result<PlanUsage, AgentError> {
+        let args = BASE_ARGS.iter().map(|s| (*s).to_owned());
         let mut child = process::spawn(Spawn {
             exec_path: installation.executable_path.clone(),
-            args: BASE_ARGS.iter().map(|s| (*s).to_owned()).collect(),
+            args: args.chain(options.args.iter().cloned()).collect(),
             cwd: std::env::temp_dir(),
-            env: Vec::new(),
+            env: crate::adapter::launch_env(installation, options)?,
         })
         .await?;
         let mut wire = Wire::over(&mut child, None);

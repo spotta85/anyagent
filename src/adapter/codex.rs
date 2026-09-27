@@ -101,17 +101,19 @@ impl Adapter for CodexAdapter {
         })
     }
 
-    /// Quota probe: spawn, `initialize`, `account/rateLimits/read` (~0.4 s),
-    /// shut down.
+    /// Quota probe: spawn with the options' config home, env and args,
+    /// `initialize`, `account/rateLimits/read` (~0.4 s), shut down.
     async fn plan_usage(
         &self,
         installation: &crate::agent::AgentInstallation,
+        options: &SessionOptions,
     ) -> Result<PlanUsage, AgentError> {
+        create_config_home(options).await?;
         let mut child = process::spawn(Spawn {
             exec_path: installation.executable_path.clone(),
-            args: vec!["app-server".into()],
+            args: [vec!["app-server".to_owned()], options.args.clone()].concat(),
             cwd: std::env::temp_dir(),
-            env: Vec::new(),
+            env: crate::adapter::launch_env(installation, options)?,
         })
         .await?;
         let mut wire = Wire::over(&mut child, None);
@@ -127,7 +129,7 @@ impl Adapter for CodexAdapter {
             // Logged out: "codex account authentication required to read rate limits".
             Ok(Err(WireError::Rpc(m))) if m.contains("authentication required") => {
                 Err(AgentError::AuthRequired {
-                    login: login_methods(installation, None),
+                    login: login_methods(installation, Some(options)),
                 })
             }
             Ok(Err(e)) => Err(with_stderr(e.into_error(), &child)),
