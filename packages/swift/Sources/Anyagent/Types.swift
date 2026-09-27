@@ -199,9 +199,19 @@ extension ConfigValue: ExpressibleByBooleanLiteral {
     public init(booleanLiteral v: Bool) { self = .bool(v) }
 }
 
+public struct Deny: Codable, Sendable, Equatable {
+    public var message: String
+
+    public init(message: String) {
+        self.message = message
+    }
+}
+
 public enum Answer: Codable, Sendable, Equatable {
     case permission(PermissionChoice)
     case question([QuestionAnswer])
+    case deny(Deny)
+    case cancel
     /// A variant this package does not know (a newer binary): its wire name.
     case unrecognized(String)
 
@@ -210,16 +220,25 @@ public enum Answer: Codable, Sendable, Equatable {
         switch self {
         case .permission: "Permission"
         case .question: "Question"
+        case .deny: "Deny"
+        case .cancel: "Cancel"
         case .unrecognized(let tag): tag
         }
     }
 
     public init(from decoder: Decoder) throws {
-        if let s = try? String(from: decoder) { self = .unrecognized(s); return }
+        if let s = try? String(from: decoder) {
+            switch s {
+            case "Cancel": self = .cancel
+            default: self = .unrecognized(s)
+            }
+            return
+        }
         let c = try decoder.container(keyedBy: Key.self)
         switch c.allKeys.first?.stringValue {
         case "Permission": self = .permission(try c.decode(PermissionChoice.self, forKey: Key("Permission")))
         case "Question": self = .question(try c.decode([QuestionAnswer].self, forKey: Key("Question")))
+        case "Deny": self = .deny(try c.decode(Deny.self, forKey: Key("Deny")))
         default: self = .unrecognized(c.allKeys.first?.stringValue ?? "?")
         }
     }
@@ -228,6 +247,8 @@ public enum Answer: Codable, Sendable, Equatable {
         switch self {
         case .permission(let v): try encoder.tagged("Permission", v)
         case .question(let v): try encoder.tagged("Question", v)
+        case .deny(let v): try encoder.tagged("Deny", v)
+        case .cancel: try encoder.raw("Cancel")
         case .unrecognized(let tag): try encoder.raw(tag)
         }
     }

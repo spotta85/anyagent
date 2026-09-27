@@ -187,7 +187,13 @@ export type Answer =
     }
   | {
       Question: QuestionAnswer[];
-    };
+    }
+  | {
+      Deny: {
+        message: string;
+      };
+    }
+  | "Cancel";
 export type PermissionChoice = "AllowOnce" | "AllowAlways" | "DenyOnce" | "DenyAlways";
 export type QuestionAnswer =
   | {

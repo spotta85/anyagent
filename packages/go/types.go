@@ -210,10 +210,17 @@ func (v *ConfigValue) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// Deny is a wire type.
+type Deny struct {
+	Message string `json:"message"`
+}
+
 // Answer: exactly one field is set.
 type Answer struct {
 	Permission   *PermissionChoice `json:"Permission"`
 	Question     []QuestionAnswer  `json:"Question"`
+	Deny         *Deny             `json:"Deny"`
+	Cancel       bool              `json:"-"`
 	Unrecognized string            `json:"-"` // a variant this package does not know (a newer binary): its wire name
 }
 
@@ -224,6 +231,10 @@ func (v Answer) Name() string {
 		return "Permission"
 	case v.Question != nil:
 		return "Question"
+	case v.Deny != nil:
+		return "Deny"
+	case v.Cancel:
+		return "Cancel"
 	}
 	return v.Unrecognized
 }
@@ -234,6 +245,10 @@ func (v Answer) MarshalJSON() ([]byte, error) {
 		return json.Marshal(map[string]any{"Permission": v.Permission})
 	case v.Question != nil:
 		return json.Marshal(map[string]any{"Question": v.Question})
+	case v.Deny != nil:
+		return json.Marshal(map[string]any{"Deny": v.Deny})
+	case v.Cancel:
+		return json.Marshal("Cancel")
 	case v.Unrecognized != "":
 		return json.Marshal(v.Unrecognized)
 	}
@@ -243,6 +258,11 @@ func (v Answer) MarshalJSON() ([]byte, error) {
 func (v *Answer) UnmarshalJSON(b []byte) error {
 	var s string
 	if json.Unmarshal(b, &s) == nil {
+		switch s {
+		case "Cancel":
+			v.Cancel = true
+			return nil
+		}
 		v.Unrecognized = s
 		return nil
 	}
