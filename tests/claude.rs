@@ -484,22 +484,30 @@ async fn throwaway_sessions_skip_user_hooks_and_mcp_servers() {
     assert_eq!(settings(open), [serde_json::json!({ "fastMode": true })]);
 }
 
-/// `plan_usage_with` spawns its short-lived process with the options' env
-/// and args.
+/// `plan_usage_with` spawns its short-lived process isolated like a
+/// throwaway session, with the options' env and args and nothing else.
 #[tokio::test]
 async fn plan_usage_with_applies_env_and_args() {
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("argv.jsonl");
     let agent = AgentInstallation::at("claude", wrapper("usage-with", ""));
     let options = SessionOptions::in_dir(dir.path())
+        .configure("fast", true)
         .env("FIXTURE_ARGV_LOG", log.to_string_lossy())
         .arg("--extra-flag");
     Runtime::new()
         .plan_usage_with(&agent, options)
         .await
         .unwrap();
-    let argv = common::logged_args(&log);
-    assert_eq!(argv[0].last().unwrap(), "--extra-flag", "{argv:?}");
+    let argv = &common::logged_args(&log)[0];
+    assert!(argv.iter().any(|a| a == "--strict-mcp-config"), "{argv:?}");
+    let settings = argv.iter().position(|a| a == "--settings").unwrap();
+    assert_eq!(
+        argv[settings + 1],
+        r#"{"disableAllHooks":true}"#,
+        "{argv:?}"
+    );
+    assert_eq!(argv.last().unwrap(), "--extra-flag", "{argv:?}");
 }
 
 /// Handshake fills version, auth, 9 capabilities (!Steer), commands, and model/effort selects.
