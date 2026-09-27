@@ -343,7 +343,7 @@ async fn handshake(
     let config = start_config(request, &models)?;
     // A probe stops short of `thread/start`, which starts the user's MCP servers and hooks.
     let (thread, thread_id) = if request.options.details_only {
-        (effective_config(wire, request).await, String::new())
+        (effective_config(wire, request).await?, String::new())
     } else {
         let thread = open_thread(wire, request, &config).await?;
         let id = thread["thread"]["id"]
@@ -535,21 +535,22 @@ async fn open_thread(
 
 /// The effective config (`config/read`, 0.154.0) in `thread/start`'s response shape. Unset
 /// values read as codex's defaults; a trusted dir's thread would say workspace-write.
-async fn effective_config(wire: &mut Wire, request: &ConnectRequest) -> Value {
+async fn effective_config(wire: &mut Wire, request: &ConnectRequest) -> Result<Value, AgentError> {
     let params = json!({ "cwd": request.options.cwd() });
-    let response = wire
-        .roundtrip("config/read", params)
-        .await
-        .unwrap_or_default();
+    let response = match wire.roundtrip("config/read", params).await {
+        // A codex without the request: every value reads as its default.
+        Err(WireError::Rpc(_)) => Value::Null,
+        other => other.map_err(WireError::into_error)?,
+    };
     let config = &response["config"];
     let sandbox = config["sandbox_mode"].as_str().unwrap_or("read-only");
-    json!({
+    Ok(json!({
         "model": config["model"],
         "reasoningEffort": config["model_reasoning_effort"],
         "serviceTier": config["service_tier"],
         "approvalPolicy": config["approval_policy"],
         "sandbox": { "type": sandbox_policy(sandbox) },
-    })
+    }))
 }
 
 /// Login state from `account/read`, offline and instant. `OPENAI_API_KEY` is
