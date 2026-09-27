@@ -1554,12 +1554,17 @@ impl Drive {
     /// Note `GET /message` still lists reverted messages afterward: the revert
     /// trims the model's context, not the listing.
     async fn rollback(&mut self, turns: u32) -> Result<(), Gone> {
-        let messages = self
-            .http
-            .get(&format!("/session/{}/message", self.session_id))
-            .await
-            .ok();
-        let Some(anchor) = messages.and_then(|m| user_anchor(&m, turns)) else {
+        let path = format!("/session/{}/message", self.session_id);
+        let messages = match self.http.get(&path).await {
+            Ok(messages) => messages,
+            Err(e) => {
+                return self
+                    .events
+                    .rollback_refused(format!("rollback rejected: {e}"))
+                    .await;
+            }
+        };
+        let Some(anchor) = user_anchor(&messages, turns) else {
             return self.events.rollback_refused("nothing to roll back").await;
         };
         let reverted = self

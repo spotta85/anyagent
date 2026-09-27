@@ -2,7 +2,8 @@
 // plus the `/event` SSE bus, gated by the per-session basic-auth secret.
 // Launch args after the scenario flags are the real ones (`serve --hostname
 // 127.0.0.1 --port N`). Flags: --logged-out (no connected provider),
-// --rename (the server titles the session after the first turn). Prompt
+// --rename (the server titles the session after the first turn),
+// --messages-fail (listing a session's messages is a 500). Prompt
 // words: "write-file" (a write asks permission), "question" (a question
 // tool), "sleep" (only an abort ends the turn), "child" (a task-tool child
 // session runs and asks permission), "die" (exit mid-turn), "mcp" (says how
@@ -176,6 +177,7 @@ createServer(async (req, res) => {
   if (p[0] === 'session' && !p[1]?.startsWith('ses_')) return json(res, 500, { name: 'UnknownError', data: { message: 'Unexpected server error. Check server logs for details.' } });
   if (!ses) return json(res, 404, { name: 'NotFoundError', data: { message: `Session not found: ${p[1]}` } });
   if (req.method === 'GET' && p.length === 2) return json(res, 200, { id: ses.id, title: ses.title, model: ses.model });
+  if (req.method === 'GET' && p[2] === 'message' && flag('--messages-fail')) return json(res, 500, { name: 'UnknownError', data: { message: 'Unexpected server error. Check server logs for details.' } });
   if (req.method === 'GET' && p[2] === 'message') return json(res, 200, ses.messages.map((m) => ({ info: m, parts: [] })));
   if (req.method === 'POST' && p[2] === 'prompt_async') { if (busy[ses.id]) return json(res, 400, { error: 'busy' }); runTurn(ses, body, '').catch(() => process.exit(1)); return json(res, 202, {}); }
   if (req.method === 'POST' && p[2] === 'command') { await runTurn(ses, { parts: [{ type: 'text', text: '' }], model: body.model }, `cmd=${body.command} args=${body.arguments} `); return json(res, 200, { info: {}, parts: [] }); }
