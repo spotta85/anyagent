@@ -131,10 +131,11 @@ environment already has with another value, is refused. `rollback` maps to
 defensively but the capability stays off until observed live. MCP progress
 maps to `ToolProgress`, but 0.154.0 did not forward a stdio server's progress
 when probed. `probe` opens no thread: it reads `config/read` and
-`skills/list`, so the user's MCP servers and hooks never start. An output
-schema rides every `turn/start` as `outputSchema`; the model API takes only
-strict schemas (every object `additionalProperties: false`) and fails the
-turn otherwise.
+`skills/list`, so the user's MCP servers and hooks never start. It may miss
+skills codex loads about 0.5 s after it starts (0.154.0: marketplace plugins;
+`forceReload` does not wait for them). An output schema rides every
+`turn/start` as `outputSchema`; the model API takes only strict schemas
+(every object `additionalProperties: false`) and fails the turn otherwise.
 </Accordion>
 
 <Accordion title="opencode">
