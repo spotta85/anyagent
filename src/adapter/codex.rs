@@ -1158,11 +1158,16 @@ impl Drive {
                 .await
             }
             // From the 0.154.0 schema; the reroute is server-side and was not seen live.
+            // A frame missing either model is dropped.
             "model/rerouted" => {
-                let model = |key: &str| params[key].as_str().unwrap_or_default().to_owned();
+                let (Some(from), Some(to)) =
+                    (params["fromModel"].as_str(), params["toModel"].as_str())
+                else {
+                    return Ok(());
+                };
                 self.content(EventKind::ModelRerouted {
-                    from: model("fromModel"),
-                    to: model("toModel"),
+                    from: from.to_owned(),
+                    to: to.to_owned(),
                     reason: params["reason"].as_str().map(str::to_owned),
                 })
                 .await
