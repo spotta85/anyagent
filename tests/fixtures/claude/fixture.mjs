@@ -10,7 +10,8 @@
 // --rewind-fails (rewind_files answers with an error envelope),
 // --denied (a settings rule refuses a Bash call), --fork-fails (a fork
 // launch dies before speaking), --plan (a plan-mode turn that ends in an
-// ExitPlanMode request).
+// ExitPlanMode request), --mcp-fails (no declared MCP server connects),
+// --mcp-refused (an older CLI refuses mcp_set_servers).
 import { createInterface } from 'node:readline';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 
@@ -107,10 +108,15 @@ function onControl(m) {
       return reply({});
     case 'set_model':
       return reply({});
-    // Declared MCP servers (probed 2026-09-27, 2.1.283); connecting none, it reports no `errors`.
-    case 'mcp_set_servers':
+    // Declared MCP servers (probed 2026-09-27, 2.1.283); `errors` names each server that did not connect.
+    case 'mcp_set_servers': {
+      if (flag('--mcp-refused'))
+        return send({ type: 'control_response', response: { subtype: 'error', request_id: m.request_id, error: 'Unsupported control request subtype: mcp_set_servers' } });
       mcpServers = m.request.servers;
-      return reply({ added: Object.keys(mcpServers), removed: [], errors: {} });
+      const failure = (e) => (e.url ? `MCP endpoint not found at ${e.url}. Check the URL in your MCP config.` : 'connection failed');
+      const errors = flag('--mcp-fails') ? Object.fromEntries(Object.entries(mcpServers).map(([n, e]) => [n, failure(e)])) : {};
+      return reply({ added: Object.keys(mcpServers), removed: [], errors });
+    }
     case 'get_binary_version':
       return reply({ version: '2.1.241', buildTime: '2026-08-22T22:46:48Z' });
     case 'get_usage':

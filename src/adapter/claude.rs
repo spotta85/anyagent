@@ -88,6 +88,7 @@ impl Adapter for ClaudeAdapter {
                 messages: HashMap::new(),
                 configs: Vec::new(),
                 usage_request: None,
+                mcp_request: None,
                 interrupt_id: None,
                 turn_uuid: None,
                 turn_assistant: None,
@@ -234,8 +235,8 @@ fn map_resume(start: &SessionStart, e: AgentError) -> AgentError {
     }
 }
 
-/// `initialize` (carrying the instructions), `get_binary_version`, then the
-/// declared MCP servers, all over the control channel so none rides argv.
+/// `initialize` (carrying the instructions) then `get_binary_version`, both
+/// over the control channel.
 async fn handshake(
     wire: &mut Wire,
     request: &ConnectRequest,
@@ -265,13 +266,6 @@ async fn handshake(
         return Err(AgentError::InvalidConfiguration(
             "the selected model does not support fast mode".into(),
         ));
-    }
-    // Unawaited: a connect can outlast the handshake; the CLI holds later input till it settles.
-    if !request.options.mcp_servers.is_empty() {
-        let servers = mcp_servers(&request.options.mcp_servers);
-        wire.control(json!({ "subtype": "mcp_set_servers", "servers": servers }))
-            .await
-            .map_err(|_| WireError::Closed.into_error())?;
     }
     Ok((info, init["models"].clone()))
 }
@@ -584,6 +578,8 @@ struct Drive {
     configs: Vec<(String, ConfigId, ConfigValue)>,
     /// An in-flight `get_usage`, sent after each `result` frame.
     usage_request: Option<String>,
+    /// The in-flight `mcp_set_servers`, whose receipt names servers that failed.
+    mcp_request: Option<String>,
     /// The last `interrupt` control request, whose receipt may name a
     /// cancelled queued prompt.
     interrupt_id: Option<String>,
@@ -608,6 +604,11 @@ struct Drive {
 impl Drive {
     /// Main loop until the engine or the agent goes away.
     async fn run(mut self, mut commands: mpsc::UnboundedReceiver<DriverCommand>) {
+        // First on the wire, so the first prompt waits on the servers.
+        if self.declare_mcp_servers().await.is_err() {
+            self.child.shutdown(CLOSE_GRACE).await;
+            return;
+        }
         loop {
             tokio::select! {
                 cmd = commands.recv() => match cmd {
@@ -999,6 +1000,20 @@ impl Drive {
             }
             return Ok(());
         }
+        // The declared servers' receipt: a Warning per server that failed, or for a refusal.
+        let for_mcp = self
+            .mcp_request
+            .as_ref()
+            .is_some_and(|id| response["request_id"].as_str() == Some(id));
+        if for_mcp {
+            self.mcp_request = None;
+            for warning in mcp_warnings(response) {
+                self.events
+                    .diagnostic(DiagnosticLevel::Warning, warning)
+                    .await?;
+            }
+            return Ok(());
+        }
         let for_config = self
             .configs
             .iter()
@@ -1155,6 +1170,8 @@ impl Drive {
                 self.configs.clear();
                 self.interrupt_id = None;
                 self.info.resume_token = None;
+                // The fork is a new process: it needs the servers again.
+                self.declare_mcp_servers().await?;
                 self.events
                     .send(DriverEvent::InfoChanged(self.info.clone()))
                     .await?;
@@ -1194,6 +1211,19 @@ impl Drive {
         self.child = child;
         self.wire = wire;
         self.models = models;
+        Ok(())
+    }
+
+    /// Declares the app's MCP servers on the control channel, off argv. Unawaited:
+    /// a connect can take 30 s, and the CLI holds later input until it settles.
+    async fn declare_mcp_servers(&mut self) -> Result<(), Gone> {
+        self.mcp_request = None;
+        if self.request.options.mcp_servers.is_empty() {
+            return Ok(());
+        }
+        let servers = mcp_servers(&self.request.options.mcp_servers);
+        let request = json!({ "subtype": "mcp_set_servers", "servers": servers });
+        self.mcp_request = Some(self.wire.control(request).await?);
         Ok(())
     }
 
@@ -1435,6 +1465,24 @@ fn mcp_servers(servers: &[McpServer]) -> Value {
         entries.insert(server.name.clone(), entry);
     }
     Value::Object(entries)
+}
+
+/// Warnings from a `mcp_set_servers` receipt: one for a refusal, one per server
+/// that did not connect. The CLI's messages name URLs, never headers or env.
+fn mcp_warnings(response: &Value) -> Vec<String> {
+    if response["subtype"].as_str() == Some("error") {
+        let message = response["error"].as_str().unwrap_or("refused");
+        return vec![format!("agent refused the declared MCP servers: {message}")];
+    }
+    response["response"]["errors"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(name, message)| {
+            let message = message.as_str().unwrap_or("connection failed");
+            format!("MCP server `{name}` did not connect: {message}")
+        })
+        .collect()
 }
 
 /// The subagent tool a frame belongs to, if any.

@@ -9,9 +9,9 @@ use futures::StreamExt;
 
 use anyagent::{
     AgentError, AgentInstallation, Answer, AuthKind, AuthStatus, Capability, ConfigId, ConfigKind,
-    ConfigValue, DeliveryKind, Event, EventKind, Events, Input, LoginMethod, McpServer, MessageId,
-    PermissionChoice, PlanStatus, QuestionAnswer, Request, RollbackScope, Runtime, Session,
-    SessionOptions, StopReason, ToolKind, ToolStatus, TurnOrigin,
+    ConfigValue, DeliveryKind, DiagnosticLevel, Event, EventKind, Events, Input, LoginMethod,
+    McpServer, MessageId, PermissionChoice, PlanStatus, QuestionAnswer, Request, RollbackScope,
+    Runtime, Session, SessionOptions, StopReason, ToolKind, ToolStatus, TurnOrigin,
 };
 
 mod common;
@@ -1094,6 +1094,37 @@ async fn mcp_servers_ride_the_control_channel() {
         );
     }
     session.close().await.unwrap();
+}
+
+/// A declared server that did not connect, or a refused `mcp_set_servers`
+/// (an older CLI), is a Warning naming it, never carrying a header value.
+#[tokio::test]
+async fn failed_mcp_servers_are_warnings() {
+    let server = McpServer::http("voice", "http://127.0.0.1:1/mcp")
+        .with("Authorization", "Bearer HTTP-SECRET");
+    for (flag, expected) in [
+        (
+            "--mcp-fails",
+            "MCP server `voice` did not connect: MCP endpoint not found at http://127.0.0.1:1/mcp",
+        ),
+        (
+            "--mcp-refused",
+            "agent refused the declared MCP servers: Unsupported control request subtype",
+        ),
+    ] {
+        let agent = AgentInstallation::at("claude", wrapper(&flag[2..], flag));
+        let options = SessionOptions::in_dir(std::env::temp_dir()).mcp_server(server.clone());
+        let (session, mut events) = Runtime::new().open(&agent, options).await.unwrap();
+        let warning = loop {
+            if let EventKind::Diagnostic(d) = next(&mut events).await.kind {
+                break d;
+            }
+        };
+        assert_eq!(warning.level, DiagnosticLevel::Warning);
+        assert!(warning.message.starts_with(expected), "{}", warning.message);
+        assert!(!warning.message.contains("SECRET"), "{}", warning.message);
+        session.close().await.unwrap();
+    }
 }
 
 /// A throwaway session (a probe here) keeps the declared servers:
