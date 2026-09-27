@@ -1263,6 +1263,41 @@ async fn mcp_servers_ride_the_launch_config() {
     assert!(matches!(err, AgentError::UnsupportedFeature(_)), "{err}");
 }
 
+/// MCP header values stay out of argv: the overrides name env vars, and the
+/// server process receives the values in its env.
+#[tokio::test]
+async fn mcp_header_values_ride_the_env_not_argv() {
+    let dir = tempfile::tempdir().unwrap();
+    let (log, received) = (dir.path().join("argv.jsonl"), dir.path().join("mcp.jsonl"));
+    let options = SessionOptions::in_dir(dir.path())
+        .env("FIXTURE_ARGV_LOG", log.to_string_lossy())
+        .env("FIXTURE_MCP_LOG", received.to_string_lossy())
+        .mcp_server(
+            McpServer::http("t3-code", "http://localhost:1")
+                .with("Authorization", "Bearer tok-s3cret")
+                .with("X-Team", "team-s3cret"),
+        );
+    let (session, _events) = open_with("mcp-env", "", options).await.unwrap();
+    let argv = common::logged_args(&log)[0].join(" ");
+    assert!(!argv.contains("s3cret"), "a value in argv: {argv}");
+    for named in [
+        r#"mcp_servers.t3-code.bearer_token_env_var="ANYAGENT_MCP_T3_CODE_TOKEN""#,
+        r#"mcp_servers.t3-code.env_http_headers={"X-Team"="ANYAGENT_MCP_T3_CODE_HEADER_0"}"#,
+    ] {
+        assert!(argv.contains(named), "{named} missing: {argv}");
+    }
+    let received = std::fs::read_to_string(&received).unwrap();
+    let received: serde_json::Value = serde_json::from_str(received.trim()).unwrap();
+    assert_eq!(
+        received,
+        serde_json::json!({
+            "ANYAGENT_MCP_T3_CODE_TOKEN": "tok-s3cret",
+            "ANYAGENT_MCP_T3_CODE_HEADER_0": "team-s3cret",
+        })
+    );
+    session.close().await.unwrap();
+}
+
 /// `thread/revert {beforeTurnId}` cuts the conversation before the kept
 /// turn; `SessionUpdated` confirms it, a cut deeper than the history is
 /// `InvalidRequest`, and the files scope stays refused.

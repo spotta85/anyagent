@@ -21,6 +21,11 @@ import { appendFileSync } from 'node:fs';
 
 // FIXTURE_ARGV_LOG, set through the session's env: log the launch args there.
 if (process.env.FIXTURE_ARGV_LOG) appendFileSync(process.env.FIXTURE_ARGV_LOG, JSON.stringify(process.argv.slice(2)) + '\n');
+// FIXTURE_MCP_LOG: log each env var an `mcp_servers.…` override names, with the value received.
+if (process.env.FIXTURE_MCP_LOG) {
+  const named = process.argv.filter((a) => a.startsWith('mcp_servers.')).flatMap((a) => [...a.matchAll(/"(\w+)"/g)].map((m) => m[1]));
+  appendFileSync(process.env.FIXTURE_MCP_LOG, JSON.stringify(Object.fromEntries(named.filter((n) => n in process.env).map((n) => [n, process.env[n]]))) + '\n');
+}
 const flag = (name) => process.argv.includes(name);
 const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\n');
 const notify = (method, params) => send({ method, params });
