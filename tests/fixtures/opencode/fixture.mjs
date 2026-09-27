@@ -5,8 +5,9 @@
 // --rename (the server titles the session after the first turn). Prompt
 // words: "write-file" (a write asks permission), "question" (a question
 // tool), "sleep" (only an abort ends the turn), "child" (a task-tool child
-// session runs and asks permission), "die" (exit mid-turn), "mcp-call" (a
-// tool of the user's "my docs" MCP server runs).
+// session runs and asks permission), "die" (exit mid-turn), "mcp" (says how
+// many `GET /mcp` came so far), "mcp-call" (two tools of the user's "my
+// docs" MCP server run).
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
 
@@ -22,8 +23,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sessions = {};
 let sesN = 0, msgN = 0, partN = 0, askN = 0;
 const bus = new Set();
-// `POST /mcp` bodies as received (echoed into the turn) and the status map.
-const mcpAdds = [], mcpStatus = {};
+// Every MCP server's status (the user's "my docs" plus added ones), the
+// `POST /mcp` bodies as received (echoed into the turn), and `GET /mcp` count.
+const mcpStatus = { 'my docs': { status: 'connected' } }, mcpAdds = [];
+let mcpGets = 0;
 const busy = {};
 const waiters = {};
 const emit = (type, properties) => { const line = `data: ${JSON.stringify({ type, properties })}\n\n`; for (const res of bus) res.write(line); };
@@ -71,6 +74,7 @@ async function runTurn(ses, body, text) {
   if (ses.reverted) say(`reverted=${ses.reverted} `);
   if (ses.fork !== undefined) say(`fork=${ses.fork ?? 'tip'} `);
   if (mcpAdds.length) say(`mcp=${JSON.stringify(mcpAdds)}\n`);
+  if (prompt.includes('mcp')) say(`mcp-gets=${mcpGets} `);
   if (prompt.includes('sleep')) {
     const bash = part(sid, asst.id, { type: 'tool', tool: 'bash', callID: `call_${partN}`, state: { status: 'running', input: { command: 'sleep 45' } } });
     partUpdated(sid, bash);
@@ -96,7 +100,9 @@ async function runTurn(ses, body, text) {
     say(`q=${answers.map((a) => a.join('+')).join(',')} `);
   }
   if (prompt.includes('child')) await runChild(ses, asst, say);
-  if (prompt.includes('mcp-call')) partUpdated(sid, part(sid, asst.id, { type: 'tool', tool: 'my_docs_lookup', callID: `call_${partN + 1}`, state: { status: 'completed', input: {}, output: 'found' } }));
+  if (prompt.includes('mcp-call')) {
+    for (const tool of ['my_docs_lookup', 'my_docs_search']) partUpdated(sid, part(sid, asst.id, { type: 'tool', tool, callID: `call_${partN + 1}`, state: { status: 'completed', input: {}, output: 'found' } }));
+  }
   partUpdated(sid, part(sid, asst.id, { type: 'tool', tool: 'todowrite', callID: `call_${partN + 1}`, state: { status: 'completed', input: { todos: [{ content: 'step 1', status: 'in_progress' }] }, output: '' } }));
   say('done');
   partUpdated(sid, part(sid, asst.id, { type: 'step-finish', tokens: { total: 1200, input: 700, output: 150, reasoning: 50, cache: { write: 0, read: 300 } }, cost: 0.01 }));
@@ -165,8 +171,7 @@ createServer(async (req, res) => {
     if (!missing) mcpAdds.push(body);
     return json(res, 200, mcpStatus);
   }
-  // Every MCP server, a user-configured one ("my docs") included.
-  if (req.method === 'GET' && url.pathname === '/mcp') return json(res, 200, { 'my docs': { status: 'connected' }, ...mcpStatus });
+  if (req.method === 'GET' && url.pathname === '/mcp') { mcpGets++; return json(res, 200, mcpStatus); }
   if (req.method === 'POST' && url.pathname === '/session') { const s = newSession(); return json(res, 200, { id: s.id, title: s.title, model: s.model }); }
   if (req.method === 'POST' && p[0] === 'question' && p[2] === 'reply') { waiters[p[1]]?.(body.answers); delete waiters[p[1]]; return json(res, 200, true); }
   if (!ses) return json(res, 404, { error: `no session ${p[1]}` });
