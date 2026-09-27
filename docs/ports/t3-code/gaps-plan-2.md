@@ -69,8 +69,8 @@ pub struct SubagentInfo {
     pub model: Option<String>,
     /// Its latest progress line.
     pub summary: Option<String>,
-    /// Tokens it has spent so far.
-    pub usage: Option<TurnUsage>,
+    /// Token count the agent reports for this subagent so far.
+    pub tokens: Option<u64>,
 }
 ```
 
@@ -80,8 +80,8 @@ pub struct SubagentInfo {
 
 | Agent | Source | Mapping |
 |---|---|---|
-| claude | the `Agent` / `Task` tool's input (`subagent_type`, `model`) and the system frames about tasks (`task_started`, `task_progress`, `task_notification`) | `role`, `model` from the input; `summary` and `usage` from the progress frames. Each change re-emits the tool's `ToolUpdated` snapshot |
-| codex | its collab-agent / sub-agent items | The same fields, where the wire carries them |
+| claude | the `Agent` / `Task` tool's input (`subagent_type`, `model`) and the system frames about tasks (`task_started`, `task_progress`, `task_notification`) | `role`, `model` from the input; `summary` and `tokens` from the progress frames. Each change re-emits the tool's `ToolUpdated` snapshot |
+| codex | the child thread's `thread/tokenUsage/updated` | `tokens` only; codex 0.154.0 sends no role, model or summary |
 | others | unchanged | `subagent: None` |
 
 Confirm every frame and field first (constraint 5). A field the wire does not carry stays `None`.
@@ -90,7 +90,7 @@ A subagent that runs in the background: its tool must stay `Running` until the a
 
 Keep the change to `ToolUpdate` cheap for the rest of the code: every place that builds a `ToolUpdate` must set the new field; prefer one small constructor or `..` with an existing helper over editing dozens of literals.
 
-**Tests:** fixture tests for claude and codex with recorded frames: role and model at start, a summary and usage after a progress frame, the final state. One test that a background subagent's tool is still `Running` when the turn ends and is listed in `TurnEnded.background`. Live: extend the existing subagent live test for claude to print and assert `subagent.role`.
+**Tests:** fixture tests for claude and codex with recorded frames: role and model at start, a summary and tokens after a progress frame, the final state. One test that a background subagent's tool is still `Running` when the turn ends and is listed in `TurnEnded.background`. Live: extend the existing subagent live test for claude to print and assert `subagent.role`.
 
 **Files:** `src/event.rs`, `src/lib.rs`, `src/adapter/claude.rs`, `src/adapter/codex.rs`, every file that builds a `ToolUpdate`, tests, docs, regenerated schema and types.
 
