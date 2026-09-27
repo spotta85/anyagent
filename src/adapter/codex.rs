@@ -546,9 +546,15 @@ fn driver_info(
         current: model.clone().map(ConfigValue::Text),
         live: true,
     };
+    // The effort codex reports stays current even when the model's levels
+    // omit it, so the option agrees with the configuration.
     let effort_option = model
         .as_deref()
-        .and_then(|m| crate::adapter::effort_option(effort_choices(models, m), effort.clone()));
+        .and_then(|m| crate::adapter::effort_option(effort_choices(models, m), None))
+        .map(|option| ConfigOption {
+            current: effort.clone().map(ConfigValue::Text),
+            ..option
+        });
     let tier = config.tier.clone().unwrap_or_else(|| "default".into());
     let tier_choices = tier_choices(models);
     let tier_option = (tier_choices.len() > 1).then(|| ConfigOption {

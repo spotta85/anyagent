@@ -80,7 +80,8 @@ function threadResult(params) {
   return {
     thread: THREAD,
     model: 'gpt-6', // the config-file default; per-turn model rides turn/start
-    reasoningEffort: null,
+    // --xhigh-effort: a config-file effort the default model does not list.
+    reasoningEffort: flag('--xhigh-effort') ? 'xhigh' : null,
     serviceTier: flag('--default-fast') ? 'priority' : null,
     approvalPolicy: params.approvalPolicy ?? 'on-request',
     sandbox: { type: sandboxType, networkAccess: false },
