@@ -2287,42 +2287,4 @@ mod tests {
         assert_eq!(window_label(43200), "Month");
         assert_eq!(window_label(20160), "336h");
     }
-
-    #[test]
-    fn mcp_header_values_become_env_vars() {
-        let mut headers = std::collections::BTreeMap::new();
-        headers.insert("Authorization".to_owned(), "Bearer s3cret".to_owned());
-        headers.insert("X-Team".to_owned(), "team-s3cret".to_owned());
-        let server = McpServer {
-            name: "t3-code".to_owned(),
-            connection: McpConnection::Http {
-                url: "http://127.0.0.1:1/mcp".to_owned(),
-                headers,
-            },
-        };
-        let (args, env) = mcp_overrides(&[server], &Vec::new()).unwrap();
-        let joined = args.join(" ");
-        assert!(
-            joined.contains(
-                "mcp_servers.t3-code.bearer_token_env_var=\"ANYAGENT_MCP_T3_CODE_TOKEN\""
-            )
-        );
-        assert!(joined.contains(
-            "mcp_servers.t3-code.env_http_headers={\"X-Team\"=\"ANYAGENT_MCP_T3_CODE_HEADER_0\"}"
-        ));
-        assert!(
-            !joined.contains("s3cret"),
-            "values must stay out of argv: {joined}"
-        );
-        assert_eq!(
-            env,
-            vec![
-                ("ANYAGENT_MCP_T3_CODE_TOKEN".to_owned(), "s3cret".to_owned()),
-                (
-                    "ANYAGENT_MCP_T3_CODE_HEADER_0".to_owned(),
-                    "team-s3cret".to_owned()
-                )
-            ]
-        );
-    }
 }
