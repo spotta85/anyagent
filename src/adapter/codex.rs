@@ -1012,10 +1012,15 @@ impl Drive {
             "turn/completed" | "turn/failed" | "turn/aborted" => {
                 self.settle_subagent(tool, &params["turn"]).await
             }
-            // Consumed: the child's plan is a whole-list replacement and its
-            // usage is its own context window, so neither may reach the
-            // parent's, and its turn frames must not move the parent's turn.
-            "thread/tokenUsage/updated" | "thread/status/changed" => Ok(()),
+            // The child's usage is its own context window, never the parent's; its
+            // total is the subagent's token count (probed 2026-09-27, 0.154.0).
+            "thread/tokenUsage/updated" => {
+                let total = params["tokenUsage"]["total"]["totalTokens"].as_u64();
+                self.subagent_tokens(tool, total).await
+            }
+            // Consumed: the child's plan is a whole-list replacement, and its
+            // turn frames must not move the parent's turn.
+            "thread/status/changed" => Ok(()),
             _ if method.starts_with("turn/") => Ok(()),
             // Content: the parent's translation, attributed to the subagent.
             _ if method.starts_with("item/") || method == "error" => {
@@ -1042,6 +1047,16 @@ impl Drive {
         if let Some(message) = turn["error"]["message"].as_str() {
             update.output = Some(message.to_owned());
         }
+        self.content(EventKind::ToolUpdated(update)).await
+    }
+
+    /// A child thread's token total rides its subagent tool's snapshot.
+    async fn subagent_tokens(&mut self, tool: ToolId, tokens: Option<u64>) -> Result<(), Gone> {
+        let Some(update) = self.tools.get_mut(tool.as_str()) else {
+            return Ok(());
+        };
+        update.subagent.get_or_insert_default().tokens = tokens;
+        let update = update.clone();
         self.content(EventKind::ToolUpdated(update)).await
     }
 
