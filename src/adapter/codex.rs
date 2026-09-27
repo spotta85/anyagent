@@ -793,7 +793,6 @@ impl Drive {
         match cmd {
             DriverCommand::StartTurn { input } => {
                 self.events.send(DriverEvent::TurnAck).await?;
-                self.turn_usage = TurnUsage::default();
                 let items = self.input_items(&input).await?;
                 let params = self.turn_params(items);
                 let plan = params["collaborationMode"]["mode"] == "plan";
@@ -1274,6 +1273,7 @@ impl Drive {
         self.requests.clear();
         self.children.clear();
         self.open_reasoning.clear();
+        self.turn_usage = TurnUsage::default();
         self.turns.extend(self.turn.take());
         self.turn_started = false;
         self.pending_steer = None;

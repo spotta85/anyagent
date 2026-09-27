@@ -157,6 +157,7 @@ async function onRequest(m) {
       const id = `turn-${turnN++}`;
       send({ method: 'turn/started', params: { threadId: THREAD.id, turn: { id, status: 'inProgress' } } });
       send({ method: 'item/started', params: { threadId: THREAD.id, turnId: id, item: { type: 'contextCompaction', id: 'cc-1' } } });
+      send({ method: 'thread/tokenUsage/updated', params: { threadId: THREAD.id, turnId: id, tokenUsage: { total: { totalTokens: 3765 }, last: { totalTokens: 3765, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 }, modelContextWindow: 258400 } } });
       send({ method: 'item/completed', params: { threadId: THREAD.id, turnId: id, item: { type: 'contextCompaction', id: 'cc-1' } } });
       send({ method: 'turn/completed', params: { threadId: THREAD.id, turn: { id, status: 'completed', error: null } } });
       return;
@@ -304,7 +305,7 @@ async function runTurn(params) {
   notify('turn/plan/updated', { threadId: THREAD.id, turnId: turn.id, plan: [{ step: 'step 1', status: 'inProgress' }] });
   delta(msg.id, 'done');
   itemCompleted({ ...msg, text: 'done' });
-  notify('thread/tokenUsage/updated', { threadId: THREAD.id, turnId: turn.id, tokenUsage: { total: { totalTokens: 2400 }, last: { totalTokens: 1200 }, modelContextWindow: 258400 } });
+  notify('thread/tokenUsage/updated', { threadId: THREAD.id, turnId: turn.id, tokenUsage: { total: { totalTokens: 2400 }, last: { totalTokens: 1200, inputTokens: 1100, cachedInputTokens: 600, outputTokens: 100 }, modelContextWindow: 258400 } });
   notify('account/rateLimits/updated', { rateLimits: RATE_LIMITS });
   if (turn.interrupted) return endTurn('interrupted');
   endTurn('completed');

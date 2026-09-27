@@ -1395,7 +1395,8 @@ async fn a_dead_agent_surfaces_the_exit_and_stderr() {
 }
 
 /// Codex compacts through `thread/compact/start`, which runs a turn of its
-/// own; a refusal never starts one, so the adapter ends the turn itself.
+/// own without the prompted turn's tokens; a refusal never starts one, so the
+/// adapter ends the turn itself.
 #[tokio::test]
 async fn compact_reports_the_compaction_as_an_agent_turn() {
     let (session, mut events) = open("compact", "").await;
@@ -1406,6 +1407,8 @@ async fn compact_reports_the_compaction_as_an_agent_turn() {
             .capabilities
             .supports(Capability::Compact)
     );
+    session.prompt("hi").await.unwrap();
+    complete_turn(&session, &mut events, PermissionChoice::AllowOnce).await;
     session.compact().await.unwrap();
     let mut kinds = Vec::new();
     while !matches!(kinds.last(), Some(EventKind::TurnEnded { .. })) {
@@ -1415,6 +1418,10 @@ async fn compact_reports_the_compaction_as_an_agent_turn() {
         kinds
             .iter()
             .any(|k| matches!(k, EventKind::ContextCompacted)),
+        "{kinds:?}"
+    );
+    assert!(
+        matches!(kinds.last(), Some(EventKind::TurnEnded { usage: Some(u), .. }) if u.input_tokens == 0),
         "{kinds:?}"
     );
 
