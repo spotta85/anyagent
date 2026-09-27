@@ -234,8 +234,8 @@ fn map_resume(start: &SessionStart, e: AgentError) -> AgentError {
     }
 }
 
-/// `initialize` (carrying the instructions) then `get_binary_version`, both
-/// over the control channel.
+/// `initialize` (carrying the instructions), `get_binary_version`, then the
+/// declared MCP servers, all over the control channel so none rides argv.
 async fn handshake(
     wire: &mut Wire,
     request: &ConnectRequest,
@@ -266,18 +266,21 @@ async fn handshake(
             "the selected model does not support fast mode".into(),
         ));
     }
+    // Unawaited: a connect can outlast the handshake; the CLI holds later input till it settles.
+    if !request.options.mcp_servers.is_empty() {
+        let servers = mcp_servers(&request.options.mcp_servers);
+        wire.control(json!({ "subtype": "mcp_set_servers", "servers": servers }))
+            .await
+            .map_err(|_| WireError::Closed.into_error())?;
+    }
     Ok((info, init["models"].clone()))
 }
 
-/// MCP declarations, throwaway isolation and creation-time config as launch
-/// flags. Flag settings share one `--settings` value.
+/// Throwaway isolation and creation-time config as launch flags. Flag
+/// settings share one `--settings` value.
 fn option_args(options: &crate::agent::SessionOptions) -> Result<Vec<String>, AgentError> {
     let mut args = Vec::new();
     let mut settings = serde_json::Map::new();
-    if !options.mcp_servers.is_empty() {
-        args.push("--mcp-config".into());
-        args.push(mcp_config(&options.mcp_servers).to_string());
-    }
     // A throwaway session (probe, generate) runs no user hooks or MCP servers.
     if options.throwaway {
         args.push("--strict-mcp-config".into());
@@ -1413,9 +1416,9 @@ impl Drive {
 // FRAME DECODING
 // ---------------------------------------------------------------------------
 
-/// Declared MCP servers as a `--mcp-config` inline JSON value. The CLI takes
-/// every transport, so nothing is refused.
-fn mcp_config(servers: &[McpServer]) -> Value {
+/// Declared MCP servers as the `servers` object of `mcp_set_servers`. The CLI
+/// takes every transport, so nothing is refused.
+fn mcp_servers(servers: &[McpServer]) -> Value {
     let mut entries = serde_json::Map::new();
     for server in servers {
         let entry = match &server.connection {
@@ -1431,7 +1434,7 @@ fn mcp_config(servers: &[McpServer]) -> Value {
         };
         entries.insert(server.name.clone(), entry);
     }
-    json!({ "mcpServers": entries })
+    Value::Object(entries)
 }
 
 /// The subagent tool a frame belongs to, if any.
