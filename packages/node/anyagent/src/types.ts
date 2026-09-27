@@ -666,7 +666,7 @@ export interface SubagentInfo {
    */
   summary?: string | null;
   /**
-   * Token count the agent reports for this subagent so far.
+   * Tokens as the agent reports them: claude the latest call's size, codex the child thread's total.
    */
   tokens?: number | null;
 }

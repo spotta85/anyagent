@@ -203,7 +203,7 @@ pub struct SubagentInfo {
     /// Its latest progress line.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
-    /// Token count the agent reports for this subagent so far.
+    /// Tokens as the agent reports them: claude the latest call's size, codex the child thread's total.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<u64>,
 }
