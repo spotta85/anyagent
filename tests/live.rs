@@ -21,8 +21,8 @@ use futures::StreamExt;
 
 use anyagent::{
     AgentError, Answer, AuthStatus, Capability, ConfigKind, ConfigValue, DeliveryKind, Event,
-    EventKind, Events, Input, MessageId, PermissionChoice, PermissionMode, PromptId,
-    QuestionAnswer, Request, RequestId, ResumeToken, RollbackScope, Runtime, Session,
+    EventKind, Events, Input, McpServer, McpTransport, MessageId, PermissionChoice, PermissionMode,
+    PromptId, QuestionAnswer, Request, RequestId, ResumeToken, RollbackScope, Runtime, Session,
     SessionOptions, StopReason, ToolKind, ToolStatus, TurnOrigin,
 };
 
@@ -54,6 +54,8 @@ const TITLE: &str = "Title this conversation in at most six words: the user aske
 a git branch. Reply with only the title. No tools.";
 /// The cheap claude alias; the CLI resolves it to the current Haiku.
 const CLAUDE_MODEL: &str = "haiku";
+/// What the `secret_word` tool of tests/fixtures/mcp/server.mjs returns.
+const MCP_MARKER: &str = "PLUM-4417";
 
 // -- gate -------------------------------------------------------------------
 
@@ -728,6 +730,72 @@ async fn tools_run_to_completion_and_the_file_lands() {
             pass(h, "tool completed and file landed");
         }
         session.close().await.unwrap();
+    }
+}
+
+/// A declared stdio MCP server's tool is called: the call reaches the server
+/// (tests/fixtures/mcp/server.mjs logs it), shows as `ToolKind::Mcp`, and
+/// its marker comes back. Agents that take no stdio servers are skipped.
+#[tokio::test]
+#[ignore = "live: talks to real agents"]
+async fn mcp_server_tools_are_called() {
+    let script =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mcp/server.mjs");
+    for h in enabled().await {
+        let dir = tempfile::tempdir().unwrap();
+        let calls = dir.path().join("mcp-calls.log");
+        let server = McpServer::stdio(
+            "probe",
+            "node",
+            [script.to_string_lossy(), calls.to_string_lossy()],
+        );
+        let runtime = Runtime::new();
+        let report = runtime.discover().await;
+        let agent = report.require(h).unwrap();
+        let options = options(h, dir.path()).mcp_server(server);
+        let (session, mut events) = match runtime.open(agent, options).await {
+            Ok(opened) => opened,
+            Err(AgentError::UnsupportedFeature(what)) => {
+                println!("SKIP {h}: {what}");
+                continue;
+            }
+            Err(e) => panic!("{h}: open failed: {e}"),
+        };
+        let transports = session.info().details.capabilities.mcp_transports;
+        assert!(
+            transports.contains(&McpTransport::Stdio),
+            "{h}: {transports:?}"
+        );
+        session
+            .prompt("Call the secret_word tool of the probe MCP server once, then reply with only the word it returned.")
+            .await
+            .unwrap();
+        let mut text = String::new();
+        let mut kinds = Vec::new();
+        loop {
+            match next(&mut events, &format!("{h}: mcp tool turn")).await.kind {
+                EventKind::TextDelta { text: t, .. } => text.push_str(&t),
+                EventKind::ToolUpdated(tool) => kinds.push(tool.kind),
+                EventKind::RequestOpened(request) => {
+                    session.answer(request.id(), allow()).await.unwrap();
+                }
+                EventKind::TurnEnded { .. } => break,
+                _ => {}
+            }
+        }
+        let logged = std::fs::read_to_string(&calls).unwrap_or_default();
+        assert!(
+            logged.contains("secret_word"),
+            "{h}: no call reached the server"
+        );
+        let mcp = ToolKind::Mcp {
+            server: "probe".into(),
+            tool: "secret_word".into(),
+        };
+        assert!(kinds.contains(&mcp), "{h}: tool kinds {kinds:?}");
+        assert!(text.contains(MCP_MARKER), "{h}: reply {text:?}");
+        session.close().await.unwrap();
+        pass(h, "the MCP tool was called and its marker came back");
     }
 }
 
