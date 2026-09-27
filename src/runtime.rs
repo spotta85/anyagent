@@ -218,7 +218,8 @@ impl Runtime {
         self.probe_with(agent, throwaway_options()).await
     }
 
-    /// `probe` with the caller's options: dir, env, args, config home. Always throwaway.
+    /// `probe` with the caller's options: dir, env, args, config home. Always
+    /// throwaway; an output schema is ignored, so it cannot fail the probe.
     pub async fn probe_with(
         &self,
         agent: &AgentInstallation,
@@ -227,6 +228,7 @@ impl Runtime {
         require_new(&options, "probe")?;
         options.throwaway = true;
         options.details_only = true;
+        options.output_schema = None;
         let opened = self.open(agent, options).await;
         // Not logged is reported as a detail.
         let (session, mut events) = match opened {
@@ -596,7 +598,7 @@ mod tests {
     }
 
     /// An agent that does not advertise `OutputSchema` refuses a schema typed,
-    /// at `open` and so at `generate`.
+    /// at `open` and so at `generate`; a probe ignores it.
     #[tokio::test]
     async fn an_output_schema_is_refused_without_the_capability() {
         use crate::adapter::mock::MockAdapter;
@@ -604,6 +606,8 @@ mod tests {
         let agent = runtime.discover().await.require("mock").unwrap().clone();
         let options = SessionOptions::in_dir(std::env::temp_dir())
             .output_schema(serde_json::json!({ "type": "object" }));
+        let probed = runtime.probe_with(&agent, options.clone()).await;
+        assert!(probed.is_ok(), "{probed:?}");
         let refused = runtime.open(&agent, options.clone()).await.err();
         assert!(
             matches!(&refused, Some(AgentError::UnsupportedFeature(f)) if f == "output schema"),
