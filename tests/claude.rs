@@ -933,6 +933,38 @@ async fn a_question_is_typed_and_the_answer_reaches_the_agent() {
     session.close().await.unwrap();
 }
 
+/// A deny's message replaces the fixed text; a cancel denies with
+/// `interrupt`, which ends the turn `Cancelled`, for a question too.
+#[tokio::test]
+async fn deny_carries_its_message_and_cancel_interrupts() {
+    let deny = Answer::Deny {
+        message: "not now".into(),
+    };
+    for (name, flags, answer, expected) in [
+        ("deny-why", "", deny, "Hello perm=deny(not now) done"),
+        ("cancel-perm", "", Answer::Cancel, "Hello "),
+        ("cancel-question", "--question", Answer::Cancel, ""),
+    ] {
+        let (session, mut events) = open(name, flags).await;
+        session.prompt("hi").await.unwrap();
+        let mut text = String::new();
+        let stop = loop {
+            match next(&mut events).await.kind {
+                EventKind::RequestOpened(request) => {
+                    session.answer(request.id(), answer.clone()).await.unwrap()
+                }
+                EventKind::TextDelta { text: t, .. } => text.push_str(&t),
+                EventKind::TurnEnded { stop, .. } => break stop,
+                _ => {}
+            }
+        };
+        assert_eq!(text, expected, "{name}");
+        let cancelled = answer == Answer::Cancel;
+        assert_eq!(stop == StopReason::Cancelled, cancelled, "{name}: {stop:?}");
+        session.close().await.unwrap();
+    }
+}
+
 /// ExitPlanMode's plan arrives as `PlanProposed` right before its permission
 /// request; an empty plan leaves only the request.
 #[tokio::test]
