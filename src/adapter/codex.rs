@@ -845,11 +845,7 @@ impl Drive {
             DriverCommand::Cancel => {
                 self.pending_steer = None;
                 for (_, pending) in std::mem::take(&mut self.requests) {
-                    let response = match pending.reply {
-                        Reply::Decision => json!({ "decision": "cancel" }),
-                        Reply::Action => json!({ "action": "cancel" }),
-                        Reply::Answers(_) => json!({ "answers": {} }),
-                    };
+                    let response = cancel_reply(&pending.reply);
                     self.wire.respond(pending.wire_id, response).await?;
                 }
                 if let Some(turn) = self.turn.clone() {
@@ -1506,6 +1502,10 @@ impl Drive {
             (Reply::Answers(questions), Answer::Question(answers)) => {
                 question_response(questions, &answers)
             }
+            // Neither `decline` form takes a message (generated schema, 0.154.0).
+            (Reply::Decision, Answer::Deny { .. }) => json!({ "decision": "decline" }),
+            (Reply::Action, Answer::Deny { .. }) => json!({ "action": "decline" }),
+            (reply, Answer::Cancel) => cancel_reply(reply),
             // A shape mismatch; the engine refuses these before they get here.
             _ => json!({ "decision": "decline" }),
         };
@@ -1853,6 +1853,16 @@ fn question_response(questions: &[Question], answers: &[QuestionAnswer]) -> Valu
         map.insert(question.id.to_string(), json!({ "answers": values }));
     }
     json!({ "answers": map })
+}
+
+/// The reply that withdraws a request: `cancel` also interrupts the turn
+/// (generated schema, 0.154.0); a question has no cancel, so no answers.
+fn cancel_reply(reply: &Reply) -> Value {
+    match reply {
+        Reply::Decision => json!({ "decision": "cancel" }),
+        Reply::Action => json!({ "action": "cancel" }),
+        Reply::Answers(_) => json!({ "answers": {} }),
+    }
 }
 
 /// A running stand-in for an approval's tool when no tracked item matches.
