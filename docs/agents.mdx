@@ -58,6 +58,9 @@ What each adapter reports after `open`. Read it from
 Every gate holds the same way: an unsupported call fails typed with
 `UnsupportedFeature` instead of misbehaving.
 
+`TurnEnded.usage` (the turn's token counts) is not a capability: claude,
+codex, opencode, and pi fill it; antigravity and ACP agents leave it `None`.
+
 ## Config options by agent
 
 | Agent | `model` | `effort` | `fast` | `mode` | other |

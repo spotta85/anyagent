@@ -1198,7 +1198,7 @@ async fn turn_usage_rides_turn_ended() {
             }
         };
         println!("{h}: turn usage {usage:?}");
-        if matches!(h, "claude" | "codex") {
+        if matches!(h, "claude" | "codex" | "opencode" | "pi") {
             let usage = usage.unwrap_or_else(|| panic!("{h}: TurnEnded without usage"));
             assert!(usage.input_tokens > 0, "{h}: no input tokens");
             assert!(usage.output_tokens > 0, "{h}: no output tokens");
