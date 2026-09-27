@@ -231,6 +231,8 @@ async function runTurn(m) {
     assistantTool('toolu_plan', 'ExitPlanMode', input);
     const resp = await ask({ subtype: 'can_use_tool', tool_name: 'ExitPlanMode', display_name: 'ExitPlanMode', input, tool_use_id: 'toolu_plan', requires_user_interaction: true });
     if (turn.interrupted) return aborted();
+    // An allowed plan ends plan mode: the CLI reports its new mode.
+    if (resp.response?.behavior === 'allow') send({ type: 'system', subtype: 'status', status: null, permissionMode: 'default', uuid: uid(), session_id: S });
     delta({ type: 'text_delta', text: `plan=${resp.response?.behavior ?? 'deny'}` });
     ev({ type: 'message_stop' });
     resultFrame({ user_message_uuid: u });
