@@ -35,9 +35,9 @@ export type Command = Frame1;
 export type OpenOptions = Omit<Extract<Command, { cmd: "open" }>, "cmd" | "agent">;
 /** What `generate` accepts besides the agent and prompt: `open`'s fields plus `attachments`. */
 export type GenerateOptions = Omit<Extract<Command, { cmd: "generate" }>, "cmd" | "agent" | "prompt">;
-/** What `probe` accepts besides the agent: an optional `dir`, `env`, `args`, `config_home`. */
+/** What `probe` accepts besides the agent: an optional `dir` plus every `open` option; `resume` or `fork` fails. */
 export type ProbeOptions = Omit<Extract<Command, { cmd: "probe" }>, "cmd" | "agent">;
-/** What `planUsage` accepts besides the agent: `env`, `args`, `config_home`. */
+/** What `planUsage` accepts besides the agent: every `open` option but `dir`; `config_home`, `env` and `args` matter. */
 export type PlanUsageOptions = Omit<Extract<Command, { cmd: "plan_usage" }>, "cmd" | "agent">;
 /** The variant name of an `EventKind`: `"TextDelta"`, `"TurnEnded"`, … */
 export type EventKindName = EventKind extends infer K ? (K extends string ? K : keyof K) : never;
