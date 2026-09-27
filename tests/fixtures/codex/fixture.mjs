@@ -123,6 +123,9 @@ async function onRequest(m) {
       reply(threadResult(m.params));
       return featureWarning();
     case 'thread/resume':
+      // Recorded 2026-09-26 (0.154.0): a well-formed id with no thread, and a malformed one.
+      if (m.params.threadId === 'th-gone') return refuse('no rollout found for thread id th-gone');
+      if (m.params.threadId === 'not-a-uuid') return refuse('invalid session id: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-fA-F-], found `n` at 1');
       THREAD.id = m.params.threadId;
       turnIds.push('turn-prev'); // the thread's history rides the bind
       return reply({ ...threadResult(m.params), thread: { ...THREAD, turns: [{ id: 'turn-prev' }] } });

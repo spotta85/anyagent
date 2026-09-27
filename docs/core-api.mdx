@@ -299,7 +299,7 @@ enum is `#[non_exhaustive]`.
 | `UnsupportedFeature` | You called something the capability set does not include |
 | `InvalidConfiguration` | Bad option id or value, or an isolation request the agent cannot honour |
 | `InvalidRequest` | Answering a closed request, dequeueing a started prompt |
-| `ResumeFailed` | The token did not resolve |
+| `ResumeFailed` | The agent has no conversation for the token. Other resume failures keep their own variant |
 | `SessionBusy` | `rollback` or `compact` while a turn is running |
 | `ProtocolFailed` | The wire misbehaved |
 | `ProcessExited { status, stderr }` | The agent died |

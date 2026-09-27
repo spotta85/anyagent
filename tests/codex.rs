@@ -782,6 +782,21 @@ async fn resume_keeps_the_thread_and_fork_cuts_at_the_anchor() {
     fork.close().await.unwrap();
 }
 
+/// Only an unknown thread is `ResumeFailed`; a malformed id stays a
+/// protocol failure.
+#[tokio::test]
+async fn only_an_unknown_thread_fails_the_resume() {
+    for (token, resume_failed) in [("th-gone", true), ("not-a-uuid", false)] {
+        let options = SessionOptions::in_dir(std::env::temp_dir()).resume(token.into());
+        let err = open_with("resume-gone", "", options).await.err().unwrap();
+        assert_eq!(
+            matches!(err, AgentError::ResumeFailed(_)),
+            resume_failed,
+            "{token}: {err}"
+        );
+    }
+}
+
 /// Plan usage probe reads Session/Week windows with resets; logged-out typed AuthRequired.
 #[tokio::test]
 async fn plan_usage_probe_reads_the_windows() {
