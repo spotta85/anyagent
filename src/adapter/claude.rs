@@ -1413,6 +1413,12 @@ impl Drive {
             (Some(questions), Answer::Question(answers)) => {
                 question_response(&pending, questions, &answers)
             }
+            // The message replaces the tool's result; `interrupt` ends the turn
+            // (live-probed 2026-09-27, 2.1.283). A question is a tool request too.
+            (_, Answer::Deny { message }) => json!({ "behavior": "deny", "message": message }),
+            (_, Answer::Cancel) => {
+                json!({ "behavior": "deny", "message": "cancelled", "interrupt": true })
+            }
             _ => json!({ "behavior": "deny", "message": "unsupported answer" }),
         };
         self.wire.respond(&pending.wire_id, response).await?;
@@ -1996,7 +2002,11 @@ fn stop_reason(frame: &Value) -> StopReason {
             source: CompletionSource::Protocol,
         };
     }
-    if frame["terminal_reason"].as_str() == Some("aborted_streaming") {
+    // `aborted_tools`: a permission denied with `interrupt` (probed 2026-09-27, 2.1.283).
+    if matches!(
+        frame["terminal_reason"].as_str(),
+        Some("aborted_streaming" | "aborted_tools")
+    ) {
         return StopReason::Cancelled;
     }
     let message = frame["result"]

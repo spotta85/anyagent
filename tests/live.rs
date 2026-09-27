@@ -1032,6 +1032,51 @@ async fn permissions_gate_the_write_and_deny_holds() {
     }
 }
 
+/// A deny's message reaches the model in place of the fixed text, on the
+/// agents whose wire carries one.
+#[tokio::test]
+#[ignore = "live: talks to real agents"]
+async fn deny_with_a_message_reaches_the_agent() {
+    for h in enabled().await {
+        if !matches!(h, "claude" | "opencode") {
+            println!("SKIP {h}: its deny carries no message");
+            continue;
+        }
+        let (session, mut events, dir) = open(h).await;
+        session
+            .prompt("Create a file named note.txt containing exactly the word HELLO. Use your file tools. Then reply in one short sentence.")
+            .await
+            .unwrap();
+        let mut text = String::new();
+        loop {
+            match next(&mut events, &format!("{h}: deny with a message"))
+                .await
+                .kind
+            {
+                EventKind::TextDelta { text: t, .. } => text.push_str(&t),
+                EventKind::RequestOpened(request) => {
+                    let deny = Answer::Deny {
+                        message: "use the word PINEAPPLE in your reply".into(),
+                    };
+                    session.answer(request.id(), deny).await.unwrap();
+                }
+                EventKind::TurnEnded { .. } => break,
+                _ => {}
+            }
+        }
+        assert!(
+            !dir.path().join("note.txt").exists(),
+            "{h}: file after deny"
+        );
+        assert!(
+            text.to_uppercase().contains("PINEAPPLE"),
+            "{h}: text was {text:?}"
+        );
+        session.close().await.unwrap();
+        pass(h, "a deny's message reached the model");
+    }
+}
+
 /// AcceptEdits: the file edit lands without a request reaching the caller;
 /// a shell command still asks.
 #[tokio::test]

@@ -238,8 +238,9 @@ async function runTurn(m) {
     return;
   }
 
-  const aborted = () => {
-    send({ type: 'result', session_id: S, uuid: uid(), user_message_uuid: null, subtype: 'error_during_execution', is_error: true, stop_reason: 'tool_use', terminal_reason: 'aborted_streaming', num_turns: 1, result: null, total_cost_usd: 0.005, usage: {}, modelUsage: { 'claude-sonnet-5': { contextWindow: 200000 } } });
+  // A deny with `interrupt` ends the turn as `aborted_tools` (probed 2026-09-27, 2.1.283).
+  const aborted = (reason = 'aborted_streaming') => {
+    send({ type: 'result', session_id: S, uuid: uid(), user_message_uuid: null, subtype: 'error_during_execution', is_error: true, stop_reason: 'tool_use', terminal_reason: reason, num_turns: 1, result: null, total_cost_usd: 0.005, usage: {}, modelUsage: { 'claude-sonnet-5': { contextWindow: 200000 } } });
     life(u, 'cancelled');
     turn = null;
   };
@@ -248,6 +249,7 @@ async function runTurn(m) {
     msgStart('msg_1');
     const resp = await ask({ subtype: 'can_use_tool', tool_name: 'AskUserQuestion', display_name: 'AskUserQuestion', input: { questions: [{ question: 'Which color do you prefer?', header: 'Color', options: [{ label: 'Red', description: 'Prefer red' }, { label: 'Blue', description: 'Prefer blue' }], multiSelect: false }] }, tool_use_id: 'toolu_q', requires_user_interaction: true });
     if (turn.interrupted) return aborted();
+    if (resp.response?.interrupt) return aborted('aborted_tools');
     const answer = resp.response?.updatedInput?.answers?.['Which color do you prefer?'] ?? 'none';
     delta({ type: 'text_delta', text: `answer=${answer}` });
     ev({ type: 'message_stop' });
@@ -393,11 +395,13 @@ async function runTurn(m) {
   assistantTool('toolu_w1', 'Write', { file_path: 'a.txt', content: 'ALPHA' });
   const resp = await ask({ subtype: 'can_use_tool', tool_name: 'Write', display_name: 'Write', input: { file_path: 'a.txt', content: 'ALPHA' }, description: 'a.txt', permission_suggestions: [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }], tool_use_id: 'toolu_w1' });
   if (turn.interrupted) return aborted();
+  if (resp.response?.interrupt) return aborted('aborted_tools');
   const behavior = resp.response?.behavior ?? 'deny';
   if (behavior === 'allow') {
     send({ type: 'user', message: { role: 'user', content: [{ tool_use_id: 'toolu_w1', type: 'tool_result', content: 'File created successfully' }] }, session_id: S, uuid: uid(), parent_tool_use_id: null, tool_use_result: { type: 'create', filePath: 'a.txt', content: 'ALPHA', originalFile: null, structuredPatch: [] } });
   }
-  delta({ type: 'text_delta', text: `perm=${behavior} ` });
+  // A deny's message is the tool result the model reads.
+  delta({ type: 'text_delta', text: behavior === 'deny' ? `perm=deny(${resp.response?.message}) ` : `perm=${behavior} ` });
   if (flag('--eof')) { process.stderr.write('boom: fixture died\n'); process.exit(3); }
   // Deterministic last-assistant uuid (`a-<user uuid>`): the rollback cut
   // point a test can predict.
