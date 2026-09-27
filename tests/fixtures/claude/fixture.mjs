@@ -11,7 +11,8 @@
 // --denied (a settings rule refuses a Bash call), --fork-fails (a fork
 // launch dies before speaking), --plan (a plan-mode turn that ends in an
 // ExitPlanMode request), --mcp-fails (no declared MCP server connects),
-// --mcp-refused (an older CLI refuses mcp_set_servers).
+// --mcp-refused (an older CLI refuses mcp_set_servers), --skills-refused (a
+// CLI that refuses get_skills_dialog).
 import { createInterface } from 'node:readline';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 
@@ -130,6 +131,8 @@ function onControl(m) {
     case 'get_binary_version':
       return reply({ version: '2.1.241', buildTime: '2026-08-22T22:46:48Z' });
     case 'get_skills_dialog':
+      if (flag('--skills-refused'))
+        return send({ type: 'control_response', response: { subtype: 'error', request_id: m.request_id, error: 'Unsupported control request subtype: get_skills_dialog' } });
       return reply({ skills: SKILLS });
     case 'get_usage':
       // Slim shape recorded 2026-09-06 (2.1.261): no `limits` array.
