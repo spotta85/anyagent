@@ -18,6 +18,7 @@ from its start.
 | `resume.json` | advertises `Resume` with token `mock-token`; resuming fails with `ResumeFailed` | T3 port |
 | `plan.json` | a live `mode` option (default, plan); a turn that proposes a plan, then a text turn | T3 port |
 | `rollback-refused.json` | advertises `Rollback`; every rollback is refused with a reason | T3 port |
+| `plan-exit.json` | opens in `plan`; a turn that proposes a plan and asks to leave plan mode, then a turn with an ordinary permission | T3 port |
 
 The format is the mock's `Script` as JSON; every field is optional.
 Steps: `{"Emit": <EventKind>}`, `"AwaitAnswer"`, `{"End": <StopReason>}`,
