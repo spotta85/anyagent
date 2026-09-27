@@ -1359,7 +1359,7 @@ impl Drive {
                     return Ok(());
                 };
                 info.summary = text(&frame["summary"]).or_else(|| text(&frame["description"]));
-                info.tokens = frame["usage"]["total_tokens"].as_u64();
+                info.tokens = frame["usage"]["total_tokens"].as_u64().or(info.tokens);
                 let tool = tool.clone();
                 self.events.event(EventKind::ToolUpdated(tool)).await
             }

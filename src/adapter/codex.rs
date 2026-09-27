@@ -1018,9 +1018,9 @@ impl Drive {
                 let total = params["tokenUsage"]["total"]["totalTokens"].as_u64();
                 self.subagent_tokens(tool, total).await
             }
+            "thread/status/changed" => Ok(()),
             // Consumed: the child's plan is a whole-list replacement, and its
             // turn frames must not move the parent's turn.
-            "thread/status/changed" => Ok(()),
             _ if method.starts_with("turn/") => Ok(()),
             // Content: the parent's translation, attributed to the subagent.
             _ if method.starts_with("item/") || method == "error" => {
