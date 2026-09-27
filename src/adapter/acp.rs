@@ -182,6 +182,7 @@ impl Adapter for AcpAdapter {
                 held_prompt: None,
                 retry: None,
                 login: crate::adapter::login_in(login, &env),
+                instructions: crate::adapter::first_prompt_instructions(&request.options),
             }
             .run(cmd_rx),
         );
@@ -978,6 +979,8 @@ struct Drive {
     retry: Option<Value>,
     /// Runnable login methods from `initialize`, for mid-session auth loss.
     login: Vec<LoginMethod>,
+    /// Instructions the first prompt still owes (ACP has no system prompt).
+    instructions: Option<String>,
 }
 
 impl Drive {
@@ -1018,6 +1021,7 @@ impl Drive {
                 // this exact prompt; spec-conformant agents ignore `_meta`.
                 self.prompt_seq += 1;
                 let pid = format!("p{}", self.prompt_seq);
+                let input = crate::adapter::with_instructions(&mut self.instructions, input);
                 let blocks = self.prompt_blocks(&input).await?;
                 self.usage_chars += prompt_chars(&blocks);
                 let params = json!({

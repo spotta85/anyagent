@@ -126,8 +126,8 @@ async fn launch(
     }
 }
 
-/// Session start and creation-time config as launch flags. Anything the CLI
-/// cannot take is refused here rather than silently dropped.
+/// Session start, instructions and creation-time config as launch flags.
+/// Anything the CLI cannot take is refused here rather than silently dropped.
 fn launch_args(options: &SessionOptions) -> Result<Vec<String>, AgentError> {
     if !options.mcp_servers.is_empty() {
         return Err(AgentError::UnsupportedFeature(
@@ -137,6 +137,10 @@ fn launch_args(options: &SessionOptions) -> Result<Vec<String>, AgentError> {
     let mut args = Vec::new();
     if options.no_tools {
         args.push("--no-tools".into());
+    }
+    if let Some(text) = &options.instructions {
+        args.push("--append-system-prompt".into());
+        args.push(text.clone());
     }
     if options.throwaway {
         args.push("--no-session".into());

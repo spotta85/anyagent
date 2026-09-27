@@ -1270,6 +1270,35 @@ async fn config_home_reaches_the_child_and_is_created() {
     session.close().await.unwrap();
 }
 
+/// `instructions` ride thread start, resume and fork as `developerInstructions`.
+#[tokio::test]
+async fn instructions_ride_every_thread_bind() {
+    let dir = tempfile::tempdir().unwrap();
+    let token = anyagent::ResumeToken::new("th-9");
+    let binds = [
+        ("thread/start", SessionOptions::in_dir(dir.path())),
+        (
+            "thread/resume",
+            SessionOptions::in_dir(dir.path()).resume(token.clone()),
+        ),
+        (
+            "thread/fork",
+            SessionOptions::in_dir(dir.path()).fork_from(token, None),
+        ),
+    ];
+    for (i, (method, options)) in binds.into_iter().enumerate() {
+        let log = dir.path().join(format!("wire-{i}.jsonl"));
+        let options = options.instructions("Be brief.").record_wire(&log);
+        let (session, _events) = open_with("instructions", "", options).await.unwrap();
+        let bind = common::sent_frames(&log, 1, |f| f["method"] == method).await;
+        assert_eq!(
+            bind[0]["params"]["developerInstructions"], "Be brief.",
+            "{method}"
+        );
+        session.close().await.unwrap();
+    }
+}
+
 /// `env` reaches the server; `arg` lands after `app-server` and anyagent's
 /// own overrides.
 #[tokio::test]

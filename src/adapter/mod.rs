@@ -20,6 +20,7 @@ use tokio::sync::mpsc;
 use crate::agent::{
     AgentDetails, AgentInstallation, ConfigChoice, ConfigId, ConfigKind, ConfigOption, ConfigValue,
     Input, LoginMethod, ResumeToken, RollbackScope, SessionConfiguration, SessionOptions,
+    SessionStart,
 };
 use crate::error::AgentError;
 use crate::event::{
@@ -476,6 +477,23 @@ pub(crate) fn launch_env(
     let mut env = config_home_env(installation, options)?;
     env.extend(options.env.clone());
     Ok(env)
+}
+
+/// Instructions owed to the first prompt, for agents with no system-prompt
+/// field: a new session's only; a resumed or forked one already has them.
+pub(crate) fn first_prompt_instructions(options: &SessionOptions) -> Option<String> {
+    matches!(options.start, SessionStart::New)
+        .then(|| options.instructions.clone())
+        .flatten()
+}
+
+/// Puts owed instructions before the prompt's text, separated by a blank
+/// line; later prompts pass through untouched.
+pub(crate) fn with_instructions(owed: &mut Option<String>, mut input: Input) -> Input {
+    if let Some(text) = owed.take() {
+        input.text = format!("{text}\n\n{}", input.text);
+    }
+    input
 }
 
 /// Runnable login methods from the catalog, for a logged-out handshake and

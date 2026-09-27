@@ -612,19 +612,25 @@ async fn resume_binds_the_session_file_and_config_home_reaches_the_child() {
     );
 }
 
-/// `env` reaches the RPC process and both side processes; `arg` lands after
-/// anyagent's own flags.
+/// `instructions` ride `--append-system-prompt`; `env` reaches the RPC
+/// process and both side processes; `arg` lands after anyagent's flags.
 #[tokio::test]
-async fn env_and_args_reach_the_child() {
+async fn instructions_env_and_args_reach_the_child() {
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("argv.jsonl");
     let options = SessionOptions::in_dir(dir.path())
+        .instructions("Be brief.")
         .env("FIXTURE_ARGV_LOG", log.to_string_lossy())
         .arg("--extra-flag");
     let (session, _events) = open_with("env-args", "", options).await.unwrap();
     let argv = common::logged_args(&log);
     assert_eq!(argv.len(), 3, "rpc, auth check, version: {argv:?}");
     let rpc = argv.iter().find(|a| a[0] == "--mode").unwrap();
+    assert!(
+        rpc.windows(2)
+            .any(|pair| pair == ["--append-system-prompt", "Be brief."]),
+        "{rpc:?}"
+    );
     assert_eq!(rpc.last().unwrap(), "--extra-flag", "{argv:?}");
     session.close().await.unwrap();
 }

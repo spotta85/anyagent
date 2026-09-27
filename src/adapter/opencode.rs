@@ -85,6 +85,7 @@ impl Adapter for OpencodeAdapter {
                 info: launched.info,
                 session_id: launched.session_id,
                 throwaway: request.options.throwaway,
+                instructions: request.options.instructions.clone(),
                 windows: launched.windows,
                 variants: launched.variants,
                 mcp_servers: None,
@@ -685,6 +686,8 @@ struct Drive {
     session_id: String,
     /// Deleted at close so it never shows in the user's session list.
     throwaway: bool,
+    /// The caller's instructions, sent as `system` with every prompt.
+    instructions: Option<String>,
     /// Login methods for a mid-session credential loss.
     login: Vec<LoginMethod>,
     /// Context window per model, for `ContextUsage`.
@@ -880,6 +883,9 @@ impl Drive {
         let mut body = json!({ "parts": parts });
         if let Some(model) = self.model_body() {
             body["model"] = model;
+        }
+        if let Some(text) = &self.instructions {
+            body["system"] = json!(text);
         }
         if let Some(ConfigValue::Text(effort)) = self
             .info
