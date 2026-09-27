@@ -476,7 +476,7 @@ pub(crate) fn launch_env(
     options: &SessionOptions,
 ) -> Result<Vec<(String, String)>, AgentError> {
     let mut env = config_home_env(installation, options)?;
-    env.extend(options.env.clone());
+    env.extend(options.env.0.clone());
     Ok(env)
 }
 

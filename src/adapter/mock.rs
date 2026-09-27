@@ -87,8 +87,8 @@ pub struct Script {
     pub rollback_refusal: Option<String>,
     /// Advertised config options; `configure` sets one and reports it back.
     pub options: Vec<ConfigOption>,
-    /// Refuse `open` and `plan_usage` with `InvalidRequest` naming the
-    /// installation and options received, so a test can see what arrived.
+    /// Refuse `open` and `plan_usage` with `InvalidRequest` whose detail is
+    /// a JSON echo of the launch options received, so a test can read them.
     pub echo_options: bool,
 }
 
@@ -376,9 +376,21 @@ fn info(script: &Script, configuration: &SessionConfiguration) -> DriverInfo {
     }
 }
 
-/// The `echo_options` refusal: what the adapter received, as Debug text.
+/// The `echo_options` refusal: the launch facts the adapter received, as a
+/// JSON object the test parses back.
 fn echo(installation: &AgentInstallation, options: &SessionOptions) -> AgentError {
-    AgentError::InvalidRequest(format!("{installation:?} {options:?}"))
+    let echoed = serde_json::json!({
+        "executable_path": installation.executable_path,
+        "source": installation.source,
+        "cwd": options.cwd,
+        "throwaway": options.throwaway,
+        "instructions": options.instructions,
+        "env": options.env.0,
+        "args": options.args,
+        "config_home": options.config_home,
+        "record_wire": options.record_wire,
+    });
+    AgentError::InvalidRequest(echoed.to_string())
 }
 
 /// Each option's `current` value, as the session starts.

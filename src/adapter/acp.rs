@@ -99,7 +99,7 @@ impl Adapter for AcpAdapter {
         // the one in use, else the catalog's proven kind.
         let open_auth_kind = self.profile.and_then(|p| {
             let keyed = p.api_key_env.iter().any(|var| {
-                let session = request.options.env.get(*var).cloned();
+                let session = request.options.env.0.get(*var).cloned();
                 session
                     .or_else(|| std::env::var(var).ok())
                     .is_some_and(|v| !v.trim().is_empty())
