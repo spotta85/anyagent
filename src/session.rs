@@ -445,7 +445,7 @@ struct Engine {
     queue: VecDeque<(PromptId, Input)>,
     /// A steer the adapter has not answered yet; resolved by `Steered`.
     steer: Option<(PromptId, Input, Reply<Delivery>)>,
-    /// A rollback's caller, waiting for the adapter's `RolledBack`.
+    /// A rollback's caller, waiting for `RolledBack`; dropped, it reads `SessionClosed`.
     rollback: Option<Reply<()>>,
     steer_supported: bool,
     quiet_user: Option<Duration>,
@@ -970,9 +970,6 @@ impl Engine {
     /// The driver's event stream ended: a clean close, or the agent died.
     async fn driver_gone(&mut self) {
         self.done = true;
-        if let Some(reply) = self.rollback.take() {
-            let _ = reply.send(Err(AgentError::SessionClosed));
-        }
         if let Some(waiters) = self.closing.take() {
             for waiter in waiters {
                 let _ = waiter.send(Ok(()));
