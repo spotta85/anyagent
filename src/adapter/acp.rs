@@ -1313,6 +1313,7 @@ impl Drive {
                         name: c.name,
                         description: c.description,
                         input_hint: None,
+                        source: crate::agent::CommandSource::Builtin,
                     })
                     .collect();
                 return self.set_commands(commands).await;
@@ -1657,6 +1658,7 @@ impl Drive {
                         .as_str()
                         .filter(|h| !h.is_empty())
                         .map(str::to_owned),
+                    source: crate::agent::CommandSource::Builtin,
                 })
             })
             .collect();

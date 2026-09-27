@@ -32,8 +32,8 @@ use crate::adapter::{
     set_effort_option,
 };
 use crate::agent::{
-    AgentDetails, AuthKind, AuthStatus, Capabilities, Capability, ConfigChoice, ConfigId,
-    ConfigKind, ConfigOption, ConfigValue, Input, LoginMethod, McpConnection, McpServer,
+    AgentDetails, AuthKind, AuthStatus, Capabilities, Capability, CommandSource, ConfigChoice,
+    ConfigId, ConfigKind, ConfigOption, ConfigValue, Input, LoginMethod, McpConnection, McpServer,
     McpTransport, PermissionMode, ResumeToken, SessionConfiguration, SessionOptions, SessionStart,
     SlashCommand,
 };
@@ -569,6 +569,7 @@ fn slash_commands(commands: &Value) -> Vec<SlashCommand> {
                     .unwrap_or_default()
                     .to_owned(),
                 input_hint: None,
+                source: CommandSource::Builtin,
             })
         })
         .collect()

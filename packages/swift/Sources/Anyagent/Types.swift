@@ -1405,17 +1405,70 @@ public struct SlashCommand: Codable, Sendable, Equatable {
     public var name: String
     public var description: String
     public var inputHint: String?
+    public var source: CommandSource?
 
-    public init(name: String, description: String, inputHint: String? = nil) {
+    public init(name: String, description: String, inputHint: String? = nil, source: CommandSource? = nil) {
         self.name = name
         self.description = description
         self.inputHint = inputHint
+        self.source = source
     }
 
     enum CodingKeys: String, CodingKey {
         case name
         case description
         case inputHint = "input_hint"
+        case source
+    }
+}
+
+public struct Skill: Codable, Sendable, Equatable {
+    public var path: String?
+    public var scope: String?
+
+    public init(path: String? = nil, scope: String? = nil) {
+        self.path = path
+        self.scope = scope
+    }
+}
+
+/// Where a slash command comes from.
+public enum CommandSource: Codable, Sendable, Equatable {
+    case builtin
+    case skill(Skill)
+    /// A variant this package does not know (a newer binary): its wire name.
+    case unrecognized(String)
+
+    /// The variant's wire name: "Builtin", …
+    public var name: String {
+        switch self {
+        case .builtin: "Builtin"
+        case .skill: "Skill"
+        case .unrecognized(let tag): tag
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        if let s = try? String(from: decoder) {
+            switch s {
+            case "Builtin": self = .builtin
+            default: self = .unrecognized(s)
+            }
+            return
+        }
+        let c = try decoder.container(keyedBy: Key.self)
+        switch c.allKeys.first?.stringValue {
+        case "Skill": self = .skill(try c.decode(Skill.self, forKey: Key("Skill")))
+        default: self = .unrecognized(c.allKeys.first?.stringValue ?? "?")
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .builtin: try encoder.raw("Builtin")
+        case .skill(let v): try encoder.tagged("Skill", v)
+        case .unrecognized(let tag): try encoder.raw(tag)
+        }
     }
 }
 

@@ -343,10 +343,16 @@ Capability: TypeAlias = Literal['Images', 'Resume', 'Steer', 'Permissions', 'Que
 McpTransport: TypeAlias = Literal['Stdio', 'Http', 'Sse']
 
 
-class SlashCommand(TypedDict):
-    name: str
-    description: str
-    input_hint: NotRequired[str | None]
+class Skill(TypedDict):
+    path: NotRequired[str | None]
+    scope: NotRequired[str | None]
+
+
+class CommandSource1(TypedDict):
+    Skill: Skill
+
+
+CommandSource: TypeAlias = Literal['Builtin'] | CommandSource1
 
 
 class SessionConfiguration(TypedDict):
@@ -539,6 +545,13 @@ AuthStatus: TypeAlias = Literal['Unknown'] | AuthStatus1 | AuthStatus2
 class Capabilities(TypedDict):
     features: list[Capability]
     mcp_transports: list[McpTransport]
+
+
+class SlashCommand(TypedDict):
+    name: str
+    description: str
+    input_hint: NotRequired[str | None]
+    source: NotRequired[CommandSource]
 
 
 class PlanUsage(TypedDict):

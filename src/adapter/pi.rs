@@ -25,8 +25,8 @@ use crate::adapter::{
     cap, level_choices, login_methods, selected, set_effort_option, with_stderr,
 };
 use crate::agent::{
-    AgentDetails, AuthKind, AuthStatus, Capabilities, Capability, ConfigChoice, ConfigId,
-    ConfigKind, ConfigOption, ConfigValue, Input, ResumeToken, SessionConfiguration,
+    AgentDetails, AuthKind, AuthStatus, Capabilities, Capability, CommandSource, ConfigChoice,
+    ConfigId, ConfigKind, ConfigOption, ConfigValue, Input, ResumeToken, SessionConfiguration,
     SessionOptions, SessionStart, SlashCommand,
 };
 use crate::error::AgentError;
@@ -406,6 +406,7 @@ fn slash_commands(commands: &Value) -> Vec<SlashCommand> {
                     .unwrap_or_default()
                     .to_owned(),
                 input_hint: None,
+                source: CommandSource::Builtin,
             })
         })
         .collect()

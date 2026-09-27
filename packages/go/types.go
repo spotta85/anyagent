@@ -1309,9 +1309,69 @@ type ConfigChoice struct {
 
 // SlashCommand is a wire type.
 type SlashCommand struct {
-	Name        string  `json:"name"`
-	Description string  `json:"description"`
-	InputHint   *string `json:"input_hint,omitempty"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	InputHint   *string        `json:"input_hint,omitempty"`
+	Source      *CommandSource `json:"source,omitempty"`
+}
+
+// Skill is a wire type.
+type Skill struct {
+	Path  *string `json:"path,omitempty"`
+	Scope *string `json:"scope,omitempty"`
+}
+
+// CommandSource: exactly one field is set. Where a slash command comes from.
+type CommandSource struct {
+	Builtin      bool   `json:"-"`
+	Skill        *Skill `json:"Skill"`
+	Unrecognized string `json:"-"` // a variant this package does not know (a newer binary): its wire name
+}
+
+// Name is the variant's wire name: "Builtin", …
+func (v CommandSource) Name() string {
+	switch {
+	case v.Builtin:
+		return "Builtin"
+	case v.Skill != nil:
+		return "Skill"
+	}
+	return v.Unrecognized
+}
+
+func (v CommandSource) MarshalJSON() ([]byte, error) {
+	switch {
+	case v.Builtin:
+		return json.Marshal("Builtin")
+	case v.Skill != nil:
+		return json.Marshal(map[string]any{"Skill": v.Skill})
+	case v.Unrecognized != "":
+		return json.Marshal(v.Unrecognized)
+	}
+	return nil, fmt.Errorf("CommandSource: no variant set")
+}
+
+func (v *CommandSource) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) == nil {
+		switch s {
+		case "Builtin":
+			v.Builtin = true
+			return nil
+		}
+		v.Unrecognized = s
+		return nil
+	}
+	type plain CommandSource
+	if err := json.Unmarshal(b, (*plain)(v)); err != nil || v.Name() != "" {
+		return err
+	}
+	var m map[string]json.RawMessage
+	json.Unmarshal(b, &m)
+	for tag := range m {
+		v.Unrecognized = tag
+	}
+	return nil
 }
 
 // SessionConfiguration is a wire type.

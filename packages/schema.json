@@ -2433,11 +2433,56 @@
             "string",
             "null"
           ]
+        },
+        "source": {
+          "description": "Where the command comes from.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CommandSource"
+            }
+          ]
         }
       },
       "required": [
         "name",
         "description"
+      ]
+    },
+    "CommandSource": {
+      "description": "Where a slash command comes from.",
+      "oneOf": [
+        {
+          "description": "Part of the agent.",
+          "type": "string",
+          "const": "Builtin"
+        },
+        {
+          "description": "A skill on disk. `scope` is the agent's own word for where it lives (\"user\", \"repo\").",
+          "type": "object",
+          "properties": {
+            "Skill": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "scope": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "required": [
+            "Skill"
+          ],
+          "additionalProperties": false
+        }
       ]
     },
     "SessionConfiguration": {
