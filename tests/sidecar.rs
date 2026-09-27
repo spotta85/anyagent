@@ -437,6 +437,116 @@ async fn events_are_the_crates_serde_output() {
     );
 }
 
+/// A mock that refuses every open and quota read naming what reached it.
+fn echo() -> Script {
+    Script {
+        echo_options: true,
+        ..Script::default()
+    }
+}
+
+/// The `detail` of a reply the echo mock refused.
+async fn echoed(wire: &mut Wire, id: u64, mut command: Value) -> String {
+    command["id"] = json!(id);
+    wire.send(command).await;
+    let reply = wire.reply(id).await;
+    reply["error"]["detail"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no echo: {reply}"))
+        .to_owned()
+}
+
+/// `instructions`, `env`, `args`, `config_home` and `record_wire` reach the
+/// adapter's `SessionOptions` from `open`, `generate`, `probe` and `plan_usage`.
+#[tokio::test]
+async fn launch_options_reach_the_adapter() {
+    let mut wire = Wire::start(echo()).await;
+    let home = wire.dir.path().join("home");
+    let log = wire.dir.path().join("wire.jsonl");
+    let dir = wire.dir();
+    let fields = json!({
+        "instructions": "Be brief.",
+        "env": { "KEY": "value" },
+        "args": ["--extra-flag"],
+        "config_home": home,
+        "record_wire": log,
+    });
+    let commands = [
+        json!({"cmd": "open", "agent": "mock", "dir": dir}),
+        json!({"cmd": "generate", "agent": "mock", "dir": dir, "prompt": "hi"}),
+        json!({"cmd": "probe", "agent": "mock", "dir": dir}),
+        json!({"cmd": "plan_usage", "agent": "mock"}),
+    ];
+    for (id, mut command) in commands.into_iter().enumerate() {
+        command
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        let detail = echoed(&mut wire, id as u64, command).await;
+        for want in [
+            r#"instructions: Some("Be brief.")"#.to_owned(),
+            r#"env: {"KEY": "value"}"#.to_owned(),
+            r#"args: ["--extra-flag"]"#.to_owned(),
+            format!("config_home: Some({home:?})"),
+            format!("record_wire: Some({log:?})"),
+        ] {
+            assert!(
+                detail.contains(&want),
+                "command {id}: {want} not in {detail}"
+            );
+        }
+    }
+}
+
+/// `probe` runs throwaway in `dir`, or the temp dir without one; the
+/// `{id, path}` agent form pins the executable.
+#[tokio::test]
+async fn probe_takes_a_dir_and_an_exact_path() {
+    let mut wire = Wire::start(echo()).await;
+    let dir = wire.dir.path().to_owned();
+    let detail = echoed(
+        &mut wire,
+        1,
+        json!({"cmd": "probe", "agent": {"id": "mock", "path": "/opt/mock"}, "dir": dir}),
+    )
+    .await;
+    assert!(
+        detail.contains(r#"executable_path: "/opt/mock""#),
+        "{detail}"
+    );
+    assert!(detail.contains("source: Pinned"), "{detail}");
+    assert!(detail.contains(&format!("cwd: {dir:?}")), "{detail}");
+    assert!(detail.contains("throwaway: true"), "{detail}");
+
+    let detail = echoed(&mut wire, 2, json!({"cmd": "probe", "agent": "mock"})).await;
+    let temp = std::path::absolute(std::env::temp_dir()).unwrap();
+    assert!(detail.contains(&format!("cwd: {temp:?}")), "{detail}");
+}
+
+/// `probe` and `plan_usage` only ever start a new session: `resume` or
+/// `fork` is `InvalidConfiguration`.
+#[tokio::test]
+async fn probe_and_plan_usage_refuse_resume_and_fork() {
+    let mut wire = Wire::start(Script::default()).await;
+    let mut id = 0;
+    for cmd in ["probe", "plan_usage"] {
+        for start in [json!({"resume": "t1"}), json!({"fork": "t1"})] {
+            id += 1;
+            let mut command = json!({"id": id, "cmd": cmd, "agent": "mock"});
+            command
+                .as_object_mut()
+                .unwrap()
+                .extend(start.as_object().unwrap().clone());
+            wire.send(command).await;
+            let reply = wire.reply(id).await;
+            assert_eq!(
+                reply["error"]["kind"], "InvalidConfiguration",
+                "{cmd} {start}: {reply}"
+            );
+        }
+    }
+}
+
 const SCRIPTS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/packages/mock-scripts");
 
 /// One of the shared wrapper scripts, parsed the way `serve --mock` does.
