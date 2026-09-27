@@ -828,6 +828,18 @@ async fn an_mcp_tool_approval_maps_to_a_permission() {
         assert_eq!(states.last().unwrap().status, status);
         assert!(matches!(stop, StopReason::Completed { .. }), "{stop:?}");
     }
+    // Only the persistent "always" form offered: no choice maps to it.
+    let (_, requests, _, _) = mcp_turn(
+        &session,
+        &mut events,
+        "mcp-always please",
+        PermissionChoice::AllowOnce,
+    )
+    .await;
+    assert_eq!(
+        requests[0].options,
+        vec![PermissionChoice::AllowOnce, PermissionChoice::DenyOnce]
+    );
     session.close().await.unwrap();
 }
 
