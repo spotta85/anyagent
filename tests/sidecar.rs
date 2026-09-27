@@ -384,6 +384,38 @@ async fn a_prompt_after_close_is_session_closed() {
     assert_eq!(reply["error"]["kind"], "SessionClosed", "{reply}");
 }
 
+/// `cancel` naming a turn that is not running is ok and cancels nothing:
+/// the open request still takes its answer and the turn completes.
+#[tokio::test]
+async fn cancel_with_a_stale_turn_cancels_nothing() {
+    let mut wire = Wire::start(one_turn()).await;
+    let session = wire.open(1).await;
+    wire.send(json!({"id": 2, "cmd": "prompt", "session": session, "text": "hi"}))
+        .await;
+    let (_, request) = wire
+        .until("permission request", |f| {
+            kind_name(f) == Some("RequestOpened")
+        })
+        .await;
+    wire.send(json!({"id": 3, "cmd": "cancel", "session": session, "turn": "t0"}))
+        .await;
+    assert_eq!(wire.reply(3).await["ok"], Value::Null);
+    let request_id = request["event"]["kind"]["RequestOpened"]["Permission"]["id"].clone();
+    wire.send(json!({"id": 4, "cmd": "answer", "session": session,
+        "request": request_id, "answer": {"Permission": "AllowOnce"}}))
+        .await;
+    assert_eq!(wire.reply(4).await["ok"], Value::Null);
+    let (_, ended) = wire
+        .until("turn end", |f| kind_name(f) == Some("TurnEnded"))
+        .await;
+    assert!(
+        ended["event"]["kind"]["TurnEnded"]["stop"]
+            .get("Completed")
+            .is_some(),
+        "{ended}"
+    );
+}
+
 /// The cancelled stop reason rides `TurnEnded` unchanged, proving events
 /// are the crate's own serialization.
 #[tokio::test]

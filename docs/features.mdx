@@ -170,6 +170,7 @@ request is forwarded.
 ```rust
 session.cancel(false).await?;   // stop the turn, keep queued prompts
 session.cancel(true).await?;    // stop the turn, drop the queue too
+session.cancel_turn(turn_id, false).await?;  // only if that turn is still running
 ```
 
 **Confirms:** `TurnEnded { stop: Cancelled }`, then `RequestClosed` for any

@@ -767,6 +767,49 @@ async fn cancel_with_clear_drops_a_pending_steer() {
     );
 }
 
+/// `cancel_turn` with a stale id changes nothing, not even the queue; with
+/// the running turn's id it ends that turn `Cancelled`.
+#[tokio::test]
+async fn cancel_turn_ends_only_the_running_turn_it_names() {
+    let script = Script::default()
+        .turn(vec![Step::End(completed())])
+        .turn(parked_turn())
+        .turn(vec![Step::End(completed())]);
+    let (session, mut events) = open(MockAdapter::new(script), None).await;
+    let started = |kind| match kind {
+        DeliveryKind::Started { turn_id } => turn_id,
+        other => panic!("expected a start, got {other:?}"),
+    };
+    let stale = started(session.prompt("one").await.unwrap().kind);
+    collect(&mut events, 2).await;
+    let running = started(session.prompt("two").await.unwrap().kind);
+    let queued = session.prompt("three").await.unwrap();
+    collect(&mut events, 2).await;
+
+    session.cancel_turn(stale, true).await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), next(&mut events))
+            .await
+            .is_err(),
+        "a stale id cancels nothing"
+    );
+
+    session.cancel_turn(running, false).await.unwrap();
+    let kinds = collect(&mut events, 3).await;
+    assert!(matches!(kinds[0], EventKind::RequestClosed { .. }));
+    assert!(matches!(
+        kinds[1],
+        EventKind::TurnEnded {
+            stop: StopReason::Cancelled,
+            ..
+        }
+    ));
+    // The stale cancel kept the queue, so the third prompt starts now.
+    assert!(
+        matches!(&kinds[2], EventKind::TurnStarted { origin: TurnOrigin::Prompt(p) } if *p == queued.prompt_id)
+    );
+}
+
 /// AutoApprove only ever answers with a one-time allow; a request that
 /// does not offer one reaches the caller instead.
 #[tokio::test]

@@ -89,6 +89,7 @@ confirms the result.
 | `rollback(turns, scope)` | Rewind completed turns in place. Session must be idle. Returns once the agent answers; a refusal is `InvalidRequest` | `SessionUpdated` |
 | `compact()` | Ask the agent to summarize its context. Session must be idle | `ContextCompacted` |
 | `cancel(clear_queue)` | Stop the running turn; optionally drop the queue too | `TurnEnded { Cancelled }` |
+| `cancel_turn(turn, clear_queue)` | `cancel`, but only if `turn` is the running turn; otherwise nothing happens | `TurnEnded { Cancelled }` |
 | `close()` | End the agent session and wait for cleanup | stream ends |
 | `info()` | Snapshot: agent, details, configuration, resume token, title, status | |
 | `status()` | `Idle`, `Working`, or `NeedsInput`, without reading the stream | |

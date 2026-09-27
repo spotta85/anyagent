@@ -81,6 +81,7 @@ export type Frame1 =
   | {
       session: string;
       clear_queue?: boolean;
+      turn?: string | null;
       cmd: "cancel";
     }
   | {

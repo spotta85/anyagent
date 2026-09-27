@@ -67,7 +67,7 @@ a custom ACP agent is `{"acp": {"name": "..", "path": "..", "args": [..]}}`.
 | `prompt` | session, text, attachments? | `Delivery` |
 | `answer` | session, request, answer | null |
 | `configure` | session, option, value | null |
-| `cancel` | session, clear_queue? | null |
+| `cancel` | session, clear_queue?, turn? (cancels only if it is the running turn) | null |
 | `rollback` | session, turns, scope | null |
 | `dequeue` | session, prompt | null |
 | `compact`, `close` | session | null |
