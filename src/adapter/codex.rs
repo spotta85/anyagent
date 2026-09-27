@@ -1475,9 +1475,8 @@ impl Drive {
         Ok(items)
     }
 
-    /// `turn/start` params: every option rides each turn. `summary` opts
-    /// into reasoning summaries (none stream without it, probed 2026-09-03);
-    /// `fast` resolves the model's fast tier, and "default" is never sent.
+    /// `turn/start` params: the selected options (a `default` tier left out), and plan mode as
+    /// the collaboration mode. `summary` turns on reasoning summaries (probed 2026-09-03).
     fn turn_params(&mut self, items: Vec<Value>) -> Value {
         let mut params = json!({
             "threadId": self.thread_id,
@@ -1486,13 +1485,12 @@ impl Drive {
             "summary": "auto",
         });
         let option = |key: &str| selected(&self.info, key);
-        for (key, param) in [("model", "model"), ("effort", "effort")] {
+        for key in ["model", "effort"] {
             if let Some(value) = option(key) {
-                params[param] = json!(value);
+                params[key] = json!(value);
             }
         }
-        // Policy and collaboration mode both stick to the thread: plan keeps the
-        // last policy, and leaving plan sends `default` once (probed 0.154.0).
+        // Policy and plan mode stick to the thread (probed 0.154.0): plan keeps the policy.
         let mode = option("mode");
         let plan = mode.as_deref() == Some("plan");
         if let Some(policy) = mode.filter(|_| !plan) {
