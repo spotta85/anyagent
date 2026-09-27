@@ -1037,35 +1037,62 @@ async fn switching_the_model_round_trips_and_updates_the_session() {
     session.close().await.unwrap();
 }
 
-/// MCP http+stdio servers ride launch config and appear in wire.
+/// Declared MCP servers of every transport ride `mcp_set_servers`, never argv,
+/// and the rollback respawn declares them again.
 #[tokio::test]
-async fn mcp_servers_ride_the_launch_config() {
-    let runtime = Runtime::new();
+async fn mcp_servers_ride_the_control_channel() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.jsonl");
+    let wire = dir.path().join("wire.jsonl");
     let agent = AgentInstallation::at("claude", wrapper("mcp", ""));
-    let (session, mut events) = runtime
-        .open(
-            &agent,
-            SessionOptions::in_dir(std::env::temp_dir())
-                .mcp_server(McpServer::http("voice", "http://127.0.0.1:1/mcp"))
-                .mcp_server(McpServer::stdio("tool", "/bin/echo", ["hi"])),
+    let options = SessionOptions::in_dir(dir.path())
+        .mcp_server(
+            McpServer::http("voice", "http://127.0.0.1:1/mcp")
+                .with("Authorization", "Bearer HTTP-SECRET"),
+        )
+        .mcp_server(McpServer::sse("feed", "http://127.0.0.1:1/sse").with("X-Key", "SSE-SECRET"))
+        .mcp_server(McpServer::stdio("tool", "/bin/echo", ["hi"]).with("TOKEN", "ENV-SECRET"))
+        .record_wire(&wire)
+        .env("FIXTURE_ARGV_LOG", log.to_string_lossy());
+    let (session, mut events) = Runtime::new().open(&agent, options).await.unwrap();
+    for prompt in ["one", "two"] {
+        session.prompt(prompt).await.unwrap();
+        complete_turn(&session, &mut events).await;
+    }
+    session
+        .rollback(
+            std::num::NonZeroU32::new(1).unwrap(),
+            RollbackScope::Conversation,
         )
         .await
         .unwrap();
-    session.prompt("hi").await.unwrap();
-    let mut text = String::new();
-    loop {
-        let event = next(&mut events).await;
-        match event.kind {
-            EventKind::TextDelta { text: t, .. } => text.push_str(&t),
-            EventKind::RequestOpened(request) => {
-                session.answer(request.id(), allow()).await.unwrap()
-            }
-            EventKind::TurnEnded { .. } => break,
-            _ => {}
-        }
+    session.prompt("three").await.unwrap();
+    let text = complete_turn(&session, &mut events).await;
+    for decl in ["http:voice", "sse:feed", "stdio:tool"] {
+        assert!(
+            text.contains(decl),
+            "{decl} lost after the respawn: {text:?}"
+        );
     }
-    assert!(text.contains("http:voice"), "declaration lost: {text:?}");
-    assert!(text.contains("stdio:tool"), "declaration lost: {text:?}");
+    let sent =
+        common::sent_frames(&wire, 2, |f| f["request"]["subtype"] == "mcp_set_servers").await;
+    let servers = &sent[1]["request"]["servers"];
+    assert_eq!(
+        servers["voice"]["headers"]["Authorization"],
+        "Bearer HTTP-SECRET"
+    );
+    assert_eq!(servers["feed"]["headers"]["X-Key"], "SSE-SECRET");
+    assert_eq!(servers["tool"]["env"]["TOKEN"], "ENV-SECRET");
+    let launches = common::logged_args(&log);
+    assert_eq!(launches.len(), 2, "{launches:?}");
+    for argv in &launches {
+        assert!(
+            !argv
+                .iter()
+                .any(|a| a.contains("SECRET") || a == "--mcp-config"),
+            "{argv:?}"
+        );
+    }
     session.close().await.unwrap();
 }
 

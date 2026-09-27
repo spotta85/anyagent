@@ -43,7 +43,7 @@ const life = (cu, state) => send({ type: 'command_lifecycle', command_uuid: cu, 
 const assistantTool = (id, name, input, frameUuid) => send({ type: 'assistant', message: { id: 'msg_1', model: 'claude-sonnet-5', role: 'assistant', content: [{ type: 'tool_use', id, name, input }], usage: USAGE }, session_id: S, uuid: frameUuid ?? uid(), parent_tool_use_id: null });
 const resultFrame = (extra) => send({ type: 'result', session_id: S, uuid: uid(), subtype: 'success', is_error: false, stop_reason: 'end_turn', terminal_reason: 'completed', num_turns: 1, total_cost_usd: 0.01, usage: {}, modelUsage: { 'claude-sonnet-5': { contextWindow: 200000 } }, result: 'done', ...extra });
 
-let ctrlWaiters = {}, turn = null, inited = false, reqN = 0, queue = [], woke = false;
+let ctrlWaiters = {}, turn = null, inited = false, reqN = 0, queue = [], woke = false, mcpServers = {};
 
 const rl = createInterface({ input: process.stdin });
 rl.on('line', (line) => {
@@ -107,6 +107,10 @@ function onControl(m) {
       return reply({});
     case 'set_model':
       return reply({});
+    // Declared MCP servers (probed 2026-09-27, 2.1.283); connecting none, it reports no `errors`.
+    case 'mcp_set_servers':
+      mcpServers = m.request.servers;
+      return reply({ added: Object.keys(mcpServers), removed: [], errors: {} });
     case 'get_binary_version':
       return reply({ version: '2.1.241', buildTime: '2026-08-22T22:46:48Z' });
     case 'get_usage':
@@ -319,13 +323,9 @@ async function runTurn(m) {
   // Echo the flag settings once any was set, so tests can assert switches.
   if (flags.fastMode !== undefined || flags.effortLevel !== undefined)
     delta({ type: 'text_delta', text: `fast=${flags.fastMode ?? false} effort=${flags.effortLevel ?? 'unset'} ` });
-  // Echo --mcp-config so tests can assert the launch shape.
-  const mi = process.argv.indexOf('--mcp-config');
-  if (mi > -1) {
-    const conf = JSON.parse(process.argv[mi + 1]).mcpServers;
-    const decl = Object.entries(conf).map(([n, e]) => `${e.type ?? 'stdio'}:${n}`).join(',');
-    delta({ type: 'text_delta', text: `mcp=${decl} ` });
-  }
+  // Echo the declared MCP servers so tests can assert they arrived.
+  const decl = Object.entries(mcpServers).map(([n, e]) => `${e.type ?? 'stdio'}:${n}`).join(',');
+  if (decl) delta({ type: 'text_delta', text: `mcp=${decl} ` });
   // Echo attachments so tests can assert the wire shape.
   const c = m.message.content;
   if (Array.isArray(c)) {
