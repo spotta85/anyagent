@@ -844,13 +844,10 @@ impl Drive {
                 let Some(keep) = self.turns.len().checked_sub(n) else {
                     return self
                         .events
-                        .diagnostic(
-                            DiagnosticLevel::Warning,
-                            format!(
-                                "rollback({n}) rejected: {} completed turns",
-                                self.turns.len()
-                            ),
-                        )
+                        .rollback_refused(format!(
+                            "rollback({n}) rejected: {} completed turns",
+                            self.turns.len()
+                        ))
                         .await;
                 };
                 let id = self
@@ -927,22 +924,20 @@ impl Drive {
                         .await?;
                 }
             }
-            // Nothing advertised changes; `SessionUpdated` is the documented
-            // confirmation.
+            // Nothing advertised changes, but `SessionUpdated` still marks
+            // the rewind before `RolledBack` settles the call.
             Pending::Rollback(keep) => match error {
                 Some(message) => {
                     self.events
-                        .diagnostic(
-                            DiagnosticLevel::Warning,
-                            format!("rollback rejected: {message}"),
-                        )
+                        .rollback_refused(format!("rollback rejected: {message}"))
                         .await?
                 }
                 None => {
                     self.turns.truncate(keep);
                     self.events
                         .send(DriverEvent::InfoChanged(self.info.clone()))
-                        .await?
+                        .await?;
+                    self.events.send(DriverEvent::RolledBack(Ok(()))).await?
                 }
             },
             Pending::Skills => {

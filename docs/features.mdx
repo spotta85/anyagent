@@ -283,9 +283,10 @@ session.rollback(NonZeroU32::new(1).unwrap(), RollbackScope::ConversationAndFile
 | `Conversation` | The agent's context only | `Rollback` |
 | `ConversationAndFiles` | Context and the files those turns changed | `RollbackFiles` |
 
-**Confirms:** `SessionUpdated`. A refusal comes back as a `Diagnostic`, not
-an error from the call.
-**Gates:** above, plus an idle session (`SessionBusy` otherwise).
+**Confirms:** the call returns once the agent answers; `SessionUpdated`
+carries the new snapshot. A refusal is `InvalidRequest` with the agent's reason.
+**Gates:** above, plus an idle session and no other rollback pending
+(`SessionBusy` otherwise).
 
 <Warning>
 `ConversationAndFiles` writes to the working tree. Check `RollbackFiles`

@@ -1132,10 +1132,9 @@ impl Drive {
             }
             DriverCommand::Rollback(turns, _) => {
                 self.events
-                    .diagnostic(
-                        DiagnosticLevel::Warning,
-                        format!("rollback({turns}) is not supported by the ACP adapter"),
-                    )
+                    .rollback_refused(format!(
+                        "rollback({turns}) is not supported by the ACP adapter"
+                    ))
                     .await?;
             }
             DriverCommand::Close => unreachable!("handled in run"),

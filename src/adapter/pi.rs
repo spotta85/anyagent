@@ -525,7 +525,7 @@ impl Drive {
             DriverCommand::Rollback(..) => {
                 // Not advertised: pi forks a new session instead of rewinding.
                 self.events
-                    .diagnostic(DiagnosticLevel::Warning, "rollback is not supported on pi")
+                    .rollback_refused("rollback is not supported on pi")
                     .await?;
             }
             DriverCommand::Close => unreachable!("handled in run"),

@@ -886,8 +886,8 @@ async fn mcp_servers_ride_the_launch_config() {
 }
 
 /// `thread/revert {beforeTurnId}` cuts the conversation before the kept
-/// turn; `SessionUpdated` confirms it, a cut deeper than the history is a
-/// warning, and the files scope stays refused.
+/// turn; `SessionUpdated` confirms it, a cut deeper than the history is
+/// `InvalidRequest`, and the files scope stays refused.
 #[tokio::test]
 async fn rollback_drops_turns_and_confirms_with_session_updated() {
     use std::num::NonZeroU32;
@@ -911,20 +911,18 @@ async fn rollback_drops_turns_and_confirms_with_session_updated() {
     session.prompt("three").await.unwrap();
     let text = complete_turn(&session, &mut events, PermissionChoice::AllowOnce).await;
     assert!(text.contains("rolled=1"), "{text}");
-    session
+    let err = session
         .rollback(
             NonZeroU32::new(9).unwrap(),
             anyagent::RollbackScope::Conversation,
         )
         .await
+        .err()
         .unwrap();
-    loop {
-        if let EventKind::Diagnostic(d) = next(&mut events).await.kind
-            && d.message.contains("rollback(9) rejected")
-        {
-            break;
-        }
-    }
+    assert!(
+        matches!(&err, AgentError::InvalidRequest(r) if r.starts_with("rollback(9) rejected")),
+        "{err}"
+    );
     let err = session
         .rollback(
             NonZeroU32::new(1).unwrap(),

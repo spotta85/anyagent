@@ -81,6 +81,10 @@ pub struct Script {
     pub permissions: bool,
     /// Advertise `Resume` and mint a token; resuming fails, as the mock keeps no history.
     pub resume: bool,
+    /// Advertise `Rollback`; each rollback is confirmed.
+    pub rollback: bool,
+    /// Refuse every rollback with this reason instead.
+    pub rollback_refusal: Option<String>,
     /// Advertised config options; `configure` sets one and reports it back.
     pub options: Vec<ConfigOption>,
 }
@@ -100,6 +104,8 @@ impl Default for Script {
             compact: false,
             permissions: true,
             resume: false,
+            rollback: false,
+            rollback_refusal: None,
             options: Vec::new(),
         }
     }
@@ -288,7 +294,13 @@ async fn drive(
                     return;
                 }
             }
-            DriverCommand::Cancel | DriverCommand::Rollback(..) => {}
+            DriverCommand::Rollback(..) => {
+                let outcome = script.rollback_refusal.clone().map_or(Ok(()), Err);
+                if !send(DriverEvent::RolledBack(outcome)).await {
+                    return;
+                }
+            }
+            DriverCommand::Cancel => {}
             DriverCommand::Close if script.ignore_close => {}
             DriverCommand::Close => return,
         }
@@ -308,6 +320,9 @@ fn info(script: &Script, configuration: &SessionConfiguration) -> DriverInfo {
     }
     if script.resume {
         caps.push(Capability::Resume);
+    }
+    if script.rollback {
+        caps.push(Capability::Rollback);
     }
     // Each option's `current` follows the configuration.
     let config_options = script
