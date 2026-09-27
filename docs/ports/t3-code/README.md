@@ -17,7 +17,7 @@ ProviderService                           ProviderService
 
 ## Numbers
 
-`git diff --numstat main..anyagent` on the fork (head `7f297bb45d`), one bucket per file, from [measure.sh](measure.sh). Tests: `*.test.ts`, test fixtures and examples, `apps/server/integration/`, the ACP mock agent script. Docs: `*.md`. `pnpm-lock.yaml` left out.
+`git diff --numstat main..anyagent` on the fork (head `7f297bb45d`, docs-only commit after it), one bucket per file, from [measure.sh](measure.sh). Tests: `*.test.ts`, test fixtures and examples, `apps/server/integration/`, the ACP mock agent script. Docs: `*.md`. `pnpm-lock.yaml` left out.
 
 | | Deleted | Added |
 |---|---|---|
@@ -75,12 +75,12 @@ Three rounds. The first replaced the adapters. The second and third closed the g
 | accept-edits | PASS | SKIP: sandbox never asks | not proven (quota) | not proven (quota) | PASS | PASS |
 | mcp-tool | PASS | PASS | not proven (quota) | not proven (quota) | PASS | PASS |
 | turn-diff | SKIP: sends none | PASS | not proven (quota) | SKIP: sends none | SKIP: sends none | SKIP: sends none |
-| subagent-info | PASS | PASS⁴ | not proven (quota) | SKIP: ran no subagent | PASS⁴ | SKIP: ran no subagent |
+| subagent-info | PASS: role, tokens | PASS: model, tokens; no role⁴ | not proven (quota) | SKIP: ran no subagent | PASS: role, model; no tokens⁴ | SKIP: ran no subagent |
 | cancel-request | PASS | PASS | not proven (quota) | PASS | PASS | PASS |
 | skills | PASS | PASS | not proven (quota) | SKIP: reads no skill folder | PASS | SKIP: reads no skill folder |
 | schema-generate | PASS | PASS | not proven (quota) | SKIP: no output schema | SKIP: no output schema | SKIP: no output schema |
 
-¹ Passed, or was seen on the wire, before that account's free quota ran out mid-run. ² Ran with cursor's quota out; the check reads a config event or the outgoing wire, not the reply. ³ opencode's free model answered a queued prompt with the wrong text in 3 of 4 runs; the wire shows the prompt arrived intact. Not an adapter or anyagent fault. ⁴ Failed on the first run: anyagent did not link codex's spawned children and read no subagent info from opencode. Both fixed in anyagent, then passed.
+¹ Passed, or was seen on the wire, before that account's free quota ran out mid-run. ² Ran with cursor's quota out; the check reads a config event or the outgoing wire, not the reply. ³ opencode's free model answered a queued prompt with the wrong text in 3 of 4 runs; the wire shows the prompt arrived intact. Not an adapter or anyagent fault. ⁴ Failed on the first run: anyagent did not link codex's spawned children and read no subagent info from opencode. Both fixed in anyagent, then passed. The row passes when a task row names a role or a model; codex's wire has no role and opencode's no token count, so the cell lists what arrived.
 
 No cell fails because of anyagent. Two did on their first run (⁴); the live check is what found them.
 
