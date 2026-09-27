@@ -693,6 +693,32 @@ async fn a_refused_mcp_server_fails_the_open() {
     );
 }
 
+/// An MCP tool call is `ToolKind::Mcp`: its `<server>_<tool>` name is matched
+/// against every server opencode lists (the user's "my docs" too), longest
+/// sanitized name first, so declared "my" does not claim it.
+#[tokio::test]
+async fn mcp_tool_calls_name_their_server() {
+    let options = SessionOptions::in_dir(std::env::temp_dir())
+        .mcp_server(McpServer::http("my", "http://127.0.0.1:1/mcp"));
+    let (session, mut events) = open_with("mcp-kind", "", options).await.unwrap();
+    session.prompt("mcp-call").await.unwrap();
+    let mut kinds = Vec::new();
+    loop {
+        match next(&mut events).await.kind {
+            EventKind::ToolUpdated(tool) => kinds.push(tool.kind),
+            EventKind::TurnEnded { .. } => break,
+            _ => {}
+        }
+    }
+    let lookup = ToolKind::Mcp {
+        server: "my docs".into(),
+        tool: "lookup".into(),
+    };
+    assert!(kinds.contains(&lookup), "{kinds:?}");
+    assert!(kinds.contains(&ToolKind::Execute), "{kinds:?}");
+    session.close().await.unwrap();
+}
+
 /// Probe reads the same details an open does, without leaving a session.
 #[tokio::test]
 async fn probe_reports_details() {

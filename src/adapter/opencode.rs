@@ -86,6 +86,7 @@ impl Adapter for OpencodeAdapter {
                 throwaway: request.options.throwaway,
                 windows: launched.windows,
                 variants: launched.variants,
+                mcp_servers: launched.mcp_servers,
                 login: login_methods(&request.installation, Some(&request.options)),
                 scratch: TurnScratch::default(),
                 tide: String::new(),
@@ -121,6 +122,7 @@ struct Launched {
     session_id: String,
     windows: HashMap<String, u64>,
     variants: HashMap<String, Vec<String>>,
+    mcp_servers: Vec<String>,
 }
 
 /// Spawns the server, waits for health, subscribes to the event bus, binds
@@ -163,10 +165,10 @@ async fn launch_once(
         let version = await_health(&http).await?;
         let frames = open_bus(&http, recorder.clone()).await?;
         // Before the session exists, so a refused server leaves none behind.
-        add_mcp_servers(&http, &request.options.mcp_servers).await?;
+        let mcp_servers = add_mcp_servers(&http, &request.options.mcp_servers).await?;
         let (info, session_id, windows, variants) =
             handshake(&http, request, recorder, version).await?;
-        Ok((frames, info, session_id, windows, variants))
+        Ok((frames, info, session_id, windows, variants, mcp_servers))
     };
     // A squatter on the picked port (the pick-then-bind race) makes opencode
     // exit at once: the boot races that death so it costs no handshake
@@ -181,7 +183,7 @@ async fn launch_once(
         return Err(AgentError::ProcessExited { status, stderr });
     }
     match outcome {
-        Some(Ok(Ok((frames, info, session_id, windows, variants)))) => Ok(Launched {
+        Some(Ok(Ok((frames, info, session_id, windows, variants, mcp_servers)))) => Ok(Launched {
             server,
             http,
             frames,
@@ -189,6 +191,7 @@ async fn launch_once(
             session_id,
             windows,
             variants,
+            mcp_servers,
         }),
         Some(Ok(Err(e))) => {
             let e = crate::adapter::with_stderr(e, &server);
@@ -316,9 +319,10 @@ async fn await_health(http: &Http) -> Result<Option<String>, AgentError> {
     }
 }
 
-/// Adds each declared MCP server with `POST /mcp`. opencode keeps them per
-/// server process (one per session here); a refused one fails the open.
-async fn add_mcp_servers(http: &Http, servers: &[McpServer]) -> Result<(), AgentError> {
+/// Adds each declared MCP server with `POST /mcp` (opencode keeps them per
+/// server process, one per session here), then returns every server name
+/// opencode knows, the user's own included. A refused one fails the open.
+async fn add_mcp_servers(http: &Http, servers: &[McpServer]) -> Result<Vec<String>, AgentError> {
     for server in servers {
         let body = json!({ "name": server.name, "config": mcp_config(&server.connection) });
         // The reply maps every server name to its status; a refusal is
@@ -334,7 +338,11 @@ async fn add_mcp_servers(http: &Http, servers: &[McpServer]) -> Result<(), Agent
             )));
         }
     }
-    Ok(())
+    let statuses = http.get("/mcp").await?;
+    Ok(statuses
+        .as_object()
+        .map(|all| all.keys().cloned().collect())
+        .unwrap_or_default())
 }
 
 /// One server as opencode's `local` or `remote` config. A remote server is
@@ -671,6 +679,8 @@ struct Drive {
     windows: HashMap<String, u64>,
     /// Reasoning variants per model, behind the `effort` option.
     variants: HashMap<String, Vec<String>>,
+    /// Every MCP server name opencode knows, to type their tool calls.
+    mcp_servers: Vec<String>,
     /// Everything that lives for one turn; reset at idle.
     scratch: TurnScratch,
     /// Highest assistant `msg_…` id ever minted. Ids sort by creation time,
@@ -1215,11 +1225,11 @@ impl Drive {
         let call_id = part["callID"].as_str().unwrap_or_default().to_owned();
         let name = part["tool"].as_str().unwrap_or_default();
         let state = &part["state"];
-        let mut tool = self
-            .scratch
-            .tools
-            .remove(&call_id)
-            .unwrap_or_else(|| fresh_tool(&call_id, name));
+        let mut tool = self.scratch.tools.remove(&call_id).unwrap_or_else(|| {
+            let mut tool = fresh_tool(&call_id, name);
+            tool.kind = mcp_kind(name, &self.mcp_servers).unwrap_or(tool.kind);
+            tool
+        });
         apply_state(&mut tool, name, state);
         let done = matches!(tool.status, ToolStatus::Completed | ToolStatus::Failed);
         if parent.is_none()
@@ -1734,6 +1744,23 @@ fn tool_kind(name: &str) -> ToolKind {
         "task" => ToolKind::Subagent,
         _ => ToolKind::Other,
     }
+}
+
+/// An MCP call's kind: opencode names it `<server>_<tool>`, chars outside
+/// `[A-Za-z0-9_-]` made `_` (live 1.18.29: `probe dot.v2` → `probe_dot_v2_…`).
+fn mcp_kind(name: &str, servers: &[String]) -> Option<ToolKind> {
+    servers
+        .iter()
+        .filter_map(|server| {
+            let prefix = server.replace(|c: char| !c.is_ascii_alphanumeric() && c != '-', "_");
+            let tool = name.strip_prefix(&prefix)?.strip_prefix('_')?;
+            Some((prefix.len(), server, tool))
+        })
+        .max_by_key(|(len, ..)| *len)
+        .map(|(_, server, tool)| ToolKind::Mcp {
+            server: server.clone(),
+            tool: tool.to_owned(),
+        })
 }
 
 /// Applies a tool state snapshot: status, decoded input, and output.
