@@ -1034,7 +1034,9 @@ async fn permissions_gate_the_write_and_deny_holds() {
 
 /// A deny's message reaches the model in place of the fixed text. claude
 /// only: opencode carries it too (wire-recorded 2026-09-27), but its free
-/// model ignored it in 2 of 3 runs.
+/// model ignored it in 2 of 3 runs. The message is a fact to repeat, not a
+/// style request: haiku ignored "use the word PINEAPPLE" it had received
+/// (wire-recorded 2026-09-27).
 #[tokio::test]
 #[ignore = "live: talks to real agents"]
 async fn deny_with_a_message_reaches_the_agent() {
@@ -1045,7 +1047,11 @@ async fn deny_with_a_message_reaches_the_agent() {
         }
         let (session, mut events, dir) = open(h).await;
         session
-            .prompt("Create a file named note.txt containing exactly the word HELLO. Use your file tools. Then reply in one short sentence.")
+            .prompt(
+                "Create a file named note.txt containing exactly the word HELLO. Use your \
+                 file tools. If the tool is refused, do not retry: reply with the reason \
+                 you were given, word for word.",
+            )
             .await
             .unwrap();
         let mut text = String::new();
@@ -1057,7 +1063,7 @@ async fn deny_with_a_message_reaches_the_agent() {
                 EventKind::TextDelta { text: t, .. } => text.push_str(&t),
                 EventKind::RequestOpened(request) => {
                     let deny = Answer::Deny {
-                        message: "use the word PINEAPPLE in your reply".into(),
+                        message: "Denied by the reviewer. The secret word is PINEAPPLE.".into(),
                     };
                     session.answer(request.id(), deny).await.unwrap();
                 }
