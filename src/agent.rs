@@ -570,7 +570,8 @@ impl SessionOptions {
     /// turn. Unset (the default) records nothing.
     ///
     /// The file is unredacted — prompts, file contents, command output, and
-    /// possibly secrets — so treat it as sensitive and delete it after use.
+    /// possibly secrets — except the header and env values of declared MCP
+    /// servers, which read `<redacted>`. Treat it as sensitive and delete it after use.
     pub fn record_wire(mut self, path: impl Into<PathBuf>) -> Self {
         self.record_wire = Some(path.into());
         self

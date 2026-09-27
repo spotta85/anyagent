@@ -16,6 +16,10 @@ use crate::process::{Child, SharedStdin};
 /// Frames buffered between the reader task and the drive task.
 pub(crate) const FRAME_BUFFER: usize = 64;
 
+/// Where frames carry declared MCP servers: claude's `mcp_set_servers`, ACP's
+/// `session/new` and `session/load`, opencode's `POST /mcp` body.
+const MCP_SERVERS_AT: [&str; 3] = ["/request/servers", "/params/mcpServers", "/body/config"];
+
 /// One JSON object per line each way. Adapters add their own request ids
 /// and response matching on top.
 pub(crate) struct LineWire {
@@ -72,8 +76,9 @@ impl LineWire {
 
 /// Tees raw protocol frames to a JSONL file when `record_wire` is set: one
 /// `{"dir":"in"|"out","frame":<frame>}` per line, append-only and flushed
-/// per line. Unredacted, unbounded: a local debug artifact. A write failure
-/// is reported once as a `Diagnostic`; recording never fails a turn.
+/// per line. Unredacted except declared MCP servers' header and env values;
+/// unbounded: a local debug artifact. A write failure is reported once as a
+/// `Diagnostic`; recording never fails a turn.
 #[derive(Clone)]
 pub(crate) struct WireRecorder {
     lines: mpsc::UnboundedSender<Vec<u8>>,
@@ -120,12 +125,47 @@ impl WireRecorder {
         Some(Self { lines })
     }
 
-    /// Records one frame in the given direction. Never blocks or errors; a
-    /// gone writer just loses the frame.
+    /// Records one frame in the given direction, MCP secrets redacted. Never
+    /// blocks or errors; a gone writer just loses the frame.
     pub(crate) fn record(&self, dir: &'static str, frame: &Value) {
-        let mut line = json!({ "dir": dir, "frame": frame }).to_string();
+        let mut entry = json!({ "dir": dir, "frame": frame });
+        for at in MCP_SERVERS_AT {
+            if let Some(servers) = entry["frame"].pointer_mut(at) {
+                redact_mcp_servers(servers);
+            }
+        }
+        let mut line = entry.to_string();
         line.push('\n');
         let _ = self.lines.send(line.into_bytes());
+    }
+}
+
+/// Replaces every header and env value in declared MCP servers' JSON with
+/// `<redacted>`, in any adapter's shape; names, URLs, commands and args stay.
+fn redact_mcp_servers(servers: &mut Value) {
+    match servers {
+        Value::Object(fields) => {
+            for (key, value) in fields {
+                if !matches!(key.as_str(), "headers" | "env" | "environment") {
+                    redact_mcp_servers(value);
+                    continue;
+                }
+                // A name-to-value map, or ACP's `[{name, value}]` list.
+                let values: Vec<&mut Value> = match value {
+                    Value::Object(map) => map.values_mut().collect(),
+                    Value::Array(pairs) => pairs
+                        .iter_mut()
+                        .filter_map(|p| p.get_mut("value"))
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                for secret in values {
+                    *secret = json!("<redacted>");
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(redact_mcp_servers),
+        _ => {}
     }
 }
 

@@ -113,6 +113,8 @@ function onControl(m) {
       if (flag('--mcp-refused'))
         return send({ type: 'control_response', response: { subtype: 'error', request_id: m.request_id, error: 'Unsupported control request subtype: mcp_set_servers' } });
       mcpServers = m.request.servers;
+      // FIXTURE_MCP_LOG: log the servers as received, secrets included.
+      if (process.env.FIXTURE_MCP_LOG) appendFileSync(process.env.FIXTURE_MCP_LOG, JSON.stringify(mcpServers) + '\n');
       const failure = (e) => (e.url ? `MCP endpoint not found at ${e.url}. Check the URL in your MCP config.` : 'connection failed');
       const errors = flag('--mcp-fails') ? Object.fromEntries(Object.entries(mcpServers).map(([n, e]) => [n, failure(e)])) : {};
       return reply({ added: Object.keys(mcpServers), removed: [], errors });

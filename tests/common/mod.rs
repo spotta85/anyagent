@@ -71,6 +71,19 @@ pub fn logged_args(log: &Path) -> Vec<Vec<String>> {
         .collect()
 }
 
+/// Asserts each MCP secret `(name, value)` reached the agent (its
+/// `FIXTURE_MCP_LOG`) while the wire recording holds the name and `<redacted>` only.
+pub fn assert_mcp_redacted(recording: &Path, received: &Path, secrets: &[(&str, &str)]) {
+    let recording = std::fs::read_to_string(recording).unwrap();
+    let received = std::fs::read_to_string(received).unwrap();
+    assert!(recording.contains("<redacted>"), "{recording}");
+    for (name, value) in secrets {
+        assert!(recording.contains(name), "{name} missing: {recording}");
+        assert!(!recording.contains(value), "{value} recorded: {recording}");
+        assert!(received.contains(value), "{value} not received: {received}");
+    }
+}
+
 /// The sent frames in a `record_wire` log that match `pred`, polled until
 /// `count` are there: the recorder writes in the background.
 pub async fn sent_frames(

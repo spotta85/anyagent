@@ -113,6 +113,8 @@ async function onRequest(m) {
       // The hermes shape: a plain internal error whose data carries the words.
       if (flag('--auth-hint-error')) return send({ jsonrpc: '2.0', id: m.id, error: { code: -32603, message: 'Internal error', data: { details: 'No LLM provider configured. Run `fixture login` first.' } } });
       mcpDecl = m.params.mcpServers ?? [];
+      // FIXTURE_MCP_LOG: log the servers as received, secrets included.
+      if (process.env.FIXTURE_MCP_LOG) appendFileSync(process.env.FIXTURE_MCP_LOG, JSON.stringify(mcpDecl) + '\n');
       // --grok-models: the first-class models state (no model configOption);
       // switching must ride session/set_model.
       if (flag('--grok-models')) return reply({ sessionId: 'sess-1', models: grokModels() });
