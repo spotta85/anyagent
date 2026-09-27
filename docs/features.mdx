@@ -370,7 +370,9 @@ let options = SessionOptions::in_dir(".")
 ```
 
 **Confirms:** calls into your servers arrive as `ToolUpdated` with
-`ToolKind::Mcp { server, tool }`.
+`ToolKind::Mcp { server, tool }`. Over ACP only an agent that names them in
+the call's `_meta.mcp` does this (antigravity's server); kiro, qwen and
+hermes calls stay `Other`.
 **Gates:** the agent's supported transports. An unsupported transport fails
 `open` typed rather than dropping the server.
 

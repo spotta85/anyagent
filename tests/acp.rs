@@ -11,7 +11,7 @@ use anyagent::{
     AgentError, AgentInstallation, Answer, AuthKind, AuthStatus, Capability, ChoiceId, ConfigId,
     ConfigValue, DeliveryKind, Event, EventKind, Events, Input, LoginMethod, McpServer,
     McpTransport, PermissionChoice, QuestionAnswer, Request, ResumeToken, Runtime, Session,
-    SessionOptions, StopReason,
+    SessionOptions, StopReason, ToolKind,
 };
 
 mod common;
@@ -1577,6 +1577,32 @@ async fn cursor_model_switch_reveals_the_models_own_options() {
         option(&session, "thinking").unwrap().current,
         Some(ConfigValue::Text("true".into()))
     );
+    session.close().await.unwrap();
+}
+
+/// A tool call whose `_meta.mcp` names the server and tool (antigravity's
+/// ACP server) is `ToolKind::Mcp` on every snapshot and on its permission.
+#[tokio::test]
+async fn meta_mcp_makes_the_tool_kind_mcp() {
+    let (session, mut events) = open(&[]).await;
+    session.prompt("mcp-call").await.unwrap();
+    let mut kinds = Vec::new();
+    loop {
+        match next(&mut events).await.kind {
+            EventKind::RequestOpened(Request::Permission(request)) => {
+                kinds.push(request.tool.kind);
+                session.answer(request.id, allow()).await.unwrap();
+            }
+            EventKind::ToolUpdated(tool) => kinds.push(tool.kind),
+            EventKind::TurnEnded { .. } => break,
+            _ => {}
+        }
+    }
+    let mcp = ToolKind::Mcp {
+        server: "probe".into(),
+        tool: "secret_word".into(),
+    };
+    assert_eq!(kinds, vec![mcp; 4]);
     session.close().await.unwrap();
 }
 

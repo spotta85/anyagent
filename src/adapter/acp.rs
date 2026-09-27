@@ -1902,6 +1902,9 @@ impl Drive {
             .entry(update.tool_call_id.0.to_string())
             .or_insert_with(|| blank_tool(update.tool_call_id.0.as_ref()));
         let appended = apply_fields(tool, update.fields);
+        if let Some(kind) = mcp_kind(update.meta.as_ref()) {
+            tool.kind = kind;
+        }
         (tool.clone(), appended)
     }
 
@@ -1968,7 +1971,7 @@ fn text_kind(
 /// A `tool_call` notification as a full snapshot.
 fn fresh_tool(call: acp::ToolCall) -> ToolUpdate {
     let mut tool = blank_tool(call.tool_call_id.0.as_ref());
-    tool.kind = tool_kind(call.kind);
+    tool.kind = mcp_kind(call.meta.as_ref()).unwrap_or_else(|| tool_kind(call.kind));
     tool.status = tool_status(call.status);
     tool.title = call.title;
     tool.locations = call.locations.into_iter().map(|l| l.path).collect();
@@ -2064,6 +2067,16 @@ fn tool_kind(kind: acp::ToolKind) -> ToolKind {
         K::Fetch => ToolKind::Fetch,
         _ => ToolKind::Other,
     }
+}
+
+/// An MCP call named in `_meta.mcp` (`{server, tool}`; antigravity's ACP
+/// server agy_acp_server_20260818_01_RC01, probed 2026-09-27).
+fn mcp_kind(meta: Option<&acp::Meta>) -> Option<ToolKind> {
+    let mcp = meta?.get("mcp")?;
+    Some(ToolKind::Mcp {
+        server: mcp["server"].as_str()?.to_owned(),
+        tool: mcp["tool"].as_str()?.to_owned(),
+    })
 }
 
 /// ACP tool statuses to ours.

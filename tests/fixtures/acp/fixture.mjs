@@ -202,6 +202,17 @@ async function runTurn(m) {
     done('end_turn');
     return;
   }
+  // Antigravity's ACP server names an MCP tool in `_meta.mcp` on the call,
+  // its permission and its first update; `kind` stays `other` (recorded 2026-09-27).
+  if (ptext.includes('mcp-call')) {
+    const toolCall = { toolCallId: 'call_m', title: 'probe_secret_word', kind: 'other', status: 'pending', content: [], rawInput: { arguments: {} }, _meta: { mcp: { tool: 'secret_word', server: 'probe' }, is_mcp_tool_call: true } };
+    notify(sid, { sessionUpdate: 'tool_call', ...toolCall });
+    await request('session/request_permission', { sessionId: sid, toolCall, options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }] });
+    notify(sid, { sessionUpdate: 'tool_call_update', ...toolCall, status: 'in_progress' });
+    notify(sid, { sessionUpdate: 'tool_call_update', toolCallId: 'call_m', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'PLUM-4417' } }], rawOutput: 'PLUM-4417' });
+    done('end_turn');
+    return;
+  }
   // Grok extensions (wire shapes cross-checked against comet + t3code).
   if (ptext.includes('grok-question')) {
     // The question's tool call rides alongside, tagged `ask_user` in _meta.
