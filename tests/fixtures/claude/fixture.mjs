@@ -9,7 +9,8 @@
 // --echo-config-home (echo the CLAUDE_CONFIG_DIR the child received),
 // --rewind-fails (rewind_files answers with an error envelope),
 // --denied (a settings rule refuses a Bash call), --fork-fails (a fork
-// launch dies before speaking).
+// launch dies before speaking), --plan (a plan-mode turn that ends in an
+// ExitPlanMode request).
 import { createInterface } from 'node:readline';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 
@@ -215,6 +216,22 @@ async function runTurn(m) {
     if (turn.interrupted) return aborted();
     const answer = resp.response?.updatedInput?.answers?.['Which color do you prefer?'] ?? 'none';
     delta({ type: 'text_delta', text: `answer=${answer}` });
+    ev({ type: 'message_stop' });
+    resultFrame({ user_message_uuid: u });
+    life(u, 'completed');
+    turn = null;
+    return;
+  }
+
+  // Plan mode (probed 2026-09-27, 2.1.283): ExitPlanMode asks through
+  // can_use_tool with the markdown in `input.plan`. "no-plan" sends it empty.
+  if (flag('--plan')) {
+    const input = { plan: prompt.includes('no-plan') ? '' : '# Plan\n\n1. Add README.md', planFilePath: '/plans/p.md' };
+    msgStart('msg_1');
+    assistantTool('toolu_plan', 'ExitPlanMode', input);
+    const resp = await ask({ subtype: 'can_use_tool', tool_name: 'ExitPlanMode', display_name: 'ExitPlanMode', input, tool_use_id: 'toolu_plan', requires_user_interaction: true });
+    if (turn.interrupted) return aborted();
+    delta({ type: 'text_delta', text: `plan=${resp.response?.behavior ?? 'deny'}` });
     ev({ type: 'message_stop' });
     resultFrame({ user_message_uuid: u });
     life(u, 'completed');

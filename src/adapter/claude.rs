@@ -896,6 +896,14 @@ impl Drive {
         }
         let id = RequestId::new(format!("r{wire_id}"));
         let input = request["input"].clone();
+        // Plan mode's `ExitPlanMode` carries the plan: it goes out before its request.
+        if request["tool_name"].as_str() == Some("ExitPlanMode")
+            && let Some(markdown) = text(&input["plan"])
+        {
+            self.events
+                .event(EventKind::PlanProposed { markdown })
+                .await?;
+        }
         let questions = (request["tool_name"].as_str() == Some("AskUserQuestion"))
             .then(|| questions(&input["questions"]));
         let open = match &questions {
