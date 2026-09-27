@@ -91,6 +91,8 @@ The fullest native adapter. `fast` appears when the selected model reports
 same `Session` handle and conversation. Rollback can restore files. A tool a
 `permissions.deny` rule or the CLI's own mode refuses ends `Denied`; a hook's
 refusal still shows as `Failed` (the CLI sends no denial frame for it).
+Client MCP servers ride the `mcp_set_servers` control request after
+`initialize`, so their header and env values never appear in argv.
 </Accordion>
 
 <Accordion title="Codex">
@@ -98,7 +100,9 @@ Opts into the app-server's experimental API. Approval policy and sandbox
 switch live. `mode: plan` is codex's plan collaboration mode and keeps the
 last approval policy; to leave it, select an approval policy and prompt
 again. Images ride as `localImage` items. Client MCP servers ride as
-launch overrides (stdio and HTTP; no SSE). `rollback` maps to
+launch overrides (stdio and HTTP; no SSE). Known limit: stdio `env` and
+non-bearer headers travel as `-c` overrides in argv (the bearer token does
+not). `rollback` maps to
 `thread/revert`; files are never restored. Questions are translated
 defensively but the capability stays off until observed live.
 </Accordion>
