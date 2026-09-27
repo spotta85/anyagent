@@ -31,10 +31,12 @@ conversation, like one-shot text generation and reading account quota.
 | `discover()` | `DiscoveryReport` | Instant, read-only scan: installed agents plus missing ones with install hints |
 | `prewarm()` | | Start the discovery scan early |
 | `probe(&agent)` | `AgentDetails` | Opens a throwaway session (~1 s) to learn version, auth, capabilities, config options, commands |
+| `probe_with(&agent, options)` | `AgentDetails` | `probe` with your dir, env, args, config home. Always throwaway; `resume` / `fork` is `InvalidConfiguration` |
 | `probe_auth(&agent)` | `AuthStatus` | Cheaper probe when you only need the login state |
 | `open(&agent, options)` | `(Session, Events)` | Spawn the agent and hand back the two halves |
 | `generate(&agent, options, prompt)` | `String` | One-shot text: opens, prompts, declines tools, closes |
 | `plan_usage(&agent)` | `PlanUsage` | The account's subscription quota and banked resets (`reset_credits`), from the agent itself |
+| `plan_usage_with(&agent, &options)` | `PlanUsage` | `plan_usage` for the login the options point at (config home, env, args). Cached per agent, binary, config home and env |
 | `plan_usage_all()` | `Vec<AgentPlanUsage>` | The same for every installed agent |
 | `with_mock(script)` | `Runtime` | Feature `mock`: the real engine over a scripted agent |
 
@@ -45,6 +47,10 @@ for missing in &report.missing {               // MissingAgent { name, install_h
     println!("{}: {}", missing.name, missing.install_hint);
 }
 ```
+
+Throwaway sessions (`probe`, `probe_auth`, `generate`) on claude launch
+without your hooks and MCP servers (`--strict-mcp-config`,
+`disableAllHooks`), so a probe's `commands` leave out MCP-provided prompts.
 
 Discovery hands you `AgentInstallation` values, and every other `Runtime`
 call takes one. You can also build one by hand: `AgentInstallation::at(id, path)`
@@ -67,6 +73,9 @@ can change later goes through `Session::configure` instead.
 | `mcp_server(server)` | Hand the agent one of your MCP servers (stdio, HTTP, SSE) |
 | `permission_mode(mode)` | `Ask` (forward requests), `AcceptEdits` (allow file edits, forward the rest) or `AutoApprove` |
 | `config_home(dir)` | Separate config directory, for several logins of one agent |
+| `instructions(text)` | Extra instructions added to the agent's system prompt ([per agent](/agents#launch-options)) |
+| `env(key, value)` | One env var for the agent process, over the inherited ones and `config_home`'s |
+| `arg(arg)` | One extra launch argument, after anyagent's own. Passed as is; a bad one fails `open` with the agent's error |
 | `quiet_window(dur)` | How long silence may run before completion is inferred |
 | `stall_after(dur)` | Silence before a stall `Diagnostic` (default 120 s). Never ends the turn |
 | `record_wire(path)` | Dump the raw protocol traffic to a JSONL file. Unredacted, treat as sensitive |
