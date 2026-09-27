@@ -163,7 +163,8 @@ For unattended runs, open with
 `SessionOptions::permission_mode(PermissionMode::AutoApprove)`: anyagent
 allows each request once without forwarding it. `PermissionMode::AcceptEdits`
 does the same only for file edits (`Edit`, `Delete`, `Move`); every other
-request is forwarded.
+request is forwarded. In every mode, the request right after a
+`PlanProposed` (the plan's approval) is forwarded.
 
 ## Cancel
 

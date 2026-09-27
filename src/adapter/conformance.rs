@@ -879,6 +879,40 @@ async fn accept_edits_allows_edits_and_forwards_the_rest() {
     assert_eq!(forwarded, [RequestId::new("r2"), RequestId::new("r3")]);
 }
 
+/// AutoApprove never approves a proposed plan: the request right after
+/// `PlanProposed` reaches the caller, and a later one is allowed unasked again.
+#[tokio::test]
+async fn auto_approve_forwards_the_request_that_approves_a_plan() {
+    let plan = EventKind::PlanProposed {
+        markdown: "1. Add a README".into(),
+    };
+    let script = Script::default().turn(vec![
+        Step::Emit(plan),
+        Step::Emit(permission("r1")),
+        Step::AwaitAnswer,
+        Step::Emit(permission("r2")),
+        Step::AwaitAnswer,
+        Step::End(completed()),
+    ]);
+    let dir = tempfile::tempdir().unwrap();
+    let options =
+        SessionOptions::in_dir(dir.path()).permission_mode(crate::PermissionMode::AutoApprove);
+    let (session, mut events) = open(MockAdapter::new(script), Some(options)).await;
+    session.prompt("plan it").await.unwrap();
+    let mut forwarded = Vec::new();
+    loop {
+        match next(&mut events).await.kind {
+            EventKind::RequestOpened(request) => {
+                forwarded.push(request.id());
+                session.answer(request.id(), allow()).await.unwrap();
+            }
+            EventKind::TurnEnded { .. } => break,
+            _ => {}
+        }
+    }
+    assert_eq!(forwarded, [RequestId::new("r1")]);
+}
+
 /// A permission request for an Edit tool offering `allow` or a one-time deny.
 fn edit_permission(id: &str, allow: PermissionChoice) -> EventKind {
     let mut request = permission(id);
