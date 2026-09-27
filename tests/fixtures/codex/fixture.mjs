@@ -14,6 +14,7 @@
 // --rename: the server renames the thread after the first turn.
 // --host-feature: the host config enables an under-development feature too.
 // "hook-blocked": the user's prompt hook completes as `blocked`.
+// "rerouted": the server reroutes the turn to another model.
 // A turn/start in the `plan` collaboration mode also yields a `plan` item
 // ("no-plan": one with empty text).
 import { createInterface } from 'node:readline';
@@ -76,6 +77,9 @@ const RATE_LIMITS = {
   primary: { usedPercent: 5, windowDurationMins: 300, resetsAt: 1787903985 },
   secondary: { usedPercent: 4, windowDurationMins: 10080, resetsAt: 1788329085 },
 };
+
+// Recorded (02-approvals-and-tools): the turn diff once fruit.txt is written.
+const FRUIT_DIFF = 'diff --git a/fruit.txt b/fruit.txt\nnew file mode 100644\nindex 0000000000000000000000000000000000000000..4b2f803f4959b8744deaf53200f810c668409c8e\n--- /dev/null\n+++ b/fruit.txt\n@@ -0,0 +1 @@\n+PEAR\n';
 
 const item = (fields) => ({ id: `it-${itemN++}`, ...fields });
 const itemStarted = (it) => notify('item/started', { item: it, threadId: THREAD.id, turnId: turn.id });
@@ -230,6 +234,8 @@ async function runTurn(params) {
   const user = item({ type: 'userMessage', clientId: params.clientUserMessageId, content: [{ type: 'text', text: prompt }] });
   itemStarted(user);
   itemCompleted(user);
+  // A server-side reroute, shaped by the 0.154.0 schema (never seen live).
+  if (prompt.includes('rerouted')) notify('model/rerouted', { threadId: THREAD.id, turnId: turn.id, fromModel: params.model ?? 'gpt-6', toModel: 'gpt-6-mini', reason: 'highRiskCyberActivity' });
 
   if (flag('--logged-out')) {
     // The 401 retries, then the turn still ends deterministically (recording 08).
@@ -300,6 +306,7 @@ async function runTurn(params) {
     notify('serverRequest/resolved', { threadId: THREAD.id, requestId: serverReqN - 1 });
     const accepted = resp?.decision === 'accept' || resp?.decision === 'acceptForSession';
     itemCompleted({ ...change, status: accepted ? 'completed' : 'declined' });
+    if (accepted) notify('turn/diff/updated', { threadId: THREAD.id, turnId: turn.id, diff: FRUIT_DIFF });
     delta(msg.id, `write=${resp?.decision} `);
     // `cancel` also interrupts the turn (generated schema, 0.154.0).
     if (resp?.decision === 'cancel') return endTurn('interrupted');
@@ -323,6 +330,8 @@ async function runTurn(params) {
       resps.push(resp);
       notify('serverRequest/resolved', { threadId: THREAD.id, requestId: serverReqN - 1 });
     }
+    // MCP progress, shaped by the 0.154.0 schema (codex did not forward it live): the first call's, and an unknown item's.
+    for (const itemId of [calls[0].id, 'it-gone']) notify('item/mcpToolCall/progress', { threadId: THREAD.id, turnId: turn.id, itemId, message: 'halfway there' });
     calls.forEach((call, i) => {
       const accepted = resps[i]?.action === 'accept';
       itemCompleted({ ...call, status: accepted ? 'completed' : 'failed', error: accepted ? null : { message: 'user rejected MCP tool call' } });

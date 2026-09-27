@@ -1208,6 +1208,43 @@ async fn opencode_child_session_permissions_reach_the_caller() {
     pass("opencode", "child session permissions reached the caller");
 }
 
+/// A codex turn that writes a file streams a `TurnDiff` naming it.
+#[tokio::test]
+#[ignore = "live: talks to real agents"]
+async fn codex_turn_diff_names_the_edited_file() {
+    if !enabled().await.contains(&"codex") {
+        println!("SKIP: codex not enabled");
+        return;
+    }
+    let (session, mut events, _dir) = open("codex").await;
+    session
+        .prompt(
+            "Create a file named note.txt containing exactly the word HELLO. Use your file tools.",
+        )
+        .await
+        .unwrap();
+    let mut diffs = Vec::new();
+    loop {
+        match next(&mut events, "codex: turn diff").await.kind {
+            EventKind::RequestOpened(request) => {
+                session.answer(request.id(), allow()).await.unwrap();
+            }
+            EventKind::TurnDiff { unified } => diffs.push(unified),
+            EventKind::TurnEnded { .. } => break,
+            _ => {}
+        }
+    }
+    assert!(
+        diffs.iter().any(|d| d.contains("note.txt")),
+        "codex: no turn diff names note.txt: {diffs:?}"
+    );
+    session.close().await.unwrap();
+    pass(
+        "codex",
+        &format!("{} turn diffs, the file named", diffs.len()),
+    );
+}
+
 /// claude's subagent tool names the role the parent gave it in the Agent input.
 #[tokio::test]
 #[ignore = "live: talks to real agents"]
