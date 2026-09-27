@@ -487,8 +487,8 @@ pub struct SessionOptions {
     /// Never persisted: keeps probes and one-shot generation out of the
     /// user's session history.
     pub(crate) throwaway: bool,
-    /// Only the details are wanted (the probes): an adapter may stop before
-    /// creating the provider session.
+    /// Only the details are wanted (the probes): codex then stops before its
+    /// thread; the other adapters ignore it today.
     pub(crate) details_only: bool,
     pub(crate) quiet_window: Option<Duration>,
     pub(crate) stall_after: Option<Duration>,

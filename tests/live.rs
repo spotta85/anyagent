@@ -658,9 +658,8 @@ async fn generate_returns_text_without_a_session() {
     }
 }
 
-/// `generate` with an output schema returns text that parses as JSON matching it. Codex's
-/// API takes only strict schemas: without `additionalProperties: false` it fails the turn
-/// with `invalid_json_schema` (live 2026-09-27, 0.154.0).
+/// `generate` with an output schema returns JSON matching it. Strict: codex fails the turn with
+/// `invalid_json_schema` without `additionalProperties: false` (live 2026-09-27, 0.154.0).
 #[tokio::test]
 #[ignore = "live: talks to real agents"]
 async fn generate_matches_an_output_schema() {

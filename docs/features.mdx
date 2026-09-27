@@ -242,7 +242,9 @@ let title = runtime
 
 It opens a throwaway session, disables tools where the wire allows (claude,
 pi) and declines every permission elsewhere, collects the text until the
-turn ends, and closes. With `SessionOptions::output_schema(schema)` the
+turn ends, and closes. The session is never persisted (claude, codex, pi)
+or is deleted at close (opencode), so it stays out of the user's history.
+With `SessionOptions::output_schema(schema)` the
 string is the turn's final message, JSON matching the schema (claude, codex;
 `OutputSchema` gates it).
 
