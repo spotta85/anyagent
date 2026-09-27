@@ -93,7 +93,7 @@ async function runTurn(ses, body, text) {
     partUpdated(sid, write);
     const resp = await ask('per', sid, { permission: 'write', patterns: ['fruit.txt'], metadata: { filepath: 'fruit.txt' }, tool: { messageID: asst.id, callID: write.callID } });
     if (ses.aborting) return abortTurn(ses, asst);
-    partUpdated(sid, { ...write, state: resp === 'reject' ? { status: 'error', input: write.state.input, error: 'denied' } : { status: 'completed', input: write.state.input, output: 'wrote fruit.txt' } });
+    partUpdated(sid, { ...write, state: resp.startsWith('reject') ? { status: 'error', input: write.state.input, error: 'denied' } : { status: 'completed', input: write.state.input, output: 'wrote fruit.txt' } });
     say(`perm=${resp} `);
   }
   if (prompt.includes('question')) {
@@ -177,6 +177,9 @@ createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/mcp') { mcpGets++; return json(res, 200, mcpStatus); }
   if (req.method === 'POST' && url.pathname === '/session') { const s = newSession(); return json(res, 200, { id: s.id, title: s.title, model: s.model }); }
   if (req.method === 'POST' && p[0] === 'question' && p[2] === 'reply') { waiters[p[1]]?.(body.answers); delete waiters[p[1]]; return json(res, 200, true); }
+  if (req.method === 'POST' && p[0] === 'question' && p[2] === 'reject') { waiters[p[1]]?.([['rejected']]); delete waiters[p[1]]; return json(res, 200, true); }
+  // A reject may carry the user's message (1.18.29 OpenAPI `/doc`).
+  if (req.method === 'POST' && p[0] === 'permission' && p[2] === 'reply') { waiters[p[1]]?.(body.message ? `${body.reply}:${body.message}` : body.reply); delete waiters[p[1]]; return json(res, 200, true); }
   // Recorded 2026-09-26 (1.18.29): an id without the `ses_` prefix is a 500.
   if (p[0] === 'session' && !p[1]?.startsWith('ses_')) return json(res, 500, { name: 'UnknownError', data: { message: 'Unexpected server error. Check server logs for details.' } });
   if (!ses) return json(res, 404, { name: 'NotFoundError', data: { message: `Session not found: ${p[1]}` } });
@@ -186,7 +189,6 @@ createServer(async (req, res) => {
   if (req.method === 'POST' && p[2] === 'prompt_async') { if (busy[ses.id]) return json(res, 400, { error: 'busy' }); runTurn(ses, body, '').catch(() => process.exit(1)); return json(res, 202, {}); }
   if (req.method === 'POST' && p[2] === 'command') { await runTurn(ses, { parts: [{ type: 'text', text: '' }], model: body.model }, `cmd=${body.command} args=${body.arguments} `); return json(res, 200, { info: {}, parts: [] }); }
   if (req.method === 'POST' && p[2] === 'abort') { ses.aborting = true; return json(res, 200, true); }
-  if (req.method === 'POST' && p[2] === 'permissions') { waiters[p[3]]?.(body.response); delete waiters[p[3]]; return json(res, 200, true); }
   if (req.method === 'POST' && p[2] === 'summarize') {
     busy[ses.id] = true;
     emit('session.status', { sessionID: ses.id, status: { type: 'busy' } });

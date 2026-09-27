@@ -278,21 +278,35 @@ async fn a_later_turn_never_inherits_an_earlier_turn_s_usage() {
     session.close().await.unwrap();
 }
 
-/// A write asks permission; allow completes it, deny fails it, and both
-/// reach the agent as its own reply codes.
+/// A write asks permission; allow completes it, deny and cancel fail it, and
+/// each reaches the agent as its own reply code, a deny's message with it.
 #[tokio::test]
 async fn permissions_allow_and_deny_the_write() {
-    for (name, choice, expected, status) in [
+    for (name, answer, expected, status) in [
         (
             "perm-allow",
-            PermissionChoice::AllowOnce,
-            "perm=once",
+            Answer::Permission(PermissionChoice::AllowOnce),
+            "perm=once ",
             ToolStatus::Completed,
         ),
         (
             "perm-deny",
-            PermissionChoice::DenyOnce,
-            "perm=reject",
+            Answer::Permission(PermissionChoice::DenyOnce),
+            "perm=reject ",
+            ToolStatus::Failed,
+        ),
+        (
+            "perm-deny-why",
+            Answer::Deny {
+                message: "not now".into(),
+            },
+            "perm=reject:not now ",
+            ToolStatus::Failed,
+        ),
+        (
+            "perm-cancel",
+            Answer::Cancel,
+            "perm=reject ",
             ToolStatus::Failed,
         ),
     ] {
@@ -306,10 +320,7 @@ async fn permissions_allow_and_deny_the_write() {
                 EventKind::RequestOpened(Request::Permission(request)) => {
                     assert_eq!(request.tool.title, "write fruit.txt");
                     assert_eq!(request.detail.as_deref(), Some("fruit.txt"));
-                    session
-                        .answer(request.id, Answer::Permission(choice))
-                        .await
-                        .unwrap();
+                    session.answer(request.id, answer.clone()).await.unwrap();
                 }
                 EventKind::ToolUpdated(tool) if tool.kind == ToolKind::Edit => {
                     write = Some(tool.status)
@@ -324,35 +335,33 @@ async fn permissions_allow_and_deny_the_write() {
     }
 }
 
-/// The question tool becomes a question request; the chosen label goes back.
+/// The question tool becomes a question request; the chosen label goes back,
+/// and a cancel takes the reject route.
 #[tokio::test]
 async fn a_question_round_trips() {
-    let (session, mut events) = open("question", "").await;
-    session.prompt("question time").await.unwrap();
-    let mut text = String::new();
-    loop {
-        match next(&mut events).await.kind {
-            EventKind::TextDelta { text: t, .. } => text.push_str(&t),
-            EventKind::RequestOpened(Request::Question(request)) => {
-                let q = &request.questions[0];
-                assert_eq!(q.text, "Which color?");
-                assert_eq!(q.header.as_deref(), Some("Color"));
-                assert_eq!(q.choices.len(), 2);
-                assert!(!q.allows_free_text);
-                session
-                    .answer(
-                        request.id,
-                        Answer::Question(vec![QuestionAnswer::Choices(vec!["Red".into()])]),
-                    )
-                    .await
-                    .unwrap();
+    let red = Answer::Question(vec![QuestionAnswer::Choices(vec!["Red".into()])]);
+    for (answer, expected) in [(red, "q=Red"), (Answer::Cancel, "q=rejected")] {
+        let (session, mut events) = open("question", "").await;
+        session.prompt("question time").await.unwrap();
+        let mut text = String::new();
+        loop {
+            match next(&mut events).await.kind {
+                EventKind::TextDelta { text: t, .. } => text.push_str(&t),
+                EventKind::RequestOpened(Request::Question(request)) => {
+                    let q = &request.questions[0];
+                    assert_eq!(q.text, "Which color?");
+                    assert_eq!(q.header.as_deref(), Some("Color"));
+                    assert_eq!(q.choices.len(), 2);
+                    assert!(!q.allows_free_text);
+                    session.answer(request.id, answer.clone()).await.unwrap();
+                }
+                EventKind::TurnEnded { .. } => break,
+                _ => {}
             }
-            EventKind::TurnEnded { .. } => break,
-            _ => {}
         }
+        assert!(text.contains(expected), "{text}");
+        session.close().await.unwrap();
     }
-    assert!(text.contains("q=Red"), "{text}");
-    session.close().await.unwrap();
 }
 
 /// Cancel aborts the turn; the abort's second idle is ignored and the next

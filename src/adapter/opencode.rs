@@ -664,16 +664,11 @@ struct Pending {
     request: Request,
 }
 
-/// How the answer reaches the server. Permissions reply on their owning
-/// session: a task-tool child asks on its own session id.
+/// How the answer reaches the server. Both reply routes take the request
+/// id alone, so a task-tool child's request needs no session id.
 enum Reply {
-    Permission {
-        permission_id: String,
-        session_id: String,
-    },
-    Question {
-        question_id: String,
-    },
+    Permission { permission_id: String },
+    Question { question_id: String },
 }
 
 struct Drive {
@@ -1375,16 +1370,11 @@ impl Drive {
             ],
             detail: permission_detail(props),
         });
-        let session_id = props["sessionID"]
-            .as_str()
-            .unwrap_or(&self.session_id)
-            .to_owned();
         self.scratch.requests.insert(
             id,
             Pending {
                 reply: Reply::Permission {
                     permission_id: permission_id.to_owned(),
-                    session_id,
                 },
                 request: request.clone(),
             },
@@ -1428,21 +1418,13 @@ impl Drive {
         };
         let sent = match (&pending.reply, &answer) {
             (
-                Reply::Permission {
-                    permission_id,
-                    session_id,
-                },
-                Answer::Permission(choice),
+                Reply::Permission { permission_id },
+                Answer::Permission(_) | Answer::Deny { .. } | Answer::Cancel,
             ) => {
-                let response = match choice {
-                    PermissionChoice::AllowOnce => "once",
-                    PermissionChoice::AllowAlways => "always",
-                    _ => "reject",
-                };
                 self.http
                     .post_quick(
-                        &format!("/session/{session_id}/permissions/{permission_id}"),
-                        json!({ "response": response }),
+                        &format!("/permission/{permission_id}/reply"),
+                        permission_reply(&answer),
                     )
                     .await
             }
@@ -1452,6 +1434,12 @@ impl Drive {
                         &format!("/question/{question_id}/reply"),
                         json!({ "answers": question_answers(answers) }),
                     )
+                    .await
+            }
+            // The reject route takes no body (OpenAPI `/doc`, 1.18.29).
+            (Reply::Question { question_id }, Answer::Cancel) => {
+                self.http
+                    .post_quick(&format!("/question/{question_id}/reject"), json!({}))
                     .await
             }
             // Unreachable past engine shape validation; reopen rather than
@@ -1955,6 +1943,16 @@ fn question_answers(answers: &[QuestionAnswer]) -> Vec<Vec<String>> {
             QuestionAnswer::Text(text) => vec![text.clone()],
         })
         .collect()
+}
+
+/// The permission reply body; only a reject takes a message (OpenAPI `/doc`, 1.18.29).
+fn permission_reply(answer: &Answer) -> Value {
+    match answer {
+        Answer::Permission(PermissionChoice::AllowOnce) => json!({ "reply": "once" }),
+        Answer::Permission(PermissionChoice::AllowAlways) => json!({ "reply": "always" }),
+        Answer::Deny { message } => json!({ "reply": "reject", "message": message }),
+        _ => json!({ "reply": "reject" }),
+    }
 }
 
 /// The fork body for a `fork_point` anchor. opencode copies the messages
