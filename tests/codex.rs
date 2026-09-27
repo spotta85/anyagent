@@ -619,6 +619,72 @@ async fn mode_and_sandbox_are_live_and_ride_every_turn() {
     session.close().await.unwrap();
 }
 
+/// Plan mode rides `turn/start` as a collaboration mode with no approval
+/// policy, its `plan` item is `PlanProposed`, and leaving it sends `default` once.
+#[tokio::test]
+async fn plan_mode_rides_turn_start_and_proposes_the_plan_item() {
+    let (session, mut events) = open_with(
+        "plan",
+        "",
+        SessionOptions::in_dir(std::env::temp_dir()).configure("mode", "plan"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        text_option(&session.info(), "mode").as_deref(),
+        Some("plan")
+    );
+    let collab = |mode: &str| {
+        format!(
+            r#"collab={{"mode":"{mode}","settings":{{"model":"gpt-6","reasoning_effort":"medium","developer_instructions":null}}}}"#
+        )
+    };
+
+    let (text, plans) = plan_turn(&session, &mut events).await;
+    assert!(text.contains("policy=unset"), "{text}");
+    assert!(text.contains(&collab("plan")), "{text}");
+    assert_eq!(plans, vec!["# Plan\n\n1. Add README.md"]);
+
+    // A policy ends plan mode: it rides again, and `default` goes out once.
+    session.configure("mode", "never").await.unwrap();
+    while text_option(&session.info(), "mode").as_deref() != Some("never") {
+        next(&mut events).await;
+    }
+    let (text, plans) = plan_turn(&session, &mut events).await;
+    assert!(text.contains("policy=never"), "{text}");
+    assert!(text.contains(&collab("default")), "{text}");
+    assert!(plans.is_empty());
+    let (text, _) = plan_turn(&session, &mut events).await;
+    assert!(text.contains("collab=null"), "{text}");
+
+    // Selected live, plan drops the policy again.
+    session.configure("mode", "plan").await.unwrap();
+    while text_option(&session.info(), "mode").as_deref() != Some("plan") {
+        next(&mut events).await;
+    }
+    let (text, plans) = plan_turn(&session, &mut events).await;
+    assert!(text.contains("policy=unset"), "{text}");
+    assert!(text.contains(&collab("plan")), "{text}");
+    assert_eq!(plans.len(), 1);
+    session.close().await.unwrap();
+}
+
+/// Runs one turn and returns its text and proposed plans; plan deltas must
+/// not surface as diagnostics.
+async fn plan_turn(session: &Session, events: &mut Events) -> (String, Vec<String>) {
+    session.prompt("plan a README").await.unwrap();
+    let (mut text, mut plans) = (String::new(), Vec::new());
+    loop {
+        match next(events).await.kind {
+            EventKind::TextDelta { text: t, .. } => text.push_str(&t),
+            EventKind::PlanProposed { markdown } => plans.push(markdown),
+            EventKind::Diagnostic(d) => panic!("unexpected diagnostic: {}", d.message),
+            EventKind::TurnEnded { .. } => return (text, plans),
+            _ => {}
+        }
+    }
+}
+
 /// Approval accept completes tool with write=accept; decline marks tool Cancelled and turn continues.
 #[tokio::test]
 async fn approvals_map_accept_and_decline() {

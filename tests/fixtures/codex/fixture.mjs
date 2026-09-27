@@ -10,6 +10,7 @@
 // (the turn ends via turn/failed / turn/aborted instead of turn/completed).
 // --rename: the server renames the thread after the first turn.
 // --host-feature: the host config enables an under-development feature too.
+// A turn/start in the `plan` collaboration mode also yields a `plan` item.
 import { createInterface } from 'node:readline';
 
 const flag = (name) => process.argv.includes(name);
@@ -228,7 +229,15 @@ async function runTurn(params) {
   // Per-turn policy, sandbox, images, launch MCP servers, and rollbacks so
   // far, each visible to the tests.
   const images = (params.input ?? []).filter((i) => i.type === 'localImage').length;
-  delta(msg.id, `policy=${params.approvalPolicy ?? 'unset'} sandbox=${params.sandboxPolicy?.type ?? 'unset'} images=${images} mcp=${MCP_NAMES.join(',') || 'none'} rolled=${rolled} `);
+  delta(msg.id, `policy=${params.approvalPolicy ?? 'unset'} sandbox=${params.sandboxPolicy?.type ?? 'unset'} images=${images} mcp=${MCP_NAMES.join(',') || 'none'} rolled=${rolled} collab=${JSON.stringify(params.collaborationMode ?? null)} `);
+  // Plan mode (probed 2026-09-27, 0.154.0): the proposal is a `plan` item;
+  // its deltas repeat what the completed item carries.
+  if (params.collaborationMode?.mode === 'plan') {
+    const plan = item({ type: 'plan', text: '' });
+    itemStarted(plan);
+    notify('item/plan/delta', { threadId: THREAD.id, turnId: turn.id, itemId: plan.id, delta: '# Plan' });
+    itemCompleted({ ...plan, text: '# Plan\n\n1. Add README.md' });
+  }
 
   if (flag('--question')) {
     if (!experimental) {
