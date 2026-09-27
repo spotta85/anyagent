@@ -43,6 +43,7 @@ const delta = (d, parent = null) => ev({ type: 'content_block_delta', index: 0, 
 const msgStart = (id, parent = null) => ev({ type: 'message_start', message: { id, model: 'claude-sonnet-5', role: 'assistant', content: [], usage: USAGE } }, parent);
 const life = (cu, state) => send({ type: 'command_lifecycle', command_uuid: cu, state, uuid: uid(), session_id: S });
 const assistantTool = (id, name, input, frameUuid) => send({ type: 'assistant', message: { id: 'msg_1', model: 'claude-sonnet-5', role: 'assistant', content: [{ type: 'tool_use', id, name, input }], usage: USAGE }, session_id: S, uuid: frameUuid ?? uid(), parent_tool_use_id: null });
+const task = (subtype, fields, id = 'toolu_task') => send({ type: 'system', subtype, task_id: 'a1', tool_use_id: id, ...fields, uuid: uid(), session_id: S });
 const resultFrame = (extra) => send({ type: 'result', session_id: S, uuid: uid(), subtype: 'success', is_error: false, stop_reason: 'end_turn', terminal_reason: 'completed', num_turns: 1, total_cost_usd: 0.01, usage: {}, modelUsage: { 'claude-sonnet-5': { contextWindow: 200000 } }, result: 'done', ...extra });
 
 let ctrlWaiters = {}, turn = null, inited = false, reqN = 0, queue = [], woke = false, mcpServers = {};
@@ -317,11 +318,15 @@ async function runTurn(m) {
   if (flag('--subagent')) {
     msgStart('msg_1');
     delta({ type: 'text_delta', text: 'main ' });
-    assistantTool('toolu_task', 'Task', { description: 'scan files', subagent_type: 'Explore' });
+    assistantTool('toolu_task', 'Task', { description: 'scan files', subagent_type: 'Explore', model: 'haiku' });
+    // Task frames in recording 05's order: the notification lands just before the tool_result.
+    task('task_started', { description: 'scan files', subagent_type: 'Explore', is_backgrounded: false, task_type: 'local_agent' });
     msgStart('msg_s', 'toolu_task');
     send({ type: 'user', message: { role: 'user', content: 'look deeper' }, session_id: S, uuid: uid(), parent_tool_use_id: 'toolu_task' });
     delta({ type: 'text_delta', text: 'sub ' }, 'toolu_task');
     ev({ type: 'message_stop' }, 'toolu_task');
+    task('task_progress', { description: 'Running List files', subagent_type: 'Explore', usage: { total_tokens: 16390, tool_uses: 1, duration_ms: 4366 }, last_tool_name: 'Bash' });
+    task('task_notification', { status: 'completed', summary: '4 files', usage: { total_tokens: 17870, tool_uses: 1, duration_ms: 8308 } });
     send({ type: 'user', message: { role: 'user', content: [{ tool_use_id: 'toolu_task', type: 'tool_result', content: '4 files' }] }, session_id: S, uuid: uid(), parent_tool_use_id: null, tool_use_result: { status: 'completed' } });
     delta({ type: 'text_delta', text: 'done' });
     ev({ type: 'message_stop' });

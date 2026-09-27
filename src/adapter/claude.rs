@@ -28,8 +28,8 @@ use crate::error::AgentError;
 use crate::event::{
     Answer, Choice, ChoiceId, CompletionSource, Diagnostic, DiagnosticLevel, EventKind, Extensions,
     FileDiff, MessageId, PermissionChoice, PermissionRequest, PlanUsage, Question, QuestionAnswer,
-    QuestionId, QuestionRequest, RawTool, Request, RequestId, ResetCredits, StopReason, ToolId,
-    ToolInput, ToolKind, ToolStatus, ToolUpdate, TurnUsage, UsageWindow,
+    QuestionId, QuestionRequest, RawTool, Request, RequestId, ResetCredits, StopReason,
+    SubagentInfo, ToolId, ToolInput, ToolKind, ToolStatus, ToolUpdate, TurnUsage, UsageWindow,
 };
 use crate::process::{self, Spawn};
 
@@ -1349,12 +1349,24 @@ impl Drive {
                     .send(DriverEvent::InfoChanged(self.info.clone()))
                     .await
             }
-            // A background task finished: complete the tool it ran under.
-            "task_notification" => {
-                let Some(id) = frame["tool_use_id"].as_str() else {
+            // A subagent's latest progress line and token count (recording 05;
+            // 2.1.283 sets `summary` only with the agentProgressSummaries option).
+            "task_progress" => {
+                let Some(tool) = self.task_tool(frame) else {
                     return Ok(());
                 };
-                let Some(mut tool) = self.tools.remove(id) else {
+                let Some(info) = &mut tool.subagent else {
+                    return Ok(());
+                };
+                info.summary = text(&frame["summary"]).or_else(|| text(&frame["description"]));
+                info.tokens = frame["usage"]["total_tokens"].as_u64();
+                let tool = tool.clone();
+                self.events.event(EventKind::ToolUpdated(tool)).await
+            }
+            // A task finished: settle the tool it ran under. It stays tracked, so a
+            // foreground subagent's trailing `tool_result` still adds its output.
+            "task_notification" => {
+                let Some(tool) = self.task_tool(frame) else {
                     return Ok(());
                 };
                 tool.status = if frame["status"].as_str() == Some("failed") {
@@ -1362,9 +1374,11 @@ impl Drive {
                 } else {
                     ToolStatus::Completed
                 };
-                self.events
-                    .send(DriverEvent::event(EventKind::ToolUpdated(tool)))
-                    .await
+                if let Some(info) = &mut tool.subagent {
+                    info.tokens = frame["usage"]["total_tokens"].as_u64().or(info.tokens);
+                }
+                let tool = tool.clone();
+                self.events.event(EventKind::ToolUpdated(tool)).await
             }
             // A deny rule or the CLI's mode refused a tool (probed 2026-09-27,
             // 2.1.283); untracking it drops the error `tool_result` that trails.
@@ -1413,6 +1427,11 @@ impl Drive {
                 "input": request["input"],
             }))
         })
+    }
+
+    /// The tracked tool a `task_*` frame names in its `tool_use_id`.
+    fn task_tool(&mut self, frame: &Value) -> Option<&mut ToolUpdate> {
+        self.tools.get_mut(frame["tool_use_id"].as_str()?)
     }
 
     /// Writes one user message and returns its uuid. Attachments become
@@ -1528,6 +1547,12 @@ fn fresh_tool(block: &Value) -> ToolUpdate {
     let name = block["name"].as_str().unwrap_or_default();
     let input = &block["input"];
     let (kind, tool_input) = decode_tool(name, input);
+    // The Agent/Task input names the subagent; `model` only when the parent picks one.
+    let subagent = (kind == ToolKind::Subagent).then(|| SubagentInfo {
+        role: text(&input["subagent_type"]),
+        model: text(&input["model"]),
+        ..SubagentInfo::default()
+    });
     ToolUpdate {
         id: ToolId::new(block["id"].as_str().unwrap_or_default()),
         kind,
@@ -1541,7 +1566,7 @@ fn fresh_tool(block: &Value) -> ToolUpdate {
             name: name.to_owned(),
             input: input.clone(),
         }),
-        subagent: None,
+        subagent,
     }
 }
 
