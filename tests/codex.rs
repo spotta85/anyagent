@@ -286,6 +286,17 @@ async fn a_probe_opens_no_thread() {
     assert_eq!(current("sandbox"), "workspace-write");
 }
 
+/// A codex that dies while the probe reads its config fails the probe; it never reports defaults.
+#[tokio::test]
+async fn a_probe_fails_when_codex_dies_at_the_config_read() {
+    let agent = AgentInstallation::at("codex", wrapper("probe-dies", "--config-read-dies"));
+    let failed = Runtime::new().probe(&agent).await;
+    assert!(
+        matches!(failed, Err(AgentError::ProtocolFailed(_))),
+        "{failed:?}"
+    );
+}
+
 /// An output schema rides every `turn/start` as `outputSchema`: it holds for one turn only.
 #[tokio::test]
 async fn an_output_schema_rides_every_turn() {

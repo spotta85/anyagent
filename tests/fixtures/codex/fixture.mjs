@@ -140,6 +140,7 @@ async function onRequest(m) {
       return reply({ data: MODELS, nextCursor: null });
     // The effective config (probed 2026-09-27, 0.154.0, trimmed): unset keys are null.
     case 'config/read':
+      if (flag('--config-read-dies')) { process.stderr.write('boom: fixture died\n'); process.exit(3); }
       return reply({ config: { model: 'gpt-6-mini', model_reasoning_effort: null, service_tier: null, approval_policy: null, sandbox_mode: 'workspace-write' }, origins: {} });
     case 'skills/list':
       // Grouped by root; the same skill appears under every root (dedupe by
