@@ -955,9 +955,20 @@ async fn deny_carries_its_message_and_cancel_interrupts() {
         ("cancel-question", "--question", Answer::Cancel, ""),
     ] {
         let (session, mut events) = open(name, flags).await;
-        let cancelled = answer == Answer::Cancel;
-        let (text, stop) = common::answer_every_request(&session, &mut events, "hi", answer).await;
+        session.prompt("hi").await.unwrap();
+        let mut text = String::new();
+        let stop = loop {
+            match next(&mut events).await.kind {
+                EventKind::RequestOpened(request) => {
+                    session.answer(request.id(), answer.clone()).await.unwrap()
+                }
+                EventKind::TextDelta { text: t, .. } => text.push_str(&t),
+                EventKind::TurnEnded { stop, .. } => break stop,
+                _ => {}
+            }
+        };
         assert_eq!(text, expected, "{name}");
+        let cancelled = answer == Answer::Cancel;
         assert_eq!(stop == StopReason::Cancelled, cancelled, "{name}: {stop:?}");
         session.close().await.unwrap();
     }

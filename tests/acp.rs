@@ -1696,7 +1696,18 @@ async fn deny_rejects_and_cancel_sends_cancelled() {
         ),
     ] {
         let (session, mut events) = open(flags).await;
-        let (text, _) = common::answer_every_request(&session, &mut events, prompt, answer).await;
+        session.prompt(prompt).await.unwrap();
+        let mut text = String::new();
+        loop {
+            match next(&mut events).await.kind {
+                EventKind::RequestOpened(request) => {
+                    session.answer(request.id(), answer.clone()).await.unwrap()
+                }
+                EventKind::TextDelta { text: t, .. } => text.push_str(&t),
+                EventKind::TurnEnded { .. } => break,
+                _ => {}
+            }
+        }
         assert!(text.contains(expected), "{prompt}: {text}");
         session.close().await.unwrap();
     }
