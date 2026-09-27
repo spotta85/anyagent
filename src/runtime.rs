@@ -301,10 +301,10 @@ impl Runtime {
             .get(&agent.id)
             .ok_or_else(|| AgentError::UnsupportedFeature("plan usage".into()))?;
         let usage = adapter.plan_usage(agent, options).await?;
-        self.usage_cache
-            .lock()
-            .unwrap()
-            .insert(key, (Instant::now(), usage.clone()));
+        let mut cache = self.usage_cache.lock().unwrap();
+        // Drop expired entries: a key holds the login's env values.
+        cache.retain(|_, (at, _)| at.elapsed() < USAGE_CACHE_TTL);
+        cache.insert(key, (Instant::now(), usage.clone()));
         Ok(usage)
     }
 
