@@ -1347,6 +1347,33 @@ async fn a_rule_refused_tool_ends_denied() {
     session.close().await.unwrap();
 }
 
+/// A running Bash's `tool_progress` is its elapsed time in the turn; progress
+/// naming no known tool is dropped.
+#[tokio::test]
+async fn tool_progress_reports_the_running_tools_elapsed_time() {
+    let (session, mut events) = open("progress", "--progress").await;
+    session.prompt("hi").await.unwrap();
+    let mut progress = Vec::new();
+    loop {
+        let event = next(&mut events).await;
+        match event.kind {
+            EventKind::ToolProgress {
+                tool_id,
+                message,
+                elapsed_ms,
+            } => progress.push((tool_id, message, elapsed_ms, event.turn_info)),
+            EventKind::TurnEnded { .. } => break,
+            _ => {}
+        }
+    }
+    assert_eq!(progress.len(), 1, "{progress:?}");
+    let (tool_id, message, elapsed_ms, turn) = &progress[0];
+    assert_eq!(tool_id.as_str(), "toolu_sleep");
+    assert_eq!((message, elapsed_ms), (&None, &Some(3000)));
+    assert!(turn.as_ref().is_some_and(|t| t.parent_tool_id.is_none()));
+    session.close().await.unwrap();
+}
+
 /// Subagent Task spawn and nested text/user messages carry parent_tool_id.
 #[tokio::test]
 async fn subagent_events_carry_the_parent_tool_id() {

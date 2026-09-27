@@ -2,7 +2,7 @@
 // directory (claude 2.1.241). Flags: --question (AskUserQuestion turn),
 // --eof (die mid-turn), --wake (background task wakes an agent-originated
 // turn), --subagent (nested transcript with parent_tool_use_id and task
-// frames), --bg-subagent (a background Agent reports after its turn ended),
+// frames), --progress (a Bash reports progress), --bg-subagent (a background Agent reports after its turn ended),
 // --logged-out (initialize reports no token source), --api-key (an env
 // key supplies auth, still with `tokenSource: "none"`), --bedrock (an
 // AWS cloud-provider login, no Anthropic identity at all),
@@ -338,6 +338,20 @@ async function runTurn(m) {
     delta({ type: 'text_delta', text: 'refused' });
     ev({ type: 'message_stop' });
     resultFrame({ user_message_uuid: u, permission_denials: [{ tool_name: 'Bash', tool_use_id: 'toolu_d1', tool_input: { command: 'echo probe-denied' } }] });
+    life(u, 'completed');
+    turn = null;
+    return;
+  }
+
+  // A Bash's progress (probed 2026-09-27, 2.1.283, sent only with CLAUDE_CODE_CONTAINER_ID
+  // set): the running tool rides `parent_tool_use_id`. The second names no known tool.
+  if (flag('--progress')) {
+    msgStart('msg_1');
+    assistantTool('toolu_sleep', 'Bash', { command: 'sleep 6; echo MAIN', description: 'Sleep then print' });
+    for (const parent of ['toolu_sleep', 'toolu_gone']) send({ type: 'tool_progress', tool_use_id: 'bash-progress-0', tool_name: 'Bash', parent_tool_use_id: parent, elapsed_time_seconds: 3, task_id: 'b5o0u0l9o', session_id: S, uuid: uid() });
+    send({ type: 'user', message: { role: 'user', content: [{ tool_use_id: 'toolu_sleep', type: 'tool_result', content: 'MAIN', is_error: false }] }, parent_tool_use_id: null, session_id: S, uuid: uid(), tool_use_result: { stdout: 'MAIN', stderr: '' } });
+    ev({ type: 'message_stop' });
+    resultFrame({ user_message_uuid: u });
     life(u, 'completed');
     turn = null;
     return;
