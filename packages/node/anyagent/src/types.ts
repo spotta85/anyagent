@@ -102,7 +102,7 @@ export type AgentRef =
 /**
  * How anyagent handles tool permission requests.
  */
-export type PermissionMode = "Ask" | "AutoApprove";
+export type PermissionMode = "Ask" | "AcceptEdits" | "AutoApprove";
 export type McpConnection =
   | {
       Stdio: {

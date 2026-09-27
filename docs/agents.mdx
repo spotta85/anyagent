@@ -125,11 +125,12 @@ discover("antigravity")
                             → installation.upgrade names the server
 ```
 
-The headless `agy` wire cannot prompt: in `Ask` mode every permission-gated
-tool is denied by the agent itself (the tool shows as failed), `AutoApprove`
-launches with `--dangerously-skip-permissions`, questions are skipped with a
-diagnostic, and a mid-turn prompt queues. Cancel kills the process and resumes
-the conversation in a fresh one, about two seconds.
+The headless `agy` wire cannot prompt: in `Ask` and `AcceptEdits` mode every
+permission-gated tool is denied by the agent itself (the tool shows as
+failed), `AutoApprove` launches with `--dangerously-skip-permissions`,
+questions are skipped with a diagnostic, and a mid-turn prompt queues. Cancel
+kills the process and resumes the conversation in a fresh one, about two
+seconds.
 
 The ACP server is Google's own (`antigravity-acp` in the
 [ACP registry](https://github.com/agentclientprotocol/registry/blob/main/antigravity-acp/agent.json),

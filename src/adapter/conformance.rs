@@ -801,6 +801,52 @@ async fn auto_approve_forwards_requests_without_a_one_time_allow() {
         .unwrap();
 }
 
+/// AcceptEdits allows an edit once by itself; an Execute request, and an
+/// edit that offers no one-time allow, still reach the caller.
+#[tokio::test]
+async fn accept_edits_allows_edits_and_forwards_the_rest() {
+    let script = Script::default().turn(vec![
+        Step::Emit(edit_permission("r1", PermissionChoice::AllowOnce)),
+        Step::AwaitAnswer,
+        Step::Emit(permission("r2")),
+        Step::AwaitAnswer,
+        Step::Emit(edit_permission("r3", PermissionChoice::AllowAlways)),
+        Step::AwaitAnswer,
+        Step::End(completed()),
+    ]);
+    let dir = tempfile::tempdir().unwrap();
+    let options =
+        SessionOptions::in_dir(dir.path()).permission_mode(crate::PermissionMode::AcceptEdits);
+    let (session, mut events) = open(MockAdapter::new(script), Some(options)).await;
+    session.prompt("go").await.unwrap();
+    let mut forwarded = Vec::new();
+    loop {
+        match next(&mut events).await.kind {
+            EventKind::RequestOpened(request) => {
+                forwarded.push(request.id());
+                session
+                    .answer(request.id(), Answer::Permission(PermissionChoice::DenyOnce))
+                    .await
+                    .unwrap();
+            }
+            EventKind::TurnEnded { .. } => break,
+            _ => {}
+        }
+    }
+    assert_eq!(forwarded, [RequestId::new("r2"), RequestId::new("r3")]);
+}
+
+/// A permission request for an Edit tool offering `allow` or a one-time deny.
+fn edit_permission(id: &str, allow: PermissionChoice) -> EventKind {
+    let mut request = permission(id);
+    let EventKind::RequestOpened(crate::Request::Permission(edit)) = &mut request else {
+        unreachable!()
+    };
+    edit.tool.kind = crate::ToolKind::Edit;
+    edit.options = vec![allow, PermissionChoice::DenyOnce];
+    request
+}
+
 /// A stalled consumer that overflows during the close itself still gets
 /// `close()` back within the grace period, even from a wedged adapter.
 #[tokio::test(start_paused = true)]

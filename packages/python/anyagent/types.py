@@ -56,7 +56,7 @@ class AcpSpec(TypedDict):
     args: NotRequired[list[str]]
 
 
-PermissionMode: TypeAlias = Literal['Ask', 'AutoApprove']
+PermissionMode: TypeAlias = Literal['Ask', 'AcceptEdits', 'AutoApprove']
 
 
 class Stdio(TypedDict):

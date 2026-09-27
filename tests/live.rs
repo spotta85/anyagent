@@ -23,7 +23,7 @@ use anyagent::{
     AgentError, Answer, AuthStatus, Capability, ConfigKind, ConfigValue, DeliveryKind, Event,
     EventKind, Events, Input, MessageId, PermissionChoice, PermissionMode, PromptId,
     QuestionAnswer, Request, RequestId, ResumeToken, RollbackScope, Runtime, Session,
-    SessionOptions, StopReason, ToolStatus, TurnOrigin,
+    SessionOptions, StopReason, ToolKind, ToolStatus, TurnOrigin,
 };
 
 /// Every harness the shared matrix covers, in report order.
@@ -817,6 +817,72 @@ async fn permissions_gate_the_write_and_deny_holds() {
         drain_to_turn_end(&session, &mut events, &format!("{h}: post-deny prompt")).await;
         session.close().await.unwrap();
         pass(h, "allow writes, deny holds, session survives");
+    }
+}
+
+/// AcceptEdits: the file edit lands without a request reaching the caller;
+/// a shell command still asks.
+#[tokio::test]
+#[ignore = "live: talks to real agents"]
+async fn accept_edits_allows_the_edit_and_asks_for_the_shell() {
+    for h in enabled().await {
+        if !matches!(h, "claude" | "codex") {
+            println!("SKIP {h}: AcceptEdits asserted on claude and codex");
+            continue;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = Runtime::new();
+        let report = runtime.discover().await;
+        let agent = report.require(h).unwrap();
+        let mut options = options(h, dir.path()).permission_mode(PermissionMode::AcceptEdits);
+        // Under `on-request` the model may run the command sandboxed and
+        // never ask; `untrusted` asks for every non-trivial command.
+        if h == "codex" {
+            options = options.configure("mode", "untrusted");
+        }
+        let (session, mut events) = runtime.open(agent, options).await.unwrap();
+        session
+            .prompt(
+                "First create a file named note.txt containing exactly the word HELLO, using \
+                 your file-edit tool, not the shell. Then run the shell command `touch shell.txt`. \
+                 Do nothing else.",
+            )
+            .await
+            .unwrap();
+        let mut forwarded = Vec::new();
+        loop {
+            let event = next(&mut events, &format!("{h}: accept edits")).await;
+            match event.kind {
+                EventKind::RequestOpened(Request::Permission(request)) => {
+                    println!(
+                        "{h}: forwarded {:?} {}",
+                        request.tool.kind, request.tool.title
+                    );
+                    forwarded.push(request.tool.kind.clone());
+                    session
+                        .answer(request.id, Answer::Permission(PermissionChoice::DenyOnce))
+                        .await
+                        .unwrap();
+                }
+                EventKind::TurnEnded { .. } => break,
+                _ => {}
+            }
+        }
+        let content = std::fs::read_to_string(dir.path().join("note.txt"))
+            .unwrap_or_else(|_| panic!("{h}: note.txt missing"));
+        assert_eq!(content.trim(), "HELLO", "{h}: wrong content");
+        assert!(
+            !forwarded
+                .iter()
+                .any(|k| matches!(k, ToolKind::Edit | ToolKind::Delete | ToolKind::Move)),
+            "{h}: an edit reached the caller: {forwarded:?}"
+        );
+        assert!(
+            forwarded.contains(&ToolKind::Execute),
+            "{h}: the shell command never asked: {forwarded:?}"
+        );
+        session.close().await.unwrap();
+        pass(h, "edit allowed unasked, shell asked");
     }
 }
 

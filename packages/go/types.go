@@ -67,6 +67,7 @@ type PermissionMode string
 
 const (
 	PermissionModeAsk         PermissionMode = "Ask"
+	PermissionModeAcceptEdits PermissionMode = "AcceptEdits"
 	PermissionModeAutoApprove PermissionMode = "AutoApprove"
 )
 
