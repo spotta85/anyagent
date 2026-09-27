@@ -218,14 +218,15 @@ id in `turn_info.parent_tool_id`. That is how you nest it in a UI.
 
 `subagent` says who runs and what it reports. Each change re-sends the snapshot.
 
-| Field | claude | codex |
-|---|---|---|
-| `role` | `subagent_type` from the Agent input | not sent |
-| `model` | the Agent input's `model`, when the parent picks one | not sent |
-| `summary` | the latest progress line | not sent |
-| `tokens` | size of the subagent's latest model call (`total_tokens`) | running total of the child thread; not comparable with claude's |
+| Field | claude | codex | opencode |
+|---|---|---|---|
+| `role` | `subagent_type` from the Agent input | not sent | the task's `subagent_type` |
+| `model` | the Agent input's `model`, when the parent picks one | the child's model, on a `spawnAgent` call | the child's model, `provider/id` |
+| `summary` | the latest progress line | not sent | not sent |
+| `tokens` | size of the subagent's latest model call (`total_tokens`) | running total of the child thread; not comparable with claude's | not sent |
 
-Other agents leave it `None`. A background subagent stays `Running` past its
+codex spawns in two shapes: a `subAgentActivity` item or a `spawnAgent` call. Either one
+owns the child thread and stays `Running` until the child's turn ends. Other agents leave it `None`. A background subagent stays `Running` past its
 turn and is listed in `TurnEnded.background`; its later updates start no turn.
 
 `Denied` means the agent's permission rules or mode refused the tool without
