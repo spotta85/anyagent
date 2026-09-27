@@ -7,7 +7,8 @@
 // "sleep" (a command that only an interrupt ends), "die" (exit mid-turn),
 // "subagent" (a child thread runs a whole turn before the parent's ends,
 // "subagent-fails" for a child turn that fails), "end-failed"/"end-aborted"
-// (the turn ends via turn/failed / turn/aborted instead of turn/completed).
+// (the turn ends via turn/failed / turn/aborted instead of turn/completed),
+// "refuse-start" (turn/start is refused).
 // --rename: the server renames the thread after the first turn.
 // --host-feature: the host config enables an under-development feature too.
 // A turn/start in the `plan` collaboration mode also yields a `plan` item
@@ -137,6 +138,7 @@ async function onRequest(m) {
       return reply({ ...threadResult(m.params), thread: { ...THREAD, forkedFromId: m.params.threadId } });
     case 'turn/start': {
       if (turn) return refuse('phantom: turn/start while a turn is running'); // adapters must steer instead
+      if (m.params.input[0].text.includes('refuse-start')) return refuse('turn refused');
       turn = { id: `turn-${turnN++}`, started: false, interrupted: false };
       lastModel = m.params.model ?? 'gpt-6';
       reply({ turn: { id: turn.id, status: 'inProgress' } });
