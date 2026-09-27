@@ -113,7 +113,12 @@ enum Command {
     Configure(ConfigId, ConfigValue, Reply<()>),
     Rollback(NonZeroU32, RollbackScope, Reply<()>),
     Compact(Reply<()>),
-    Cancel { clear_queue: bool, reply: Reply<()> },
+    /// `turn` set: act only if it is the running turn.
+    Cancel {
+        turn: Option<TurnId>,
+        clear_queue: bool,
+        reply: Reply<()>,
+    },
     Close(Reply<()>),
 }
 
@@ -193,8 +198,22 @@ impl Session {
     /// Stops the active turn. The session and the queue survive; the next
     /// queued prompt starts unless `clear_queue` is set.
     pub async fn cancel(&self, clear_queue: bool) -> Result<(), AgentError> {
-        self.send(|reply| Command::Cancel { clear_queue, reply })
-            .await
+        self.send(|reply| Command::Cancel {
+            turn: None,
+            clear_queue,
+            reply,
+        })
+        .await
+    }
+
+    /// Cancels `turn` only if it is the running turn; otherwise does nothing.
+    pub async fn cancel_turn(&self, turn: TurnId, clear_queue: bool) -> Result<(), AgentError> {
+        self.send(|reply| Command::Cancel {
+            turn: Some(turn),
+            clear_queue,
+            reply,
+        })
+        .await
     }
 
     /// Ends the agent session and waits for cleanup, capped by a grace period.
@@ -570,8 +589,12 @@ impl Engine {
                 self.sync_status().await;
                 let _ = reply.send(result);
             }
-            Command::Cancel { clear_queue, reply } => {
-                let _ = reply.send(self.handle_cancel(clear_queue).await);
+            Command::Cancel {
+                turn,
+                clear_queue,
+                reply,
+            } => {
+                let _ = reply.send(self.handle_cancel(turn, clear_queue).await);
             }
             Command::Close(reply) => self.shutdown(Some(reply)).await,
         }
@@ -728,7 +751,17 @@ impl Engine {
     /// Cancels the active turn; open requests close first. Idempotent.
     /// Clearing the queue also drops a steer still waiting for its verdict,
     /// or it would be requeued at turn end and run after the cancel.
-    async fn handle_cancel(&mut self, clear_queue: bool) -> Result<(), AgentError> {
+    async fn handle_cancel(
+        &mut self,
+        turn: Option<TurnId>,
+        clear_queue: bool,
+    ) -> Result<(), AgentError> {
+        // A named turn that is not the running one leaves everything as it is.
+        if let Some(named) = turn
+            && !matches!(&self.state, TurnState::Running { turn, .. } if *turn == named)
+        {
+            return Ok(());
+        }
         if clear_queue {
             self.queue.clear();
             if let Some((_, _, reply)) = self.steer.take() {

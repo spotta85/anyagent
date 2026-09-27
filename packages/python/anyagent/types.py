@@ -35,6 +35,7 @@ class Frame12(TypedDict):
     id: int
     session: str
     clear_queue: NotRequired[bool]
+    turn: NotRequired[str | None]
     cmd: Literal['cancel']
 
 

@@ -206,8 +206,8 @@ export class Session {
   configure(option: string, value: ConfigValue): Promise<void> {
     return this.rt.call({ cmd: "configure", session: this.id, option, value });
   }
-  cancel(clearQueue = false): Promise<void> {
-    return this.rt.call({ cmd: "cancel", session: this.id, clear_queue: clearQueue });
+  cancel(clearQueue = false, turn?: string): Promise<void> {
+    return this.rt.call({ cmd: "cancel", session: this.id, clear_queue: clearQueue, turn });
   }
   dequeue(prompt: string): Promise<void> {
     return this.rt.call({ cmd: "dequeue", session: this.id, prompt });

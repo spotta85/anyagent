@@ -379,6 +379,13 @@
               "type": "boolean",
               "default": false
             },
+            "turn": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
             "cmd": {
               "type": "string",
               "const": "cancel"

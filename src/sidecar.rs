@@ -29,7 +29,7 @@ use tokio::sync::mpsc;
 use crate::{
     AgentError, AgentInstallation, Answer, ConfigId, ConfigValue, DiscoveryReport, Events, Input,
     McpServer, MessageId, PermissionMode, PromptId, RequestId, ResumeToken, RollbackScope, Runtime,
-    Session, SessionId, SessionOptions,
+    Session, SessionId, SessionOptions, TurnId,
 };
 
 // ---------------------------------------------------------------------------
@@ -188,7 +188,15 @@ async fn handle(state: &State, cmd: Cmd) -> Result<Reply, Fail> {
         Cmd::Cancel {
             session,
             clear_queue,
-        } => Reply::ok(state.session(&session)?.cancel(clear_queue).await?),
+            turn,
+        } => {
+            let session = state.session(&session)?;
+            match turn {
+                Some(turn) => session.cancel_turn(turn, clear_queue).await?,
+                None => session.cancel(clear_queue).await?,
+            }
+            Reply::ok(())
+        }
         Cmd::Info { session } => Reply::ok(state.session(&session)?.info()),
         Cmd::Close { session } => Reply::ok(state.session(&session)?.close().await?),
     }
@@ -311,6 +319,8 @@ enum Cmd {
         session: SessionId,
         #[serde(default)]
         clear_queue: bool,
+        #[serde(default)]
+        turn: Option<TurnId>,
     },
     Info {
         session: SessionId,
