@@ -2,8 +2,9 @@
 // directory (claude 2.1.241). Flags: --question (AskUserQuestion turn),
 // --eof (die mid-turn), --wake (background task wakes an agent-originated
 // turn), --subagent (nested transcript with parent_tool_use_id and task
-// frames), --progress (a Bash reports progress), --bg-subagent (a background Agent reports after its turn ended),
-// --logged-out (initialize reports no token source), --api-key (an env
+// frames), --progress (a Bash reports progress), --bg-subagent (a
+// background Agent reports after its turn ended), --logged-out
+// (initialize reports no token source), --api-key (an env
 // key supplies auth, still with `tokenSource: "none"`), --bedrock (an
 // AWS cloud-provider login, no Anthropic identity at all),
 // --token-source-key (the credential named in tokenSource itself),
