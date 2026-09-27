@@ -733,9 +733,8 @@ async fn tools_run_to_completion_and_the_file_lands() {
     }
 }
 
-/// A declared stdio MCP server's tool is called: the call reaches the server
-/// (tests/fixtures/mcp/server.mjs logs it), shows as `ToolKind::Mcp`, and
-/// its marker comes back. Agents that take no stdio servers are skipped.
+/// A declared stdio MCP server's tool is called: the call reaches the server,
+/// shows as `ToolKind::Mcp`, and its marker comes back. No stdio: skipped.
 #[tokio::test]
 #[ignore = "live: talks to real agents"]
 async fn mcp_server_tools_are_called() {
@@ -779,7 +778,13 @@ async fn mcp_server_tools_are_called() {
                 EventKind::RequestOpened(request) => {
                     session.answer(request.id(), allow()).await.unwrap();
                 }
-                EventKind::TurnEnded { .. } => break,
+                EventKind::TurnEnded { stop, .. } => {
+                    assert!(
+                        matches!(stop, StopReason::Completed { .. }),
+                        "{h}: turn ended {stop:?}"
+                    );
+                    break;
+                }
                 _ => {}
             }
         }
