@@ -114,13 +114,12 @@ impl Adapter for ClaudeAdapter {
         options: &crate::agent::SessionOptions,
     ) -> Result<PlanUsage, AgentError> {
         // Only the throwaway flags: no other session option applies to a quota read.
-        let mut throwaway = crate::agent::SessionOptions::in_dir(std::env::temp_dir());
-        throwaway.throwaway = true;
+        let isolation = option_args(&crate::runtime::throwaway_options())?;
         let args = BASE_ARGS.iter().map(|s| (*s).to_owned());
         let mut child = process::spawn(Spawn {
             exec_path: installation.executable_path.clone(),
             args: args
-                .chain(option_args(&throwaway)?)
+                .chain(isolation)
                 .chain(options.args.iter().cloned())
                 .collect(),
             cwd: std::env::temp_dir(),
