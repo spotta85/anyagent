@@ -1158,6 +1158,43 @@ async fn opencode_child_session_permissions_reach_the_caller() {
     pass("opencode", "child session permissions reached the caller");
 }
 
+/// claude's subagent tool names the role the parent gave it in the Agent input.
+#[tokio::test]
+#[ignore = "live: talks to real agents"]
+async fn claude_subagent_reports_its_role() {
+    if !enabled().await.contains(&"claude") {
+        println!("SKIP: claude not enabled");
+        return;
+    }
+    let (session, mut events, _dir) = open("claude").await;
+    session
+        .prompt(
+            "Call the Agent tool once with subagent_type \"general-purpose\" and the prompt \
+             \"Reply with the single word PONG. Use no tools.\". Then reply with what it said.",
+        )
+        .await
+        .unwrap();
+    let mut info = None;
+    loop {
+        let event = next(&mut events, "claude: subagent").await;
+        match event.kind {
+            EventKind::RequestOpened(Request::Permission(request)) => {
+                session.answer(request.id, allow()).await.unwrap();
+            }
+            EventKind::ToolUpdated(tool) if tool.kind == ToolKind::Subagent => {
+                println!("claude: subagent {:?} {:?}", tool.status, tool.subagent);
+                info = tool.subagent;
+            }
+            EventKind::TurnEnded { .. } => break,
+            _ => {}
+        }
+    }
+    let info = info.expect("claude: no subagent tool");
+    assert_eq!(info.role.as_deref(), Some("general-purpose"));
+    session.close().await.unwrap();
+    pass("claude", &format!("subagent reported {info:?}"));
+}
+
 /// Question request round-trips: choices presented, answer selected, and response echoed.
 #[tokio::test]
 #[ignore = "live: talks to real agents"]
