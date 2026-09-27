@@ -519,6 +519,26 @@ async fn effort_falls_back_when_the_new_model_lacks_it() {
     session.close().await.unwrap();
 }
 
+/// An effort codex reports that the model's levels omit stays the option's
+/// current, in agreement with the configuration.
+#[tokio::test]
+async fn an_unlisted_thread_effort_stays_current() {
+    let (session, _events) = open("unlisted-effort", "--xhigh-effort").await;
+    let info = session.info();
+    let effort = info
+        .details
+        .config_options
+        .iter()
+        .find(|o| o.id.as_str() == "effort")
+        .unwrap();
+    assert_eq!(effort.current, Some(ConfigValue::from("xhigh")));
+    assert_eq!(
+        info.configuration.options.get(&ConfigId::new("effort")),
+        effort.current.as_ref()
+    );
+    session.close().await.unwrap();
+}
+
 /// Invalid model/effort at creation validated locally before reaching wire.
 #[tokio::test]
 async fn creation_config_is_validated_before_the_wire_sees_it() {
