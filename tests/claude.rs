@@ -11,8 +11,8 @@ use anyagent::{
     AgentError, AgentInstallation, Answer, AuthKind, AuthStatus, Capability, CommandSource,
     ConfigId, ConfigKind, ConfigValue, DeliveryKind, DiagnosticLevel, Event, EventKind, Events,
     Input, LoginMethod, McpServer, MessageId, PermissionChoice, PlanStatus, QuestionAnswer,
-    Request, RollbackScope, Runtime, Session, SessionOptions, StopReason, ToolKind, ToolStatus,
-    TurnOrigin,
+    Request, RollbackScope, Runtime, Session, SessionOptions, StopReason, SubagentInfo, ToolKind,
+    ToolStatus, TurnOrigin,
 };
 
 mod common;
@@ -1341,6 +1341,42 @@ async fn subagent_events_carry_the_parent_tool_id() {
     assert!(spawn_seen, "Task spawn tool missing");
     assert_eq!(nested_text, "sub ");
     assert_eq!(nested_user.as_deref(), Some("look deeper"));
+    session.close().await.unwrap();
+}
+
+/// A subagent tool carries role and model from the start, the progress line and
+/// tokens after `task_progress`, and ends with its output and final tokens.
+#[tokio::test]
+async fn a_subagent_tool_reports_role_model_progress_and_tokens() {
+    let (session, mut events) = open("subagent-info", "--subagent").await;
+    session.prompt("hi").await.unwrap();
+    let mut snapshots = Vec::new();
+    loop {
+        match next(&mut events).await.kind {
+            EventKind::ToolUpdated(tool) if tool.kind == ToolKind::Subagent => snapshots.push(tool),
+            EventKind::TurnEnded { .. } => break,
+            _ => {}
+        }
+    }
+    let info = |summary: Option<&str>, tokens: Option<u64>| {
+        Some(SubagentInfo {
+            role: Some("Explore".into()),
+            model: Some("haiku".into()),
+            summary: summary.map(str::to_owned),
+            tokens,
+        })
+    };
+    assert_eq!(snapshots[0].status, ToolStatus::Running);
+    assert_eq!(snapshots[0].subagent, info(None, None));
+    assert_eq!(snapshots[1].status, ToolStatus::Running);
+    assert_eq!(
+        snapshots[1].subagent,
+        info(Some("Running List files"), Some(16390))
+    );
+    let last = snapshots.last().unwrap();
+    assert_eq!(last.status, ToolStatus::Completed);
+    assert_eq!(last.output.as_deref(), Some("4 files"));
+    assert_eq!(last.subagent, info(Some("Running List files"), Some(17870)));
     session.close().await.unwrap();
 }
 
