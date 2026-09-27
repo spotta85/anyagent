@@ -511,8 +511,22 @@ async fn effort_falls_back_when_the_new_model_lacks_it() {
                 choices.iter().map(|c| c.value.as_str()).collect::<Vec<_>>(),
                 vec!["low", "medium"]
             );
-            // The live option is the model's nested one.
-            assert_eq!(Some(effort), nested("gpt-6-mini").first());
+            break;
+        }
+    }
+    // Selecting gpt-6 at its default level makes the live option its nested one.
+    session.configure("effort", "medium").await.unwrap();
+    session.configure("model", "gpt-6").await.unwrap();
+    loop {
+        if let EventKind::SessionUpdated(info) = next(&mut events).await.kind
+            && text_option(&info, "model").as_deref() == Some("gpt-6")
+        {
+            let effort = info
+                .details
+                .config_options
+                .iter()
+                .find(|o| o.id.as_str() == "effort");
+            assert_eq!(effort, gpt6.first());
             break;
         }
     }

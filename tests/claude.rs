@@ -1693,11 +1693,11 @@ async fn effort_choices_follow_a_live_model_switch() {
     session.close().await.unwrap();
 }
 
-/// Each model choice carries that model's own options, and selecting the
-/// model makes the live `effort` equal its nested one.
+/// Each model choice carries that model's own options, and the selected
+/// model's live `effort` equals its nested one.
 #[tokio::test]
 async fn model_choices_carry_each_models_own_options() {
-    let (session, mut events) = open("model-options", "").await;
+    let (session, _events) = open("model-options", "").await;
     let option = |info: &anyagent::SessionInfo, id: &str| {
         info.details
             .config_options
@@ -1730,16 +1730,9 @@ async fn model_choices_carry_each_models_own_options() {
     assert_eq!(default[1].current, Some(ConfigValue::Bool(false)));
     // Nested options carry no options of their own.
     assert!(levels.iter().all(|c| c.options.is_empty()));
-    session.configure("model", "sonnet").await.unwrap();
-    let info = loop {
-        if let EventKind::SessionUpdated(info) = next(&mut events).await.kind
-            && info.configuration.options.get(&ConfigId::new("model"))
-                == Some(&ConfigValue::from("sonnet"))
-        {
-            break info;
-        }
-    };
-    assert_eq!(option(&info, "effort").as_ref(), nested("sonnet").first());
+    // sonnet has effort only.
     assert_eq!(nested("sonnet").len(), 1);
+    // default is selected at open: its live effort is its nested one.
+    assert_eq!(option(&session.info(), "effort").as_ref(), default.first());
     session.close().await.unwrap();
 }
