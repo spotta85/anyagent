@@ -199,11 +199,24 @@ pub struct ToolUpdate {
     pub diffs: Vec<FileDiff>,    // typed, for edits
     pub locations: Vec<PathBuf>, // files it touched
     pub raw: Option<RawTool>,    // the agent's own name and raw input
+    pub subagent: Option<SubagentInfo>, // Subagent tools: role, model, summary, tokens
 }
 ```
 
 When `kind` is `Subagent`, every event the child produces carries that tool's
 id in `turn_info.parent_tool_id`. That is how you nest it in a UI.
+
+`subagent` says who runs and what it reports. Each change re-sends the snapshot.
+
+| Field | claude | codex |
+|---|---|---|
+| `role` | `subagent_type` from the Agent input | not sent |
+| `model` | the Agent input's `model`, when the parent picks one | not sent |
+| `summary` | the latest progress line | not sent |
+| `tokens` | the task's `total_tokens` | the child thread's token total |
+
+Other agents leave it `None`. A background subagent stays `Running` past its
+turn and is listed in `TurnEnded.background`; its later updates start no turn.
 
 `Denied` means the agent's permission rules or mode refused the tool without
 asking you; `output` holds the reason.

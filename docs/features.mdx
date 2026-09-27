@@ -326,6 +326,8 @@ let parent = event.turn_info.as_ref().and_then(|t| t.parent_tool_id.clone());
 
 **Confirms:** `parent_tool_id` on the child's events. A child can never end
 the parent's turn; anyagent consumes the child's turn bookkeeping.
+`tool.subagent` names its role and model and carries its latest progress line
+and token count (claude all four, codex tokens only).
 **Gates:** `Subagents`.
 
 ## Context and plan usage
