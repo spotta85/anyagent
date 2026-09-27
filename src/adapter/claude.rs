@@ -1751,8 +1751,8 @@ fn parse_plan_usage(response: &Value) -> Option<PlanUsage> {
     })
 }
 
-/// `cedar_ember` → banked resets: the live grants' `resets_left` summed, and
-/// the next grant's expiry. `None` when the block is null or not eligible.
+/// `cedar_ember` → banked resets (live grants' `resets_left` summed, next expiry), or `None`.
+/// Shape from T3 Code's `claudeResetCredits.ts`; never seen live (null on 2.1.283).
 fn reset_credits(block: &Value) -> Option<ResetCredits> {
     if block["eligible"] != true {
         return None;
