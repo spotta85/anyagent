@@ -78,6 +78,7 @@ impl Adapter for AntigravityAdapter {
                 &env,
             )
         })?;
+        let instructions = crate::adapter::first_prompt_instructions(&request.options);
         // A cancel respawns on the conversation this open landed on.
         if let Some(token) = &info.resume_token {
             request.options.start = SessionStart::Resume(token.clone());
@@ -90,6 +91,7 @@ impl Adapter for AntigravityAdapter {
                 events,
                 recorder,
                 request,
+                instructions,
                 message: None,
                 next_message: 0,
                 tools: BTreeMap::new(),
@@ -377,6 +379,8 @@ struct Drive {
     /// The open request, pointed at this conversation for the respawn a
     /// cancel needs.
     request: ConnectRequest,
+    /// Instructions the first prompt still owes (the wire has no system prompt).
+    instructions: Option<String>,
     /// The assistant message being streamed.
     message: Option<MessageId>,
     next_message: u64,
@@ -423,6 +427,7 @@ impl Drive {
         match cmd {
             DriverCommand::StartTurn { input } => {
                 self.events.send(DriverEvent::TurnAck).await?;
+                let input = crate::adapter::with_instructions(&mut self.instructions, input);
                 self.send_user(&input).await
             }
             // Never sent: `Steer`, `Answer`, and `Compact` are not

@@ -443,6 +443,32 @@ async fn failures_and_subagents_are_reported() {
     session.close().await.unwrap();
 }
 
+/// `instructions` lead a new session's first prompt only, after a blank
+/// line; a resumed conversation's prompts carry none.
+#[tokio::test]
+async fn instructions_lead_the_first_prompt_of_a_new_session() {
+    let dir = tempfile::tempdir().unwrap();
+    for (i, resume) in [false, true].into_iter().enumerate() {
+        let log = dir.path().join(format!("wire-{i}.jsonl"));
+        let mut options = SessionOptions::in_dir(dir.path())
+            .instructions("Be brief.")
+            .record_wire(&log);
+        if resume {
+            options = options.resume(ResumeToken::new("c7"));
+        }
+        let (session, mut events) = open_with("instructions", "", options).await.unwrap();
+        for prompt in ["one", "two"] {
+            session.prompt(prompt).await.unwrap();
+            drain_turn(&mut events).await;
+        }
+        let prompts = common::sent_frames(&log, 2, |f| f["event"] == "user").await;
+        let first = if resume { "one" } else { "Be brief.\n\none" };
+        assert_eq!(prompts[0]["message"]["content"], first, "resume={resume}");
+        assert_eq!(prompts[1]["message"]["content"], "two", "resume={resume}");
+        session.close().await.unwrap();
+    }
+}
+
 /// `env` reaches the CLI and both side processes; `arg` lands after
 /// anyagent's own flags.
 #[tokio::test]

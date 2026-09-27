@@ -71,6 +71,30 @@ pub fn logged_args(log: &Path) -> Vec<Vec<String>> {
         .collect()
 }
 
+/// The sent frames in a `record_wire` log that match `pred`, polled until
+/// `count` are there: the recorder writes in the background.
+pub async fn sent_frames(
+    log: &Path,
+    count: usize,
+    pred: impl Fn(&serde_json::Value) -> bool,
+) -> Vec<serde_json::Value> {
+    for _ in 0..80 {
+        let frames: Vec<serde_json::Value> = std::fs::read_to_string(log)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|line| line["dir"] == "out")
+            .map(|line| line["frame"].clone())
+            .filter(|frame| pred(frame))
+            .collect();
+        if frames.len() >= count {
+            return frames;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("fewer than {count} matching frames in {}", log.display());
+}
+
 /// The variable `std::env::home_dir` reads, for tests that redirect home.
 #[cfg(unix)]
 pub const HOME_VAR: &str = "HOME";

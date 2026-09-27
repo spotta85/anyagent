@@ -1242,14 +1242,15 @@ async fn config_home_reaches_the_child_as_an_env_var() {
     session.close().await.unwrap();
 }
 
-/// `env` reaches the child and beats `config_home` on the same name; `arg`
-/// lands after anyagent's own flags.
+/// `instructions` ride `--append-system-prompt`; `env` reaches the child and
+/// beats `config_home` on the same name; `arg` lands after anyagent's flags.
 #[tokio::test]
-async fn env_and_args_reach_the_child() {
+async fn instructions_env_and_args_reach_the_child() {
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("argv.jsonl");
     let agent = AgentInstallation::at("claude", wrapper("env-args", "--echo-config-home"));
     let options = SessionOptions::in_dir(dir.path())
+        .instructions("Be brief.")
         .config_home(dir.path().join("home"))
         .env("CLAUDE_CONFIG_DIR", "from-env")
         .env("FIXTURE_ARGV_LOG", log.to_string_lossy())
@@ -1258,8 +1259,13 @@ async fn env_and_args_reach_the_child() {
     session.prompt("hi").await.unwrap();
     let text = complete_turn(&session, &mut events).await;
     assert!(text.contains("cfg=from-env"), "{text:?}");
-    let argv = common::logged_args(&log);
-    assert_eq!(argv[0].last().unwrap(), "--extra-flag", "{argv:?}");
+    let argv = &common::logged_args(&log)[0];
+    assert!(
+        argv.windows(2)
+            .any(|pair| pair == ["--append-system-prompt", "Be brief."]),
+        "{argv:?}"
+    );
+    assert_eq!(argv.last().unwrap(), "--extra-flag", "{argv:?}");
     session.close().await.unwrap();
 }
 

@@ -768,6 +768,31 @@ async fn probe_reports_details() {
     assert!(details.commands.iter().any(|c| c.name == "init"));
 }
 
+/// `instructions` ride every prompt as `system`.
+#[tokio::test]
+async fn instructions_ride_every_prompt_as_system() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("wire.jsonl");
+    let options = SessionOptions::in_dir(dir.path())
+        .instructions("Be brief.")
+        .record_wire(&log);
+    let (session, mut events) = open_with("instructions", "", options).await.unwrap();
+    for prompt in ["one", "two"] {
+        session.prompt(prompt).await.unwrap();
+        complete_turn(&session, &mut events, PermissionChoice::AllowOnce).await;
+    }
+    let prompts = common::sent_frames(&log, 2, |f| {
+        f["path"]
+            .as_str()
+            .is_some_and(|p| p.ends_with("/prompt_async"))
+    })
+    .await;
+    for prompt in &prompts {
+        assert_eq!(prompt["body"]["system"], "Be brief.", "{prompt}");
+    }
+    session.close().await.unwrap();
+}
+
 /// `env` reaches the server; `arg` lands after `serve` and its bind flags.
 #[tokio::test]
 async fn env_and_args_reach_the_server() {

@@ -461,6 +461,10 @@ async fn open_thread(
     if request.options.throwaway {
         params["ephemeral"] = json!(true);
     }
+    // Start, resume and fork all take it (0.154.0 schema).
+    if let Some(text) = &request.options.instructions {
+        params["developerInstructions"] = json!(text);
+    }
     let method = match &request.options.start {
         SessionStart::New => "thread/start",
         SessionStart::Resume(token) => {

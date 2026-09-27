@@ -254,12 +254,16 @@ async fn handshake(
     Ok((info, init["models"].clone()))
 }
 
-/// MCP declarations and creation-time config as launch flags.
+/// MCP declarations, instructions and creation-time config as launch flags.
 fn option_args(options: &crate::agent::SessionOptions) -> Result<Vec<String>, AgentError> {
     let mut args = Vec::new();
     if !options.mcp_servers.is_empty() {
         args.push("--mcp-config".into());
         args.push(mcp_config(&options.mcp_servers).to_string());
+    }
+    if let Some(text) = &options.instructions {
+        args.push("--append-system-prompt".into());
+        args.push(text.clone());
     }
     for (id, value) in &options.configure {
         match (id.as_str(), value) {
