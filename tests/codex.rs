@@ -647,11 +647,12 @@ async fn plan_mode_rides_turn_start_and_proposes_the_plan_item() {
     let (_, plans) = plan_turn(&session, &mut events, "no-plan").await;
     assert!(plans.is_empty(), "an empty plan item proposed {plans:?}");
 
-    // A policy ends plan mode: it rides again, and `default` goes out once.
+    // A policy ends plan mode: `default` goes out until codex accepts a turn.
     session.configure("mode", "never").await.unwrap();
     while text_option(&session.info(), "mode").as_deref() != Some("never") {
         next(&mut events).await;
     }
+    plan_turn(&session, &mut events, "refuse-start").await;
     let (text, plans) = plan_turn(&session, &mut events, "plan a README").await;
     assert!(text.contains("policy=never"), "{text}");
     assert!(text.contains(&collab("default")), "{text}");

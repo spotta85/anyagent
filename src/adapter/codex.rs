@@ -673,7 +673,8 @@ fn driver_info(
 
 /// A client request awaiting its JSON-RPC response.
 enum Pending {
-    StartTurn,
+    /// Whether the turn states plan mode; the thread holds it once accepted.
+    StartTurn(bool),
     Steer,
     Interrupt,
     Skills,
@@ -774,8 +775,9 @@ impl Drive {
                 self.turn_usage = TurnUsage::default();
                 let items = self.input_items(&input).await?;
                 let params = self.turn_params(items);
+                let plan = params["collaborationMode"]["mode"] == "plan";
                 let id = self.wire.request("turn/start", params).await?;
-                self.pending.insert(id, Pending::StartTurn);
+                self.pending.insert(id, Pending::StartTurn(plan));
             }
             DriverCommand::Steer { input } => {
                 if self.turn_started {
@@ -799,7 +801,7 @@ impl Drive {
                 } else if self
                     .pending
                     .values()
-                    .any(|p| matches!(p, Pending::StartTurn))
+                    .any(|p| matches!(p, Pending::StartTurn(_)))
                 {
                     // The turn id has not arrived yet; interrupt on receipt.
                     self.cancel_pending = true;
@@ -887,7 +889,7 @@ impl Drive {
             // A wire rejection of the turn is a failed turn. A cancel that
             // raced this start has nothing left to interrupt — a stale flag
             // would cancel the next turn at its start.
-            Pending::StartTurn => match error {
+            Pending::StartTurn(plan) => match error {
                 Some(message) => {
                     self.cancel_pending = false;
                     self.events
@@ -897,6 +899,7 @@ impl Drive {
                         .await?
                 }
                 None => {
+                    self.in_plan = plan;
                     self.turn = frame["result"]["turn"]["id"].as_str().map(str::to_owned);
                     self.interrupt_if_pending().await?;
                 }
@@ -1505,7 +1508,6 @@ impl Drive {
                 },
             });
         }
-        self.in_plan = plan;
         if let Some(sandbox) = option("sandbox") {
             params["sandboxPolicy"] = json!({ "type": sandbox_policy(&sandbox) });
         }
