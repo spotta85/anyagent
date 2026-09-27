@@ -57,7 +57,7 @@ Two rounds. The first replaced the adapters. The second closed the gaps the firs
 | open+stream | PASS | PASS | PASS¹ | PASS¹ | PASS | PASS |
 | tool+diff | PASS | PASS | PASS¹ | PASS | PASS | PASS |
 | permission | PASS | PASS | SKIP: edits need no approval¹ | PASS | FAIL (model)³ | PASS |
-| deny | PASS | PASS | SKIP: edits need no approval¹ | PASS¹ | PASS | PASS |
+| deny | PASS | PASS | not proven (quota) | PASS¹ | PASS | PASS |
 | question | PASS | PASS | not proven (quota) | PASS¹ | PASS | PASS |
 | subagent | PASS | SKIP: claude only | SKIP | SKIP | SKIP | SKIP |
 | model-switch | PASS | PASS | PASS² | SKIP: one model | PASS | PASS |
@@ -71,7 +71,7 @@ Two rounds. The first replaced the adapters. The second closed the gaps the firs
 | accept-edits | PASS | SKIP: sandbox never asks | not proven (quota) | not proven (quota) | PASS | PASS |
 | mcp-tool | PASS | PASS | not proven (quota) | not proven (quota) | PASS | PASS |
 
-¹ Passed, or was seen on the wire, before that account's free quota ran out mid-run. ² Ran with cursor's quota out; the check reads a config event or the outgoing wire, not the reply. ³ opencode's free model answered a queued prompt with the wrong text; it passed the run before. Not an adapter or anyagent fault.
+¹ Passed, or was seen on the wire, before that account's free quota ran out mid-run. ² Ran with cursor's quota out; the check reads a config event or the outgoing wire, not the reply. ³ opencode's free model answered a queued prompt with the wrong text in 3 of 4 runs; the wire shows the prompt arrived intact. Not an adapter or anyagent fault.
 
 No cell failed because of anyagent.
 
