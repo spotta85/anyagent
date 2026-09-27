@@ -1580,9 +1580,8 @@ async fn cursor_model_switch_reveals_the_models_own_options() {
     session.close().await.unwrap();
 }
 
-/// A tool call whose `_meta` names the MCP server and tool (antigravity's
-/// server, kiro, qwen) is `ToolKind::Mcp` on every snapshot and on its
-/// permission, even where a later frame resends a bare `kind: other`.
+/// An MCP call named in `_meta` (antigravity, kiro, qwen) is `ToolKind::Mcp`
+/// on every snapshot and its permission, despite a later bare `kind: other`.
 #[tokio::test]
 async fn meta_mcp_makes_the_tool_kind_mcp() {
     let mcp = ToolKind::Mcp {

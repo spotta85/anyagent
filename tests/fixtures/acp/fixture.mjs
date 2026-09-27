@@ -202,10 +202,8 @@ async function runTurn(m) {
     done('end_turn');
     return;
   }
-  // One MCP call as three agents name it (recorded 2026-09-27), as
-  // [call, permission toolCall, ...updates]; `kind` is at most `other`.
-  // `mcp-call` is antigravity's server (`_meta.mcp` everywhere); `mcp-call
-  // kiro` names it on the call only; `mcp-call qwen` by `provenance: mcp`.
+  // `mcp-call [kiro|qwen]`: one MCP call as antigravity's server, kiro or qwen
+  // sends it (recorded 2026-09-27), as [call, permission toolCall, ...updates].
   if (ptext.includes('mcp-call')) {
     const out = { status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'PLUM-4417' } }], rawOutput: 'PLUM-4417' };
     const ag = { title: 'probe_secret_word', kind: 'other', status: 'pending', content: [], rawInput: { arguments: {} }, _meta: { mcp: { tool: 'secret_word', server: 'probe' }, is_mcp_tool_call: true } };
