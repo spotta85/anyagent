@@ -128,13 +128,15 @@ async function onRequest(m) {
     case 'skills/list':
       // Grouped by root; the same skill appears under every root (dedupe by
       // name), a nameless entry is junk, and only `review` has an interface.
+      // A disabled skill still comes back, `enabled: false` (probed 2026-09-27, 0.154.0).
       return reply({ data: [
         { cwd: process.cwd(), skills: [
-          { name: 'review', description: 'A long model-facing paragraph.', interface: { shortDescription: 'Review a diff.' }, enabled: true, scope: 'repo', path: '/skills/review' },
-          { name: 'release', description: 'Cut a release.', enabled: true, scope: 'user', path: '/skills/release' },
-          { name: '', description: 'no name', enabled: true, scope: 'user', path: '/skills/junk' },
+          { name: 'review', description: 'A long model-facing paragraph.', interface: { shortDescription: 'Review a diff.' }, enabled: true, scope: 'repo', path: '/repo/.codex/skills/review/SKILL.md' },
+          { name: 'off', description: 'Disabled.', enabled: false, scope: 'user', path: '/home/skills/off/SKILL.md' },
+          { name: 'release', description: 'Cut a release.', enabled: true, scope: 'user', path: '/home/skills/release/SKILL.md' },
+          { name: '', description: 'no name', enabled: true, scope: 'user', path: '/home/skills/junk/SKILL.md' },
         ] },
-        { cwd: '/other', skills: [{ name: 'review', description: 'dup', enabled: true, scope: 'user', path: '/skills/review' }] },
+        { cwd: '/other', skills: [{ name: 'review', description: 'dup', enabled: true, scope: 'user', path: '/home/skills/review/SKILL.md' }] },
       ] });
     case 'account/rateLimits/read':
       if (flag('--logged-out')) return refuse('codex account authentication required to read rate limits');
