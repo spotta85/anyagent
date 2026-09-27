@@ -4,11 +4,12 @@
 // login), --question (a requestUserInput mid-turn), --echo-config-home
 // (echo the CODEX_HOME the child received). Prompt words steer scenarios:
 // "write-file" (a fileChange escalates past the sandbox -> approval),
-// "mcp-tool" (an MCP tool call asks through an elicitation), "sleep" (a command that only an interrupt ends), "die" (exit mid-turn),
-// "subagent" (a child thread runs a whole turn before the parent's ends,
-// "subagent-fails" for a child turn that fails), "end-failed"/"end-aborted"
-// (the turn ends via turn/failed / turn/aborted instead of turn/completed),
-// "refuse-start" (turn/start is refused).
+// "mcp-tool"/"mcp-two"/"mcp-always" (MCP tool calls ask through an
+// elicitation), "sleep" (a command that only an interrupt ends), "die"
+// (exit mid-turn), "subagent" (a child thread runs a whole turn before the
+// parent's ends, "subagent-fails" for a child turn that fails),
+// "end-failed"/"end-aborted" (the turn ends via turn/failed / turn/aborted
+// instead of turn/completed), "refuse-start" (turn/start is refused).
 // --rename: the server renames the thread after the first turn.
 // --host-feature: the host config enables an under-development feature too.
 // A turn/start in the `plan` collaboration mode also yields a `plan` item
