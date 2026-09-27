@@ -289,7 +289,7 @@ async fn a_subagent_child_thread_never_settles_the_parent_turn() {
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
 
     // The `subAgentActivity` tool is the child thread: Running while the child
-    // works, Completed once its turn ends.
+    // works, then with the child's token total, Completed once its turn ends.
     let activity = subagents
         .iter()
         .find(|t| t.title.contains("reviewer.md"))
@@ -299,9 +299,16 @@ async fn a_subagent_child_thread_never_settles_the_parent_turn() {
     let states: Vec<_> = subagents
         .iter()
         .filter(|t| t.id == activity)
-        .map(|t| t.status)
+        .map(|t| (t.status, t.subagent.as_ref().and_then(|s| s.tokens)))
         .collect();
-    assert_eq!(states, vec![ToolStatus::Running, ToolStatus::Completed]);
+    assert_eq!(
+        states,
+        vec![
+            (ToolStatus::Running, None),
+            (ToolStatus::Running, Some(77)),
+            (ToolStatus::Completed, Some(77)),
+        ]
+    );
     // The child's content is attributed to it.
     assert_eq!(child_text, vec![("child text".to_owned(), activity)]);
     // The collab call is a subagent tool too, carrying its prompt.
