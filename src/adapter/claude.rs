@@ -122,7 +122,8 @@ impl Adapter for ClaudeAdapter {
         let fetch = async {
             wire.roundtrip(json!({ "subtype": "initialize", "hooks": {} }))
                 .await?;
-            wire.roundtrip(json!({ "subtype": "get_usage" })).await
+            wire.roundtrip(json!({ "subtype": "get_usage", "skip_behaviors": true }))
+                .await
         };
         let result = match tokio::time::timeout(HANDSHAKE_TIMEOUT, fetch).await {
             Ok(Ok(response)) => parse_plan_usage(&response).ok_or_else(|| {
@@ -1033,7 +1034,11 @@ impl Drive {
             .await?;
         // Refresh plan quota after every turn; the receipt becomes
         // `PlanUsageUpdated` in `on_control_response`.
-        self.usage_request = Some(self.wire.control(json!({ "subtype": "get_usage" })).await?);
+        self.usage_request = Some(
+            self.wire
+                .control(json!({ "subtype": "get_usage", "skip_behaviors": true }))
+                .await?,
+        );
         Ok(())
     }
 
