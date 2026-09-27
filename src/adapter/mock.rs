@@ -15,13 +15,13 @@ use crate::adapter::{
     Adapter, ConnectRequest, DriverCommand, DriverConnection, DriverEvent, DriverInfo,
 };
 use crate::agent::{
-    AgentDetails, AuthKind, AuthStatus, Capabilities, Capability, ConfigOption, ResumeToken,
-    SessionConfiguration, SessionStart,
+    AgentDetails, AgentInstallation, AuthKind, AuthStatus, Capabilities, Capability, ConfigOption,
+    ResumeToken, SessionConfiguration, SessionOptions, SessionStart,
 };
 use crate::error::AgentError;
 use crate::event::{
-    CompletionSource, EventKind, MessageId, PermissionChoice, PermissionRequest, Request,
-    RequestId, StopReason, ToolId, ToolInput, ToolKind, ToolStatus, ToolUpdate,
+    CompletionSource, EventKind, MessageId, PermissionChoice, PermissionRequest, PlanUsage,
+    Request, RequestId, StopReason, ToolId, ToolInput, ToolKind, ToolStatus, ToolUpdate,
 };
 
 // ---------------------------------------------------------------------------
@@ -87,6 +87,9 @@ pub struct Script {
     pub rollback_refusal: Option<String>,
     /// Advertised config options; `configure` sets one and reports it back.
     pub options: Vec<ConfigOption>,
+    /// Refuse `open` and `plan_usage` with `InvalidRequest` naming the
+    /// installation and options received, so a test can see what arrived.
+    pub echo_options: bool,
 }
 
 impl Default for Script {
@@ -107,6 +110,7 @@ impl Default for Script {
             rollback: false,
             rollback_refusal: None,
             options: Vec::new(),
+            echo_options: false,
         }
     }
 }
@@ -158,6 +162,9 @@ impl MockAdapter {
 #[async_trait]
 impl Adapter for MockAdapter {
     async fn connect(&self, request: ConnectRequest) -> Result<DriverConnection, AgentError> {
+        if self.script.echo_options {
+            return Err(echo(&request.installation, &request.options));
+        }
         if self.script.resume && matches!(request.options.start, SessionStart::Resume(_)) {
             return Err(AgentError::ResumeFailed("the mock keeps no history".into()));
         }
@@ -173,6 +180,18 @@ impl Adapter for MockAdapter {
             info: info(&self.script, &initial_configuration(&self.script)),
             commands: cmd_tx,
             events: ev_rx,
+        })
+    }
+
+    /// No quota; with `echo_options` the refusal names what arrived.
+    async fn plan_usage(
+        &self,
+        installation: &AgentInstallation,
+        options: &SessionOptions,
+    ) -> Result<PlanUsage, AgentError> {
+        Err(match self.script.echo_options {
+            true => echo(installation, options),
+            false => AgentError::UnsupportedFeature("plan usage".into()),
         })
     }
 }
@@ -355,6 +374,11 @@ fn info(script: &Script, configuration: &SessionConfiguration) -> DriverInfo {
         tools_disabled: false,
         effort_wire: None,
     }
+}
+
+/// The `echo_options` refusal: what the adapter received, as Debug text.
+fn echo(installation: &AgentInstallation, options: &SessionOptions) -> AgentError {
+    AgentError::InvalidRequest(format!("{installation:?} {options:?}"))
 }
 
 /// Each option's `current` value, as the session starts.
