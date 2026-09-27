@@ -612,6 +612,23 @@ async fn resume_binds_the_session_file_and_config_home_reaches_the_child() {
     );
 }
 
+/// `env` reaches the RPC process and both side processes; `arg` lands after
+/// anyagent's own flags.
+#[tokio::test]
+async fn env_and_args_reach_the_child() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.jsonl");
+    let options = SessionOptions::in_dir(dir.path())
+        .env("FIXTURE_ARGV_LOG", log.to_string_lossy())
+        .arg("--extra-flag");
+    let (session, _events) = open_with("env-args", "", options).await.unwrap();
+    let argv = common::logged_args(&log);
+    assert_eq!(argv.len(), 3, "rpc, auth check, version: {argv:?}");
+    let rpc = argv.iter().find(|a| a[0] == "--mode").unwrap();
+    assert_eq!(rpc.last().unwrap(), "--extra-flag", "{argv:?}");
+    session.close().await.unwrap();
+}
+
 /// Fork/MCP unsupported -> UnsupportedFeature; bad sandbox/model -> InvalidConfiguration.
 #[tokio::test]
 async fn unsupported_starts_and_declarations_are_refused_typed() {

@@ -9,7 +9,10 @@
 //        extension requests, no usage frames), --logged-out (with --cursor:
 //        `about` reports no email and `authenticate` hangs in a browser flow).
 import { createInterface } from 'node:readline';
+import { appendFileSync } from 'node:fs';
 
+// FIXTURE_ARGV_LOG, set through the session's env: log the launch args there.
+if (process.env.FIXTURE_ARGV_LOG) appendFileSync(process.env.FIXTURE_ARGV_LOG, JSON.stringify(process.argv.slice(2)) + '\n');
 const flag = (name) => process.argv.includes(name);
 const num = (name, dflt) => +(process.argv.find(a => a.startsWith(name + '='))?.split('=')[1] ?? dflt);
 const send = (m) => process.stdout.write(JSON.stringify(m) + '\n');

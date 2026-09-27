@@ -1020,6 +1020,23 @@ async fn config_home_on_an_agent_without_a_known_var_is_refused() {
     );
 }
 
+/// `env` reaches the agent; `arg` lands after the protocol args.
+#[tokio::test]
+async fn env_and_args_reach_the_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.jsonl");
+    let options = SessionOptions::in_dir(dir.path())
+        .env("FIXTURE_ARGV_LOG", log.to_string_lossy())
+        .arg("--extra-flag");
+    let (session, _events) = Runtime::new()
+        .open(&fixture(&["--commands-on-open"]), options)
+        .await
+        .unwrap();
+    let argv = common::logged_args(&log);
+    assert_eq!(argv[0], ["--commands-on-open", "--extra-flag"], "{argv:?}");
+    session.close().await.unwrap();
+}
+
 /// `record_wire` tees the ACP JSON-RPC wire too, both directions and including
 /// the handshake, as one valid JSON object per line.
 /// Record_wire tees both directions including initialize handshake as JSONL per direction.

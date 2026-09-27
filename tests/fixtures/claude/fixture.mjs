@@ -14,6 +14,8 @@
 import { createInterface } from 'node:readline';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 
+// FIXTURE_ARGV_LOG, set through the session's env: log the launch args there.
+if (process.env.FIXTURE_ARGV_LOG) appendFileSync(process.env.FIXTURE_ARGV_LOG, JSON.stringify(process.argv.slice(2)) + '\n');
 const flag = (name) => process.argv.includes(name);
 const argAfter = (name) => { const i = process.argv.indexOf(name); return i > -1 ? process.argv[i + 1] : undefined; };
 // Flag settings: seeded from the launch flags, merged by apply_flag_settings.

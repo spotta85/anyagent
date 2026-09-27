@@ -10,8 +10,10 @@
 // many `GET /mcp` came so far), "mcp-call" (two tools of the user's "my
 // docs" MCP server run).
 import { createServer } from 'node:http';
-import { existsSync } from 'node:fs';
+import { appendFileSync, existsSync } from 'node:fs';
 
+// FIXTURE_ARGV_LOG, set through the session's env: log the launch args there.
+if (process.env.FIXTURE_ARGV_LOG) appendFileSync(process.env.FIXTURE_ARGV_LOG, JSON.stringify(process.argv.slice(2)) + '\n');
 const flag = (name) => process.argv.includes(name);
 const argAfter = (name) => { const i = process.argv.indexOf(name); return i > -1 ? process.argv[i + 1] : undefined; };
 const port = Number(argAfter('--port'));

@@ -12,7 +12,10 @@
 // and the launch flags), "chunks" (text in two deltas), "think" (two model
 // calls with live-recorded usage).
 import { createInterface } from 'node:readline';
+import { appendFileSync } from 'node:fs';
 
+// FIXTURE_ARGV_LOG, set through the session's env: log the launch args there.
+if (process.env.FIXTURE_ARGV_LOG) appendFileSync(process.env.FIXTURE_ARGV_LOG, JSON.stringify(process.argv.slice(2)) + '\n');
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(name);
 const after = (name) => argv[argv.indexOf(name) + 1];

@@ -443,6 +443,26 @@ async fn failures_and_subagents_are_reported() {
     session.close().await.unwrap();
 }
 
+/// `env` reaches the CLI and both side processes; `arg` lands after
+/// anyagent's own flags.
+#[tokio::test]
+async fn env_and_args_reach_the_child() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.jsonl");
+    let options = SessionOptions::in_dir(dir.path())
+        .env("FIXTURE_ARGV_LOG", log.to_string_lossy())
+        .arg("--extra-flag");
+    let (session, _events) = open_with("env-args", "", options).await.unwrap();
+    let argv = common::logged_args(&log);
+    assert_eq!(argv.len(), 3, "wire, models, version: {argv:?}");
+    let wire = argv
+        .iter()
+        .find(|a| a[0] == "--input-format=stream-json")
+        .unwrap();
+    assert_eq!(wire.last().unwrap(), "--extra-flag", "{argv:?}");
+    session.close().await.unwrap();
+}
+
 /// The process dying mid-turn ends the stream with `ProcessExited`.
 #[tokio::test]
 async fn a_dead_process_ends_the_stream() {

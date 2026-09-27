@@ -22,7 +22,7 @@ use crate::adapter::{
 use crate::agent::{
     AccountInfo, AgentDetails, AuthKind, AuthStatus, Capabilities, Capability, ConfigChoice,
     ConfigId, ConfigKind, ConfigOption, ConfigValue, Input, McpConnection, McpServer, McpTransport,
-    ResumeToken, SessionConfiguration, SessionStart, SlashCommand,
+    ResumeToken, SessionConfiguration, SessionOptions, SessionStart, SlashCommand,
 };
 use crate::error::AgentError;
 use crate::event::{
@@ -236,14 +236,8 @@ async fn launch(
     request: &ConnectRequest,
     recorder: Option<WireRecorder>,
 ) -> Result<(process::Child, Wire, DriverInfo, Value, String, Vec<String>), AgentError> {
-    let mut env = crate::adapter::config_home_env(&request.installation, &request.options)?;
-    // CODEX_HOME must already exist or the server exits at startup
-    // (probed 2026-08-27).
-    if let Some((_, dir)) = env.first() {
-        tokio::fs::create_dir_all(dir)
-            .await
-            .map_err(|e| AgentError::SpawnFailed(format!("could not create config home: {e}")))?;
-    }
+    let mut env = crate::adapter::launch_env(&request.installation, &request.options)?;
+    create_config_home(&request.options).await?;
     // Overrides must follow the subcommand: before it, app-server 0.154.0
     // accepts them and starts no server (live-verified 2026-09-27).
     let (overrides, mcp_env) = mcp_overrides(&request.options.mcp_servers)?;
@@ -254,6 +248,7 @@ async fn launch(
         "-c".to_owned(),
         format!("features.{USER_INPUT_FEATURE}=true"),
     ]);
+    args.extend(request.options.args.iter().cloned());
     let mut child = process::spawn(Spawn {
         exec_path: request.installation.executable_path.clone(),
         args,
@@ -276,6 +271,17 @@ async fn launch(
             Err(AgentError::HandshakeTimeout)
         }
     }
+}
+
+/// Creates the session's config home: CODEX_HOME must already exist or the
+/// server exits at startup (probed 2026-08-27).
+async fn create_config_home(options: &SessionOptions) -> Result<(), AgentError> {
+    let Some(dir) = &options.config_home else {
+        return Ok(());
+    };
+    tokio::fs::create_dir_all(dir)
+        .await
+        .map_err(|e| AgentError::SpawnFailed(format!("could not create config home: {e}")))
 }
 
 /// `initialize` → `initialized`, then account, model catalog, and skills, then

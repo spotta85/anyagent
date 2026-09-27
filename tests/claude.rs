@@ -1242,6 +1242,27 @@ async fn config_home_reaches_the_child_as_an_env_var() {
     session.close().await.unwrap();
 }
 
+/// `env` reaches the child and beats `config_home` on the same name; `arg`
+/// lands after anyagent's own flags.
+#[tokio::test]
+async fn env_and_args_reach_the_child() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.jsonl");
+    let agent = AgentInstallation::at("claude", wrapper("env-args", "--echo-config-home"));
+    let options = SessionOptions::in_dir(dir.path())
+        .config_home(dir.path().join("home"))
+        .env("CLAUDE_CONFIG_DIR", "from-env")
+        .env("FIXTURE_ARGV_LOG", log.to_string_lossy())
+        .arg("--extra-flag");
+    let (session, mut events) = Runtime::new().open(&agent, options).await.unwrap();
+    session.prompt("hi").await.unwrap();
+    let text = complete_turn(&session, &mut events).await;
+    assert!(text.contains("cfg=from-env"), "{text:?}");
+    let argv = common::logged_args(&log);
+    assert_eq!(argv[0].last().unwrap(), "--extra-flag", "{argv:?}");
+    session.close().await.unwrap();
+}
+
 /// Reads the recording file until it has grown past `min` lines or the poll
 /// budget runs out; the writer task flushes asynchronously.
 async fn recorded_lines(path: &Path, min: usize) -> Vec<serde_json::Value> {

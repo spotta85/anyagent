@@ -1270,6 +1270,30 @@ async fn config_home_reaches_the_child_and_is_created() {
     session.close().await.unwrap();
 }
 
+/// `env` reaches the server; `arg` lands after `app-server` and anyagent's
+/// own overrides.
+#[tokio::test]
+async fn env_and_args_reach_the_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.jsonl");
+    let options = SessionOptions::in_dir(dir.path())
+        .env("FIXTURE_ARGV_LOG", log.to_string_lossy())
+        .arg("--extra-flag");
+    let (session, _events) = open_with("env-args", "", options).await.unwrap();
+    let argv = common::logged_args(&log);
+    assert_eq!(
+        argv[0],
+        [
+            "app-server",
+            "-c",
+            "features.default_mode_request_user_input=true",
+            "--extra-flag"
+        ],
+        "{argv:?}"
+    );
+    session.close().await.unwrap();
+}
+
 /// Every attachment rides as a path ref; images also ride as `localImage`.
 #[tokio::test]
 async fn attachments_ride_as_path_refs_and_images_as_local_image_items() {
