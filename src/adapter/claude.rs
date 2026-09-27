@@ -1715,9 +1715,12 @@ fn reset_credits(block: &Value) -> Option<ResetCredits> {
     let next = block["next_grant_id"]
         .as_str()
         .and_then(|id| live.iter().find(|grant| grant["id"] == id));
-    let left: u64 = live.iter().filter_map(|g| g["resets_left"].as_u64()).sum();
+    let available = next.map_or(0, |_| {
+        let left: u64 = live.iter().filter_map(|g| g["resets_left"].as_u64()).sum();
+        u32::try_from(left).unwrap_or(u32::MAX)
+    });
     Some(ResetCredits {
-        available: next.map_or(0, |_| u32::try_from(left).unwrap_or(u32::MAX)),
+        available,
         next_expires_at: next
             .and_then(|g| g["ends_at"].as_str())
             .and_then(parse_rfc3339),
