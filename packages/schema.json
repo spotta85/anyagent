@@ -885,6 +885,32 @@
             "Question"
           ],
           "additionalProperties": false
+        },
+        {
+          "description": "Deny a permission once and tell the agent why.",
+          "type": "object",
+          "properties": {
+            "Deny": {
+              "type": "object",
+              "properties": {
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "message"
+              ]
+            }
+          },
+          "required": [
+            "Deny"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "Take the request back without choosing. The agent stops waiting for it.",
+          "type": "string",
+          "const": "Cancel"
         }
       ]
     },

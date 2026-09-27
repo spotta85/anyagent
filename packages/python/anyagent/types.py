@@ -99,6 +99,14 @@ McpConnection: TypeAlias = McpConnection1 | McpConnection2 | McpConnection3
 ConfigValue: TypeAlias = str | bool
 
 
+class Deny(TypedDict):
+    message: str
+
+
+class Answer3(TypedDict):
+    Deny: Deny
+
+
 PermissionChoice: TypeAlias = Literal['AllowOnce', 'AllowAlways', 'DenyOnce', 'DenyAlways']
 
 
@@ -468,7 +476,7 @@ class Answer2(TypedDict):
     Question: list[QuestionAnswer]
 
 
-Answer: TypeAlias = Answer1 | Answer2
+Answer: TypeAlias = Answer1 | Answer2 | Answer3 | Literal['Cancel']
 
 
 class Line1(TypedDict):
