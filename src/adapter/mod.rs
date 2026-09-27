@@ -97,6 +97,9 @@ pub(crate) enum DriverEvent {
     /// Content and turn ends delivered before it belong to earlier turns;
     /// the engine drops them instead of attributing them to the new one.
     TurnAck,
+    /// Tokens the current turn has spent so far; the latest one before
+    /// `TurnEnded` rides on it.
+    TurnUsage(crate::event::TurnUsage),
     /// Wire evidence that the current turn ended.
     TurnEnded(StopReason),
     /// Outcome of the last `Steer` command.

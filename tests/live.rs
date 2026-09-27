@@ -1181,6 +1181,34 @@ async fn resume_recalls_without_replaying() {
     }
 }
 
+/// TurnEnded carries the turn's token counts on the agents that report them.
+#[tokio::test]
+#[ignore = "live: talks to real agents"]
+async fn turn_usage_rides_turn_ended() {
+    for h in enabled().await {
+        let (session, mut events, _dir) = open(h).await;
+        session.prompt("Say OK. No tools.").await.unwrap();
+        let usage = loop {
+            match next(&mut events, &format!("{h}: usage turn")).await.kind {
+                EventKind::RequestOpened(request) => {
+                    session.answer(request.id(), allow()).await.unwrap();
+                }
+                EventKind::TurnEnded { usage, .. } => break usage,
+                _ => {}
+            }
+        };
+        println!("{h}: turn usage {usage:?}");
+        if matches!(h, "claude" | "codex") {
+            let usage = usage.unwrap_or_else(|| panic!("{h}: TurnEnded without usage"));
+            assert!(usage.input_tokens > 0, "{h}: no input tokens");
+            assert!(usage.output_tokens > 0, "{h}: no output tokens");
+            assert!(usage.cached_input_tokens <= usage.input_tokens);
+        }
+        session.close().await.unwrap();
+        pass(h, "turn usage");
+    }
+}
+
 /// PlanUsageUpdated arrives within 10s after a turn with valid windows and reset times.
 #[tokio::test]
 #[ignore = "live: talks to real agents"]

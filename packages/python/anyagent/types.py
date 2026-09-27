@@ -368,6 +368,12 @@ class StopReason2(TypedDict):
 CompletionSource: TypeAlias = Literal['Protocol', 'Inferred']
 
 
+class TurnUsage(TypedDict):
+    input_tokens: int
+    cached_input_tokens: int
+    output_tokens: int
+
+
 class ErrorBody(TypedDict):
     kind: str
     message: str
@@ -639,6 +645,7 @@ class EventKind15(TypedDict):
 class TurnEnded(TypedDict):
     stop: StopReason
     background: list[str]
+    usage: NotRequired[TurnUsage | None]
 
 
 class EventKind16(TypedDict):

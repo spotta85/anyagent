@@ -36,6 +36,8 @@ pub enum Step {
     Emit(EventKind),
     /// Pause until the engine forwards an `Answer`.
     AwaitAnswer,
+    /// Report what the turn has spent; rides on the next `End`.
+    Usage(crate::event::TurnUsage),
     /// Report the turn ended. Steps after it play immediately, which is how
     /// a script models agent-originated continuation and trailing noise.
     End(StopReason),
@@ -205,6 +207,7 @@ async fn drive(
                     waiting = true;
                     true
                 }
+                Step::Usage(usage) => send(DriverEvent::TurnUsage(usage)).await,
                 Step::End(stop) => {
                     turn_open = false;
                     send(DriverEvent::TurnEnded(stop)).await

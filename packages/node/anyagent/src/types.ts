@@ -250,6 +250,10 @@ export type EventKind =
       TurnEnded: {
         stop: StopReason;
         background: string[];
+        /**
+         * Tokens this turn spent, when the agent reports them.
+         */
+        usage?: TurnUsage | null;
       };
     };
 export type TurnOrigin =
@@ -666,6 +670,23 @@ export interface UsageWindow {
 export interface Diagnostic {
   level: DiagnosticLevel;
   message: string;
+}
+/**
+ * Tokens one turn spent, summed over its model calls.
+ */
+export interface TurnUsage {
+  /**
+   * Input tokens, cached ones included.
+   */
+  input_tokens: number;
+  /**
+   * The part of `input_tokens` read from cache.
+   */
+  cached_input_tokens: number;
+  /**
+   * Output tokens, reasoning included.
+   */
+  output_tokens: number;
 }
 /**
  * The `error` object: `kind`, `message`, and the variant's own fields.

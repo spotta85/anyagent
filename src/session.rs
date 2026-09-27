@@ -28,7 +28,7 @@ use crate::error::AgentError;
 use crate::event::{
     Answer, ChoiceId, CompletionSource, Delivery, DeliveryKind, Diagnostic, DiagnosticLevel, Event,
     EventKind, Extensions, MessageId, PermissionChoice, PromptId, QuestionAnswer, Request,
-    RequestId, SessionId, StopReason, ToolId, TurnContext, TurnId, TurnOrigin,
+    RequestId, SessionId, StopReason, ToolId, TurnContext, TurnId, TurnOrigin, TurnUsage,
 };
 
 /// Consumer event buffer. Generous because the engine never waits on it: a
@@ -266,6 +266,7 @@ pub(crate) fn start(
         exit: None,
         noise_reported: false,
         awaiting_ack: false,
+        turn_usage: None,
         last_status: SessionStatus::Idle,
         done: false,
     };
@@ -442,6 +443,8 @@ struct Engine {
     noise_reported: bool,
     /// A `StartTurn` is unacknowledged: content arriving now is stale.
     awaiting_ack: bool,
+    /// Latest usage the adapter reported for the running turn.
+    turn_usage: Option<TurnUsage>,
     /// The last status emitted, so `StatusChanged` fires only on change.
     last_status: SessionStatus,
     done: bool,
@@ -775,13 +778,19 @@ impl Engine {
         if self.awaiting_ack {
             match &ev {
                 DriverEvent::Event { kind, .. } if is_content(kind) => return,
-                DriverEvent::TurnEnded(_) => return,
+                DriverEvent::TurnEnded(_) | DriverEvent::TurnUsage(_) => return,
                 _ => {}
             }
         }
         match ev {
             DriverEvent::TurnAck => self.awaiting_ack = false,
             DriverEvent::Steered(accepted) => self.resolve_steer(accepted).await,
+            // Usage outside a turn is nobody's; it must not reach the next one.
+            DriverEvent::TurnUsage(usage) => {
+                if matches!(self.state, TurnState::Running { .. }) {
+                    self.turn_usage = Some(usage);
+                }
+            }
             DriverEvent::TurnEnded(stop) => self.handle_turn_ended(stop).await,
             DriverEvent::InfoChanged(info) => self.handle_info_changed(info).await,
             DriverEvent::Exited { status, stderr } => self.exit = Some((status, stderr)),
@@ -1059,9 +1068,14 @@ impl Engine {
             .await;
         }
         let background = running_tools.into_iter().collect();
+        let usage = self.turn_usage.take();
         self.push(
             ctx(None),
-            EventKind::TurnEnded { stop, background },
+            EventKind::TurnEnded {
+                stop,
+                background,
+                usage,
+            },
             Extensions::new(),
         )
         .await;

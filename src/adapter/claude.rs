@@ -29,7 +29,7 @@ use crate::event::{
     Answer, Choice, ChoiceId, CompletionSource, Diagnostic, DiagnosticLevel, EventKind, Extensions,
     FileDiff, MessageId, PermissionChoice, PermissionRequest, PlanUsage, Question, QuestionAnswer,
     QuestionId, QuestionRequest, RawTool, Request, RequestId, StopReason, ToolId, ToolInput,
-    ToolKind, ToolStatus, ToolUpdate, UsageWindow,
+    ToolKind, ToolStatus, ToolUpdate, TurnUsage, UsageWindow,
 };
 use crate::process::{self, Spawn};
 
@@ -1025,6 +1025,9 @@ impl Drive {
                 }))
                 .await?;
         }
+        if let Some(usage) = turn_usage(&frame["usage"]) {
+            self.events.send(DriverEvent::TurnUsage(usage)).await?;
+        }
         self.events
             .send(DriverEvent::TurnEnded(stop_reason(frame)))
             .await?;
@@ -1620,6 +1623,18 @@ fn slash_commands(commands: &Value) -> Vec<SlashCommand> {
         .collect()
 }
 
+/// The `result` frame's usage: the whole turn, cache reads and writes
+/// counted as input.
+fn turn_usage(usage: &Value) -> Option<TurnUsage> {
+    let count = |key: &str| usage[key].as_u64().unwrap_or(0);
+    let cached = count("cache_read_input_tokens");
+    usage.is_object().then(|| TurnUsage {
+        input_tokens: count("input_tokens") + count("cache_creation_input_tokens") + cached,
+        cached_input_tokens: cached,
+        output_tokens: count("output_tokens"),
+    })
+}
+
 /// Context occupancy of one assistant message.
 fn context_tokens(usage: &Value) -> Option<u64> {
     if !usage.is_object() {
@@ -1846,5 +1861,25 @@ impl WireError {
             WireError::Closed => AgentError::ProtocolFailed("agent closed the wire".into()),
             WireError::Control(message) => AgentError::ProtocolFailed(message),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn turn_usage_counts_cache_tokens_as_input() {
+        let usage = turn_usage(&json!({
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 10,
+            "cache_read_input_tokens": 100,
+            "output_tokens": 7,
+        }))
+        .unwrap();
+        assert_eq!(usage.input_tokens, 114);
+        assert_eq!(usage.cached_input_tokens, 100);
+        assert_eq!(usage.output_tokens, 7);
+        assert_eq!(turn_usage(&Value::Null), None);
     }
 }

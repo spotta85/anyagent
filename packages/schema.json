@@ -1184,6 +1184,17 @@
                   "items": {
                     "type": "string"
                   }
+                },
+                "usage": {
+                  "description": "Tokens this turn spent, when the agent reports them.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/TurnUsage"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
@@ -2315,6 +2326,35 @@
           "type": "string",
           "const": "Inferred"
         }
+      ]
+    },
+    "TurnUsage": {
+      "description": "Tokens one turn spent, summed over its model calls.",
+      "type": "object",
+      "properties": {
+        "input_tokens": {
+          "description": "Input tokens, cached ones included.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cached_input_tokens": {
+          "description": "The part of `input_tokens` read from cache.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "description": "Output tokens, reasoning included.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "input_tokens",
+        "cached_input_tokens",
+        "output_tokens"
       ]
     },
     "ErrorBody": {

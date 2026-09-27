@@ -941,3 +941,32 @@ async fn collect(events: &mut Events, count: usize) -> Vec<EventKind> {
     }
     kinds
 }
+
+/// The latest usage of a turn rides its `TurnEnded`; usage reported after
+/// the end is dropped, not carried into the next turn.
+#[tokio::test]
+async fn turn_usage_rides_turn_ended_and_never_leaks_into_the_next_turn() {
+    let usage = |input_tokens| crate::event::TurnUsage {
+        input_tokens,
+        cached_input_tokens: 2,
+        output_tokens: 3,
+    };
+    let script = Script::default()
+        .turn(vec![
+            Step::Usage(usage(10)),
+            Step::Usage(usage(25)),
+            Step::End(completed()),
+            Step::Usage(usage(99)),
+        ])
+        .turn(vec![Step::End(completed())]);
+    let (session, mut events) = open(MockAdapter::new(script), None).await;
+    session.prompt("one").await.unwrap();
+    let kinds = collect(&mut events, 2).await;
+    assert!(matches!(&kinds[1], EventKind::TurnEnded { usage: Some(u), .. } if *u == usage(25)));
+    session.prompt("two").await.unwrap();
+    let kinds = collect(&mut events, 2).await;
+    assert!(matches!(
+        &kinds[1],
+        EventKind::TurnEnded { usage: None, .. }
+    ));
+}

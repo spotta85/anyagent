@@ -29,7 +29,7 @@ use crate::event::{
     Answer, Choice, ChoiceId, CompletionSource, Diagnostic, DiagnosticLevel, EventKind, Extensions,
     FileDiff, MessageId, PermissionChoice, PermissionRequest, PlanUsage, Question, QuestionAnswer,
     QuestionId, QuestionRequest, RawTool, Request, RequestId, StopReason, ToolId, ToolInput,
-    ToolKind, ToolStatus, ToolUpdate, UsageWindow,
+    ToolKind, ToolStatus, ToolUpdate, TurnUsage, UsageWindow,
 };
 use crate::process::{self, Spawn};
 
@@ -72,6 +72,7 @@ impl Adapter for CodexAdapter {
                 models,
                 thread_id,
                 turn: None,
+                turn_usage: TurnUsage::default(),
                 turns,
                 turn_started: false,
                 pending_steer: None,
@@ -694,6 +695,8 @@ struct Drive {
     thread_id: String,
     /// The running wire turn, once `turn/start`'s response names it.
     turn: Option<String>,
+    /// What the running turn has spent, summed over its model calls.
+    turn_usage: TurnUsage,
     /// Completed parent-thread turn ids, oldest first; rollback cuts before one.
     turns: Vec<String>,
     /// `turn/started` seen. A steer sent before it is refused by the wire
@@ -761,6 +764,7 @@ impl Drive {
         match cmd {
             DriverCommand::StartTurn { input } => {
                 self.events.send(DriverEvent::TurnAck).await?;
+                self.turn_usage = TurnUsage::default();
                 let items = self.input_items(&input).await?;
                 let params = self.turn_params(items);
                 let id = self.wire.request("turn/start", params).await?;
@@ -1062,6 +1066,7 @@ impl Drive {
                 // `last` is the latest model call = current context occupancy;
                 // the window rides in the same frame.
                 let usage = &params["tokenUsage"];
+                self.add_turn_usage(&usage["last"]).await?;
                 let used = usage["last"]["totalTokens"]
                     .as_u64()
                     .or_else(|| usage["total"]["totalTokens"].as_u64());
@@ -1245,6 +1250,17 @@ impl Drive {
             },
         };
         self.events.send(DriverEvent::TurnEnded(stop)).await
+    }
+
+    /// Adds one model call's tokens to the turn and reports the sum.
+    async fn add_turn_usage(&mut self, last: &Value) -> Result<(), Gone> {
+        let count = |key: &str| last[key].as_u64().unwrap_or(0);
+        self.turn_usage.input_tokens += count("inputTokens");
+        self.turn_usage.cached_input_tokens += count("cachedInputTokens");
+        self.turn_usage.output_tokens += count("outputTokens");
+        self.events
+            .send(DriverEvent::TurnUsage(self.turn_usage))
+            .await
     }
 
     /// `error` notifications; a 401 means the credentials died.
