@@ -207,9 +207,7 @@ async fn handshake_reports_auth_version_options_and_token() {
     assert_eq!(text_option(&info, "mode").as_deref(), Some("on-request"));
     assert_eq!(text_option(&info, "sandbox").as_deref(), Some("read-only"));
 
-    // Skills are the slash commands: deduped across roots, junk and disabled
-    // ones dropped, the picker-sized `interface.shortDescription` preferred,
-    // each with its SKILL.md path and scope.
+    // Skills are the commands: deduped, junk and disabled dropped, short description first.
     let skill = |path: &str, scope: &str| CommandSource::Skill {
         path: Some(PathBuf::from(path)),
         scope: Some(scope.into()),

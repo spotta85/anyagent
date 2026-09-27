@@ -258,7 +258,9 @@ impl Runtime {
     /// Fast auth-only probe: does not wait for `availableCommands` (saves
     /// `PROBE_COMMANDS_WAIT`). Use when only `auth` is needed (e.g. kiro).
     pub async fn probe_auth(&self, agent: &AgentInstallation) -> Result<AuthStatus, AgentError> {
-        let opened = self.open(agent, throwaway_options()).await;
+        let mut options = throwaway_options();
+        options.details_only = true;
+        let opened = self.open(agent, options).await;
         match opened {
             Err(AgentError::AuthRequired { login }) => Ok(AuthStatus::Unauthenticated { login }),
             Err(e) => Err(e),
@@ -321,12 +323,10 @@ impl Runtime {
     }
 }
 
-/// Default options for the probes and the quota read: temp dir, never
-/// persisted, details only.
+/// Default options for the probes and the quota read: temp dir, never persisted.
 pub(crate) fn throwaway_options() -> SessionOptions {
     let mut options = SessionOptions::in_dir(std::env::temp_dir());
     options.throwaway = true;
-    options.details_only = true;
     options
 }
 
