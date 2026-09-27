@@ -300,8 +300,8 @@ async function runTurn(m) {
     return;
   }
 
-  // A background Agent (probed 2026-09-27, 2.1.283): its tool_result only says
-  // `async_launched`; progress and the notification arrive after the turn ended.
+  // A background Agent (probed 2026-09-27, 2.1.283): the tool_result says `async_launched` and the
+  // notification arrived after the turn ended; progress is moved after it to act out a long agent.
   if (flag('--bg-subagent')) {
     msgStart('msg_1');
     assistantTool('toolu_bga', 'Agent', { description: 'pong check', subagent_type: 'general-purpose', model: 'haiku', run_in_background: true, prompt: 'Reply PONG.' });
