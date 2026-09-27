@@ -137,7 +137,8 @@ fn text_option(session: &anyagent::SessionInfo, id: &str) -> Option<String> {
     })
 }
 
-/// Handshake reports auth, version 0.147.0, capabilities, token, and deduped enabled skills (with path and scope) as commands.
+/// Handshake reports auth, version 0.147.0, capabilities, token, and deduped
+/// enabled skills (with path and scope) as commands.
 #[tokio::test]
 async fn handshake_reports_auth_version_options_and_token() {
     let (session, mut events) = open("handshake", "").await;

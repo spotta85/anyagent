@@ -257,7 +257,7 @@ async fn handshake(
         .await
         .ok()
         .and_then(|v| v["version"].as_str().map(str::to_owned));
-    // Which commands are skills (~5 ms); a CLI that refuses it marks none.
+    // Skills rows: `@internal` in the CLI's schema (2.1.283); a CLI that refuses it marks none.
     let skills = wire
         .roundtrip(json!({ "subtype": "get_skills_dialog" }))
         .await
@@ -1310,9 +1310,8 @@ impl Drive {
                 }
                 Ok(())
             }
-            // The CLI pushes its whole slash-command list when it changes
-            // (2.1.261); it replaces the one from `initialize` once the
-            // fresh skills rows arrive in `on_control_response`.
+            // The CLI pushes its whole command list when it changes (2.1.261); it
+            // replaces the old one once fresh skills rows arrive (`on_control_response`).
             "commands_changed" => {
                 let id = self
                     .wire
