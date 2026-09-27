@@ -301,28 +301,11 @@ pub(crate) fn set_select_option(
     choices: Vec<ConfigChoice>,
     current: Option<String>,
 ) {
-    let id = ConfigId::new(id);
-    info.details.config_options.retain(|o| o.id != id);
-    info.configuration.options.remove(&id);
-    if choices.is_empty() {
-        return;
-    }
-    let current = current
-        .filter(|c| choices.iter().any(|choice| &choice.value == c))
-        .map(ConfigValue::Text);
-    if let Some(current) = &current {
-        info.configuration
-            .options
-            .insert(id.clone(), current.clone());
-    }
-    info.details.config_options.push(ConfigOption {
+    replace_option(
+        info,
         id,
-        name: name.into(),
-        category: Some(category.into()),
-        kind: ConfigKind::Select { choices },
-        current,
-        live: true,
-    });
+        select_option(id, name, category, choices, current),
+    );
 }
 
 /// The `effort` option follows the selected model: these are the new
@@ -332,25 +315,14 @@ pub(crate) fn set_effort_option(
     choices: Vec<ConfigChoice>,
     current: Option<String>,
 ) {
-    set_select_option(
-        info,
-        "effort",
-        "Reasoning effort",
-        "thought_level",
-        choices,
-        current,
-    );
+    replace_option(info, "effort", effort_option(choices, current));
 }
 
 /// Levels as plain choices (value = label), for wires that list them by name.
 pub(crate) fn level_choices<'a>(levels: impl IntoIterator<Item = &'a str>) -> Vec<ConfigChoice> {
     levels
         .into_iter()
-        .map(|level| ConfigChoice {
-            value: level.to_owned(),
-            label: level.to_owned(),
-            description: None,
-        })
+        .map(|level| ConfigChoice::new(level, level, None))
         .collect()
 }
 
@@ -360,25 +332,96 @@ pub(crate) fn set_fast_option(info: &mut DriverInfo, current: Option<bool>, live
     info.details.config_options.retain(|option| option.id != id);
     info.configuration.options.remove(&id);
     if let Some(current) = current {
-        let value = ConfigValue::Bool(current);
         let position = info
             .details
             .config_options
             .iter()
             .position(|option| option.id.as_str() == "model")
             .map_or(0, |index| index + 1);
-        info.details.config_options.insert(
-            position,
-            ConfigOption {
-                id: id.clone(),
-                name: "Fast mode".into(),
-                category: Some("speed".into()),
-                kind: ConfigKind::Boolean,
-                current: Some(value.clone()),
-                live,
-            },
-        );
-        info.configuration.options.insert(id, value);
+        info.details
+            .config_options
+            .insert(position, fast_option(current, live));
+        info.configuration
+            .options
+            .insert(id, ConfigValue::Bool(current));
+    }
+}
+
+/// One model's own options for its `model` choice: `effort` at the model's
+/// `default` level, and `fast` (off) when the model supports it.
+pub(crate) fn model_options(
+    levels: Vec<ConfigChoice>,
+    default: Option<String>,
+    fast: bool,
+) -> Vec<ConfigOption> {
+    let fast = fast.then(|| fast_option(false, true));
+    effort_option(levels, default)
+        .into_iter()
+        .chain(fast)
+        .collect()
+}
+
+/// The live `effort` select over these levels; `None` without levels.
+pub(crate) fn effort_option(
+    levels: Vec<ConfigChoice>,
+    current: Option<String>,
+) -> Option<ConfigOption> {
+    select_option(
+        "effort",
+        "Reasoning effort",
+        "thought_level",
+        levels,
+        current,
+    )
+}
+
+/// A live select; `None` without choices, and `current` dropped unless offered.
+fn select_option(
+    id: &str,
+    name: &str,
+    category: &str,
+    choices: Vec<ConfigChoice>,
+    current: Option<String>,
+) -> Option<ConfigOption> {
+    if choices.is_empty() {
+        return None;
+    }
+    let current = current
+        .filter(|c| choices.iter().any(|choice| &choice.value == c))
+        .map(ConfigValue::Text);
+    Some(ConfigOption {
+        id: ConfigId::new(id),
+        name: name.into(),
+        category: Some(category.into()),
+        kind: ConfigKind::Select { choices },
+        current,
+        live: true,
+    })
+}
+
+/// The Fast mode boolean.
+fn fast_option(current: bool, live: bool) -> ConfigOption {
+    ConfigOption {
+        id: ConfigId::new("fast"),
+        name: "Fast mode".into(),
+        category: Some("speed".into()),
+        kind: ConfigKind::Boolean,
+        current: Some(ConfigValue::Bool(current)),
+        live,
+    }
+}
+
+/// Puts `option` in place of option `id` (none removes it), keeping the
+/// configuration's value in step.
+fn replace_option(info: &mut DriverInfo, id: &str, option: Option<ConfigOption>) {
+    let id = ConfigId::new(id);
+    info.details.config_options.retain(|o| o.id != id);
+    info.configuration.options.remove(&id);
+    if let Some(option) = option {
+        if let Some(current) = &option.current {
+            info.configuration.options.insert(id, current.clone());
+        }
+        info.details.config_options.push(option);
     }
 }
 

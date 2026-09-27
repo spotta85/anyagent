@@ -262,12 +262,9 @@ async fn models(exe: &Path, env: &[(String, String)]) -> Vec<ConfigChoice> {
         .into_iter()
         .flatten()
         .filter_map(|model| {
-            let value = model["id"].as_str()?.to_owned();
-            Some(ConfigChoice {
-                label: model["label"].as_str().unwrap_or(&value).to_owned(),
-                value,
-                description: None,
-            })
+            let value = model["id"].as_str()?;
+            let label = model["label"].as_str().unwrap_or(value);
+            Some(ConfigChoice::new(value, label, None))
         })
         .collect()
 }

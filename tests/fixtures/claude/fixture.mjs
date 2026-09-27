@@ -77,6 +77,7 @@ function onControl(m) {
         models: [
           { value: 'default', displayName: 'Default (recommended)', description: 'Opus 5 with 1M context', supportsFastMode: !flag('--no-fast-metadata'), supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] },
           { value: 'sonnet', displayName: 'Sonnet', description: 'Fast for everyday tasks', supportedEffortLevels: ['low', 'high'] },
+          { value: 'haiku', displayName: 'Haiku', description: 'Fastest for quick answers' },
         ],
         // Logged out, the real CLI still sends an account object — it just
         // names no token source (probed live 2026-08-27, claude 2.1.241).

@@ -28,7 +28,8 @@ use tokio::sync::mpsc;
 use crate::adapter::{
     Adapter, CLOSE_GRACE, ConnectRequest, DriverCommand, DriverConnection, DriverEvent, DriverInfo,
     Emitter, FRAME_BUFFER, Gone, HANDSHAKE_TIMEOUT, OUTPUT_CAP, WireRecorder, apply_selection,
-    attach, cap, level_choices, login_methods, offers, plan_entries, selected, set_effort_option,
+    attach, cap, level_choices, login_methods, model_options, offers, plan_entries, selected,
+    set_effort_option,
 };
 use crate::agent::{
     AgentDetails, AuthKind, AuthStatus, Capabilities, Capability, ConfigChoice, ConfigId,
@@ -271,7 +272,8 @@ async fn handshake(
         .as_str()
         .ok_or_else(|| AgentError::ProtocolFailed("session create returned no id".into()))?
         .to_owned();
-    let choices = model_choices(&providers, &connected);
+    let variants = model_variants(&providers);
+    let choices = model_choices(&providers, &connected, &variants);
     let (model, effort) = start_config(&request.options, &choices)?;
     let mut info = driver_info(
         choices,
@@ -289,7 +291,6 @@ async fn handshake(
             &ConfigValue::Text(model),
         );
     }
-    let variants = model_variants(&providers);
     sync_effort(&mut info, &variants);
     if let Some(effort) = effort {
         let value = ConfigValue::Text(effort.clone());
@@ -495,9 +496,13 @@ fn driver_info(
     }
 }
 
-/// The models of the connected providers as config choices, valued
-/// `providerID/modelID` because a prompt needs both halves.
-fn model_choices(providers: &Value, connected: &Value) -> Vec<ConfigChoice> {
+/// The connected providers' models as choices valued `providerID/modelID`
+/// (a prompt needs both halves), each with its variants as `effort`.
+fn model_choices(
+    providers: &Value,
+    connected: &Value,
+    variants: &HashMap<String, Vec<String>>,
+) -> Vec<ConfigChoice> {
     let connected: Vec<&str> = connected
         .as_array()
         .into_iter()
@@ -513,10 +518,10 @@ fn model_choices(providers: &Value, connected: &Value) -> Vec<ConfigChoice> {
             continue;
         }
         for (mid, model) in provider["models"].as_object().into_iter().flatten() {
+            let value = format!("{pid}/{mid}");
             choices.push(ConfigChoice {
-                value: format!("{pid}/{mid}"),
-                label: model["name"].as_str().unwrap_or(mid).to_owned(),
-                description: None,
+                options: model_options(variant_choices(variants, &value), None, false),
+                ..ConfigChoice::new(value, model["name"].as_str().unwrap_or(mid), None)
             });
         }
     }
@@ -631,10 +636,17 @@ fn model_variants(providers: &Value) -> HashMap<String, Vec<String>> {
 /// prompt as `variant`.
 fn sync_effort(info: &mut DriverInfo, variants: &HashMap<String, Vec<String>>) {
     let choices = selected(info, "model")
-        .and_then(|model| variants.get(&model))
-        .map(|names| level_choices(names.iter().map(String::as_str)))
+        .map(|model| variant_choices(variants, &model))
         .unwrap_or_default();
     set_effort_option(info, choices, selected(info, "effort"));
+}
+
+/// One model's variants as effort levels; none for a model without any.
+fn variant_choices(variants: &HashMap<String, Vec<String>>, model: &str) -> Vec<ConfigChoice> {
+    variants
+        .get(model)
+        .map(|names| level_choices(names.iter().map(String::as_str)))
+        .unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------
@@ -2484,21 +2496,44 @@ mod tests {
         assert_eq!(variants["p/a"], ["low", "high", "max", "custom"]);
         assert!(!variants.contains_key("p/c"));
 
-        let choices = model_choices(&providers, &json!(["p"]));
-        let mut info = driver_info(choices, &json!([]), &json!({}), AuthStatus::Unknown, None);
+        let choices = model_choices(&providers, &json!(["p"]), &variants);
+        // Each model choice carries its own `effort`; `c` has none.
+        let nested = |value: &str| {
+            choices
+                .iter()
+                .find(|c| c.value == value)
+                .unwrap()
+                .options
+                .clone()
+        };
+        assert!(nested("p/c").is_empty());
+        let a = nested("p/a");
+        let ConfigKind::Select { choices: levels } = &a[0].kind else {
+            panic!("effort is a select");
+        };
+        assert_eq!(levels.last().unwrap().value, "custom");
+        let mut info = driver_info(
+            choices.clone(),
+            &json!([]),
+            &json!({}),
+            AuthStatus::Unknown,
+            None,
+        );
         let select = |info: &mut DriverInfo, id: &str, value: &str| {
             apply_selection(info, &ConfigId::new(id), &ConfigValue::Text(value.into()));
         };
-        let effort = |info: &DriverInfo| {
+        let option = |info: &DriverInfo| {
             info.details
                 .config_options
                 .iter()
                 .find(|o| o.id.as_str() == "effort")
-                .map(|o| o.current.clone())
+                .cloned()
         };
+        let effort = |info: &DriverInfo| option(info).map(|o| o.current);
         select(&mut info, "model", "p/a");
         sync_effort(&mut info, &variants);
-        assert_eq!(effort(&info), Some(None));
+        // Selecting the model makes the live option its nested one.
+        assert_eq!(option(&info).as_ref(), a.first());
         select(&mut info, "effort", "high");
         // A model that still offers `high` keeps it; one that doesn't drops it.
         select(&mut info, "model", "p/b");
@@ -2521,7 +2556,7 @@ mod tests {
             { "id": "opencode", "models": { "big-pickle": { "name": "Big Pickle" } } },
             { "id": "offline", "models": { "x": { "name": "X" } } },
         ] });
-        let choices = model_choices(&providers, &json!(["opencode"]));
+        let choices = model_choices(&providers, &json!(["opencode"]), &HashMap::new());
         assert_eq!(choices.len(), 1);
         assert_eq!(choices[0].value, "opencode/big-pickle");
         assert_eq!(choices[0].label, "Big Pickle");

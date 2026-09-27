@@ -344,11 +344,8 @@ fn model_choices(models: &Value) -> Vec<ConfigChoice> {
         .flatten()
         .filter_map(|model| {
             let value = model_value(model)?;
-            Some(ConfigChoice {
-                label: model["name"].as_str().unwrap_or(&value).to_owned(),
-                value,
-                description: None,
-            })
+            let label = model["name"].as_str().unwrap_or(&value).to_owned();
+            Some(ConfigChoice::new(value, label, None))
         })
         .collect()
 }

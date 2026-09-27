@@ -339,6 +339,25 @@ pub struct ConfigChoice {
     pub value: String,
     pub label: String,
     pub description: Option<String>,
+    /// For a `model` choice: the options this model offers once selected.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<ConfigOption>,
+}
+
+impl ConfigChoice {
+    /// A choice with no options of its own.
+    pub(crate) fn new(
+        value: impl Into<String>,
+        label: impl Into<String>,
+        description: Option<String>,
+    ) -> Self {
+        Self {
+            value: value.into(),
+            label: label.into(),
+            description,
+            options: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
