@@ -1047,7 +1047,7 @@ impl Drive {
             // turn frames must not move the parent's turn.
             _ if method.starts_with("turn/") => Ok(()),
             // Content: the parent's translation, attributed to the subagent.
-            _ if method.starts_with("item/") || method == "error" => {
+            _ if method.starts_with("item/") || matches!(method, "error" | "model/rerouted") => {
                 self.child_tool = Some(tool);
                 let result = self.on_parent_frame(method, params).await;
                 self.child_tool = None;
@@ -1135,6 +1135,35 @@ impl Drive {
                 })
                 .await
             }
+            // The turn's whole diff so far (probed 2026-09-27, 0.154.0).
+            "turn/diff/updated" => {
+                let unified = params["diff"].as_str().unwrap_or_default().to_owned();
+                self.content(EventKind::TurnDiff { unified }).await
+            }
+            // From the 0.154.0 schema: a stdio server's MCP progress was not forwarded
+            // when probed 2026-09-27. Progress of an untracked item is dropped.
+            "item/mcpToolCall/progress" => {
+                let id = params["itemId"].as_str().unwrap_or_default();
+                if !self.tools.contains_key(id) {
+                    return Ok(());
+                }
+                self.content(EventKind::ToolProgress {
+                    tool_id: ToolId::new(id),
+                    message: params["message"].as_str().map(str::to_owned),
+                    elapsed_ms: None,
+                })
+                .await
+            }
+            // From the 0.154.0 schema; the reroute is server-side and was not seen live.
+            "model/rerouted" => {
+                let model = |key: &str| params[key].as_str().unwrap_or_default().to_owned();
+                self.content(EventKind::ModelRerouted {
+                    from: model("fromModel"),
+                    to: model("toModel"),
+                    reason: params["reason"].as_str().map(str::to_owned),
+                })
+                .await
+            }
             "thread/tokenUsage/updated" => {
                 // `last` is the latest model call = current context occupancy;
                 // the window rides in the same frame.
@@ -1169,7 +1198,7 @@ impl Drive {
                 None => Ok(()),
             },
             "error" => self.on_error(params).await,
-            "warning" | "guardianWarning" | "configWarning" | "model/rerouted" => {
+            "warning" | "guardianWarning" | "configWarning" => {
                 let text = notice_text(params);
                 if self.is_own_noise(&text) {
                     return Ok(());
@@ -1213,8 +1242,7 @@ impl Drive {
             | "serverRequest/resolved"
             | "remoteControl/status/changed"
             | "account/updated"
-            | "account/login/completed"
-            | "turn/diff/updated" => Ok(()),
+            | "account/login/completed" => Ok(()),
             other => {
                 let mut extensions = Extensions::new();
                 extensions.insert("codex/raw_frame".into(), params.clone());

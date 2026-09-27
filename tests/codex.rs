@@ -1030,6 +1030,52 @@ async fn cancel_with_an_mcp_approval_open_replies_cancel() {
     session.close().await.unwrap();
 }
 
+/// MCP progress of the running call, the turn diff and a reroute each map to
+/// their event; progress of an unknown item is dropped, and the reroute is no warning.
+#[tokio::test]
+async fn progress_diff_and_reroute_are_events() {
+    let (session, mut events) = open("live-events", "").await;
+    session
+        .prompt("write-file mcp-tool rerouted please")
+        .await
+        .unwrap();
+    let (mut calls, mut progress, mut diffs, mut reroutes, mut diagnostics) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    loop {
+        match next(&mut events).await.kind {
+            EventKind::ToolUpdated(tool) if matches!(tool.kind, ToolKind::Mcp { .. }) => {
+                calls.push(tool.id)
+            }
+            EventKind::ToolProgress {
+                tool_id, message, ..
+            } => progress.push((tool_id, message)),
+            EventKind::TurnDiff { unified } => diffs.push(unified),
+            reroute @ EventKind::ModelRerouted { .. } => reroutes.push(reroute),
+            EventKind::Diagnostic(d) => diagnostics.push(d.message),
+            EventKind::RequestOpened(request) => session
+                .answer(
+                    request.id(),
+                    Answer::Permission(PermissionChoice::AllowOnce),
+                )
+                .await
+                .unwrap(),
+            EventKind::TurnEnded { .. } => break,
+            _ => {}
+        }
+    }
+    assert_eq!(progress, [(calls[0].clone(), Some("halfway there".into()))]);
+    assert_eq!(diffs.len(), 1);
+    assert!(diffs[0].contains("+++ b/fruit.txt\n@@ -0,0 +1 @@\n+PEAR\n"));
+    let reroute = EventKind::ModelRerouted {
+        from: "gpt-6".into(),
+        to: "gpt-6-mini".into(),
+        reason: Some("highRiskCyberActivity".into()),
+    };
+    assert_eq!(reroutes, [reroute]);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    session.close().await.unwrap();
+}
+
 /// Steer sent before turn/started is held until accepted and folded via Steered delivery.
 #[tokio::test]
 async fn a_steer_folds_into_the_running_turn() {
