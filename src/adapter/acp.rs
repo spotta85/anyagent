@@ -16,8 +16,8 @@ use tokio::sync::mpsc;
 
 use crate::adapter::{
     Adapter, CLOSE_GRACE, ConnectRequest, DriverCommand, DriverConnection, DriverEvent, DriverInfo,
-    Emitter, FRAME_BUFFER, Gone, HANDSHAKE_TIMEOUT, LineWire, WireRecorder, attach, level_choices,
-    offers, plan_entries, selected, set_effort_option, set_select_option,
+    Emitter, FRAME_BUFFER, Gone, HANDSHAKE_TIMEOUT, LineWire, WireRecorder, attach, child_env_set,
+    level_choices, offers, plan_entries, selected, set_effort_option, set_select_option,
 };
 use crate::agent::{
     AccountInfo, AgentDetails, AgentInstallation, AuthKind, AuthStatus, Capabilities, Capability,
@@ -98,12 +98,10 @@ impl Adapter for AcpAdapter {
         // API key in the session's env, else the process env, is taken as
         // the one in use, else the catalog's proven kind.
         let open_auth_kind = self.profile.and_then(|p| {
-            let keyed = p.api_key_env.iter().any(|var| {
-                let session = request.options.env.0.get(*var).cloned();
-                session
-                    .or_else(|| std::env::var(var).ok())
-                    .is_some_and(|v| !v.trim().is_empty())
-            });
+            let keyed = p
+                .api_key_env
+                .iter()
+                .any(|var| child_env_set(&request.options, var));
             p.open_auth_kind
                 .clone()
                 .map(|kind| if keyed { AuthKind::ApiKey } else { kind })
