@@ -1364,17 +1364,15 @@ impl Drive {
                     || persist
                         .as_array()
                         .is_some_and(|forms| forms.iter().any(|f| *f == "session"));
+                let mut options = vec![PermissionChoice::AllowOnce];
+                if session {
+                    options.push(PermissionChoice::AllowAlways);
+                }
+                options.push(PermissionChoice::DenyOnce);
                 Request::Permission(PermissionRequest {
                     id,
                     tool: self.mcp_tool_for(params),
-                    options: [
-                        Some(PermissionChoice::AllowOnce),
-                        session.then_some(PermissionChoice::AllowAlways),
-                        Some(PermissionChoice::DenyOnce),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .collect(),
+                    options,
                     detail: params["message"].as_str().map(str::to_owned),
                 })
             }
