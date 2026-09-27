@@ -633,11 +633,11 @@ fn sync_first_class_models(info: &mut DriverInfo, models: &Value) {
         .iter()
         .filter_map(|m| {
             let id = m["modelId"].as_str()?;
-            Some(ConfigChoice {
-                value: id.to_owned(),
-                label: m["name"].as_str().unwrap_or(id).to_owned(),
-                description: m["description"].as_str().map(str::to_owned),
-            })
+            Some(ConfigChoice::new(
+                id,
+                m["name"].as_str().unwrap_or(id),
+                m["description"].as_str().map(str::to_owned),
+            ))
         })
         .collect();
     let current = list.iter().find(|m| m["modelId"].as_str() == current_id);
@@ -647,11 +647,11 @@ fn sync_first_class_models(info: &mut DriverInfo, models: &Value) {
         .flatten()
         .filter_map(|e| {
             let value = e["value"].as_str().or(e["id"].as_str())?;
-            Some(ConfigChoice {
-                value: value.to_owned(),
-                label: e["label"].as_str().unwrap_or(value).to_owned(),
-                description: e["description"].as_str().map(str::to_owned),
-            })
+            Some(ConfigChoice::new(
+                value,
+                e["label"].as_str().unwrap_or(value),
+                e["description"].as_str().map(str::to_owned),
+            ))
         })
         .collect();
     let effort = selected(info, "effort")
@@ -801,11 +801,7 @@ fn apply_session_config(
                 choices: modes
                     .available_modes
                     .iter()
-                    .map(|m| ConfigChoice {
-                        value: m.id.0.to_string(),
-                        label: m.name.clone(),
-                        description: m.description.clone(),
-                    })
+                    .map(|m| ConfigChoice::new(&*m.id.0, &m.name, m.description.clone()))
                     .collect(),
             },
             current: Some(ConfigValue::Text(modes.current_mode_id.0.to_string())),
@@ -888,11 +884,7 @@ fn select_choices(options: &acp::SessionConfigSelectOptions) -> Vec<ConfigChoice
         _ => Vec::new(),
     };
     flat.iter()
-        .map(|o| ConfigChoice {
-            value: o.value.0.to_string(),
-            label: o.name.clone(),
-            description: o.description.clone(),
-        })
+        .map(|o| ConfigChoice::new(&*o.value.0, &o.name, o.description.clone()))
         .collect()
 }
 

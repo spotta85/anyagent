@@ -466,6 +466,33 @@ async fn effort_falls_back_when_the_new_model_lacks_it() {
         text_option(&session.info(), "effort").as_deref(),
         Some("high")
     );
+    // Each model choice carries its own effort (at its default) and fast.
+    let model = session
+        .info()
+        .details
+        .config_options
+        .into_iter()
+        .find(|o| o.id.as_str() == "model")
+        .unwrap();
+    let ConfigKind::Select { choices } = model.kind else {
+        panic!("model is a select");
+    };
+    let nested = |value: &str| {
+        choices
+            .iter()
+            .find(|c| c.value == value)
+            .unwrap()
+            .options
+            .clone()
+    };
+    let gpt6 = nested("gpt-6");
+    let ids: Vec<&str> = gpt6.iter().map(|o| o.id.as_str()).collect();
+    assert_eq!(ids, ["effort", "fast"]);
+    assert_eq!(gpt6[0].current, Some(ConfigValue::from("medium")));
+    let ConfigKind::Select { choices: levels } = &gpt6[0].kind else {
+        panic!("effort is a select");
+    };
+    assert!(levels.iter().any(|c| c.value == "high"));
     // gpt-6-mini has no "high": the effort falls back to its default.
     session.configure("model", "gpt-6-mini").await.unwrap();
     loop {
@@ -484,6 +511,8 @@ async fn effort_falls_back_when_the_new_model_lacks_it() {
                 choices.iter().map(|c| c.value.as_str()).collect::<Vec<_>>(),
                 vec!["low", "medium"]
             );
+            // The live option is the model's nested one.
+            assert_eq!(Some(effort), nested("gpt-6-mini").first());
             break;
         }
     }

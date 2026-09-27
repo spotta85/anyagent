@@ -16,8 +16,8 @@ use tokio::sync::mpsc;
 use crate::adapter::{
     Adapter, CLOSE_GRACE, ConnectRequest, DriverCommand, DriverConnection, DriverEvent, DriverInfo,
     Emitter, FRAME_BUFFER, Gone, HANDSHAKE_TIMEOUT, LineWire, OUTPUT_CAP, WireRecorder, attach,
-    cap, level_choices, login_methods, plan_entries, selected, set_effort_option, set_fast_option,
-    with_stderr,
+    cap, level_choices, login_methods, model_options, plan_entries, selected, set_effort_option,
+    set_fast_option, with_stderr,
 };
 use crate::agent::{
     AccountInfo, AgentDetails, AuthKind, AuthStatus, Capabilities, Capability, ConfigChoice,
@@ -332,16 +332,24 @@ fn effort_levels(models: &Value, model: &str) -> Vec<ConfigChoice> {
     level_choices(levels)
 }
 
-/// The `initialize` model catalog as config choices.
+/// The `initialize` model catalog as config choices, each with its own
+/// effort levels (the catalog names no default) and Fast mode.
 fn model_choices(models: &Value) -> Vec<ConfigChoice> {
     models
         .as_array()
         .into_iter()
         .flatten()
-        .map(|m| ConfigChoice {
-            value: m["value"].as_str().unwrap_or_default().to_owned(),
-            label: m["displayName"].as_str().unwrap_or_default().to_owned(),
-            description: m["description"].as_str().map(str::to_owned),
+        .map(|m| {
+            let value = m["value"].as_str().unwrap_or_default();
+            let fast = supports_fast(models, value);
+            ConfigChoice {
+                options: model_options(effort_levels(models, value), None, fast),
+                ..ConfigChoice::new(
+                    value,
+                    m["displayName"].as_str().unwrap_or_default(),
+                    m["description"].as_str().map(str::to_owned),
+                )
+            }
         })
         .collect()
 }
@@ -424,11 +432,7 @@ fn driver_info(init: &Value, version: Option<String>, request: &ConnectRequest) 
         category: Some("mode".into()),
         kind: ConfigKind::Select {
             choices: ["default", "acceptEdits", "plan", "bypassPermissions"]
-                .map(|value| ConfigChoice {
-                    value: value.into(),
-                    label: value.into(),
-                    description: None,
-                })
+                .map(|value| ConfigChoice::new(value, value, None))
                 .to_vec(),
         },
         current: Some(ConfigValue::Text(mode.clone())),

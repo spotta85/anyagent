@@ -1692,3 +1692,54 @@ async fn effort_choices_follow_a_live_model_switch() {
     );
     session.close().await.unwrap();
 }
+
+/// Each model choice carries that model's own options, and selecting the
+/// model makes the live `effort` equal its nested one.
+#[tokio::test]
+async fn model_choices_carry_each_models_own_options() {
+    let (session, mut events) = open("model-options", "").await;
+    let option = |info: &anyagent::SessionInfo, id: &str| {
+        info.details
+            .config_options
+            .iter()
+            .find(|o| o.id.as_str() == id)
+            .cloned()
+    };
+    let model = option(&session.info(), "model").unwrap();
+    let ConfigKind::Select { choices } = &model.kind else {
+        panic!("expected Select, got {:?}", model.kind);
+    };
+    let nested = |value: &str| {
+        choices
+            .iter()
+            .find(|c| c.value == value)
+            .unwrap()
+            .options
+            .clone()
+    };
+    // haiku has no effort levels and no Fast mode.
+    assert!(nested("haiku").is_empty());
+    // default lists `max`, which sonnet lacks, and Fast mode off.
+    let default = nested("default");
+    let ids: Vec<&str> = default.iter().map(|o| o.id.as_str()).collect();
+    assert_eq!(ids, ["effort", "fast"]);
+    let ConfigKind::Select { choices: levels } = &default[0].kind else {
+        panic!("effort is a select");
+    };
+    assert!(levels.iter().any(|c| c.value == "max"));
+    assert_eq!(default[1].current, Some(ConfigValue::Bool(false)));
+    // Nested options carry no options of their own.
+    assert!(levels.iter().all(|c| c.options.is_empty()));
+    session.configure("model", "sonnet").await.unwrap();
+    let info = loop {
+        if let EventKind::SessionUpdated(info) = next(&mut events).await.kind
+            && info.configuration.options.get(&ConfigId::new("model"))
+                == Some(&ConfigValue::from("sonnet"))
+        {
+            break info;
+        }
+    };
+    assert_eq!(option(&info, "effort").as_ref(), nested("sonnet").first());
+    assert_eq!(nested("sonnet").len(), 1);
+    session.close().await.unwrap();
+}

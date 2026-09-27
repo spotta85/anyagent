@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 use crate::adapter::{
     Adapter, CLOSE_GRACE, ConnectRequest, DriverCommand, DriverConnection, DriverEvent, DriverInfo,
     Emitter, FRAME_BUFFER, Gone, HANDSHAKE_TIMEOUT, LineWire, OUTPUT_CAP, WireRecorder, attach,
-    cap, login_methods, plan_entries, selected, set_effort_option, with_stderr,
+    cap, login_methods, model_options, plan_entries, selected, set_effort_option, with_stderr,
 };
 use crate::agent::{
     AccountInfo, AgentDetails, AuthKind, AuthStatus, Capabilities, Capability, ConfigChoice,
@@ -546,17 +546,9 @@ fn driver_info(
         current: model.clone().map(ConfigValue::Text),
         live: true,
     };
-    let effort_option = model.as_deref().and_then(|m| {
-        let choices = effort_choices(models, m);
-        (!choices.is_empty()).then(|| ConfigOption {
-            id: ConfigId::new("effort"),
-            name: "Reasoning effort".into(),
-            category: Some("thought_level".into()),
-            kind: ConfigKind::Select { choices },
-            current: effort.clone().map(ConfigValue::Text),
-            live: true,
-        })
-    });
+    let effort_option = model
+        .as_deref()
+        .and_then(|m| crate::adapter::effort_option(effort_choices(models, m), effort.clone()));
     let tier = config.tier.clone().unwrap_or_else(|| "default".into());
     let tier_choices = tier_choices(models);
     let tier_option = (tier_choices.len() > 1).then(|| ConfigOption {
@@ -573,11 +565,7 @@ fn driver_info(
         choices: values
             .iter()
             .chain(std::iter::once(&current).filter(|c| !values.contains(*c)))
-            .map(|value| ConfigChoice {
-                value: (*value).to_owned(),
-                label: (*value).to_owned(),
-                description: None,
-            })
+            .map(|value| ConfigChoice::new(*value, *value, None))
             .collect(),
     };
     let mode_option = ConfigOption {
@@ -1831,17 +1819,26 @@ fn default_effort(models: &Value, model: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// The `model/list` catalog as config choices; hidden entries stay hidden.
+/// The `model/list` catalog as config choices, each with its own effort
+/// levels and Fast mode; hidden entries stay hidden.
 fn model_choices(models: &Value) -> Vec<ConfigChoice> {
     models
         .as_array()
         .into_iter()
         .flatten()
         .filter(|m| m["hidden"].as_bool() != Some(true))
-        .map(|m| ConfigChoice {
-            value: m["id"].as_str().unwrap_or_default().to_owned(),
-            label: m["displayName"].as_str().unwrap_or_default().to_owned(),
-            description: m["description"].as_str().map(str::to_owned),
+        .map(|m| {
+            let id = m["id"].as_str().unwrap_or_default();
+            let levels = effort_choices(models, id);
+            let fast = fast_tier(models, id).is_some();
+            ConfigChoice {
+                options: model_options(levels, default_effort(models, id), fast),
+                ..ConfigChoice::new(
+                    id,
+                    m["displayName"].as_str().unwrap_or_default(),
+                    m["description"].as_str().map(str::to_owned),
+                )
+            }
         })
         .collect()
 }
@@ -1853,11 +1850,9 @@ fn effort_choices(models: &Value, model: &str) -> Vec<ConfigChoice> {
         .into_iter()
         .flatten()
         .filter_map(|level| {
-            Some(ConfigChoice {
-                value: level["reasoningEffort"].as_str()?.to_owned(),
-                label: level["reasoningEffort"].as_str()?.to_owned(),
-                description: level["description"].as_str().map(str::to_owned),
-            })
+            let effort = level["reasoningEffort"].as_str()?;
+            let description = level["description"].as_str().map(str::to_owned);
+            Some(ConfigChoice::new(effort, effort, description))
         })
         .collect()
 }
@@ -1866,11 +1861,7 @@ fn effort_choices(models: &Value, model: &str) -> Vec<ConfigChoice> {
 /// `model/list`). Tiers are identical across the models that have them, so
 /// one option serves all; `turn/start` resolves "default" per model.
 fn tier_choices(models: &Value) -> Vec<ConfigChoice> {
-    let mut choices = vec![ConfigChoice {
-        value: "default".into(),
-        label: "Standard".into(),
-        description: None,
-    }];
+    let mut choices = vec![ConfigChoice::new("default", "Standard", None)];
     for tier in models
         .as_array()
         .into_iter()
@@ -1882,11 +1873,11 @@ fn tier_choices(models: &Value) -> Vec<ConfigChoice> {
             continue;
         };
         if choices.iter().all(|c| c.value != id) {
-            choices.push(ConfigChoice {
-                value: id.to_owned(),
-                label: tier["name"].as_str().unwrap_or(id).to_owned(),
-                description: tier["description"].as_str().map(str::to_owned),
-            });
+            choices.push(ConfigChoice::new(
+                id,
+                tier["name"].as_str().unwrap_or(id),
+                tier["description"].as_str().map(str::to_owned),
+            ));
         }
     }
     choices
