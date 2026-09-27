@@ -97,6 +97,18 @@ once and resuming one by token.
 Any other ACP agent works without a catalog entry via
 `AgentInstallation::acp(name, path, args)`.
 
+## Built on anyagent
+
+Real apps whose agent layer is anyagent. Numbers are `git diff` of the port, non-test lines.
+
+| App | What anyagent replaced | Deleted | Added | Details |
+|---|---|---|---|---|
+| [T3 Code](https://github.com/pingdotgg/t3code) | Six per-agent adapters, ACP client, Codex app-server client | 43,295 hand-written + 68,414 generated | 3,242 | [docs/ports/t3-code](docs/ports/t3-code/README.md) |
+| laptop-agent | Its ACP harness layer | 877 | 1,200 (and every agent in the catalog instead of one) | commit "Replace the ACP harness layer with an anyagent-backed driver" |
+| Zeron | Built on anyagent from the start | – | – | `crates/harness` |
+
+Each port also produces a list of what the app needed that anyagent lacked; T3's is [gaps.md](docs/ports/t3-code/gaps.md).
+
 ## Docs
 **[anyagent.mintlify.site](https://anyagent.mintlify.site)**
 
