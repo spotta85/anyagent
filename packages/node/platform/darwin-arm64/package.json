@@ -1,6 +1,6 @@
 {
   "name": "@anyagent-ts/darwin-arm64",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "The anyagent binary for macOS arm64. Installed by the anyagent package; do not depend on it directly.",
   "license": "MIT OR Apache-2.0",
   "repository": { "type": "git", "url": "git+https://github.com/spotta85/anyagent.git", "directory": "packages/node/platform/darwin-arm64" },
