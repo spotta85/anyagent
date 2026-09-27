@@ -1409,7 +1409,7 @@ async fn a_background_subagent_runs_past_its_turn() {
         match event.kind {
             EventKind::ToolUpdated(tool) => {
                 assert!(event.turn_info.is_none(), "opened a turn: {tool:?}");
-                late.push((tool.status, tool.subagent.unwrap()));
+                late.push((tool.status, tool.subagent.unwrap(), tool.output));
             }
             EventKind::TurnStarted { origin } => {
                 assert_eq!(origin, TurnOrigin::Agent);
@@ -1427,6 +1427,8 @@ async fn a_background_subagent_runs_past_its_turn() {
     assert_eq!(late[0].1.tokens, Some(20584));
     assert_eq!(late[1].0, ToolStatus::Completed);
     assert_eq!(late[1].1.tokens, Some(21582));
+    // The notification's summary replaces the launch placeholder.
+    assert_eq!(late[1].2.as_deref(), Some("PONG"));
     session.close().await.unwrap();
 }
 
