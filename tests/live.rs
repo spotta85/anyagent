@@ -658,6 +658,37 @@ async fn generate_returns_text_without_a_session() {
     }
 }
 
+/// `instructions` reach the agent: the reply follows a rule the prompt never mentions.
+#[tokio::test]
+#[ignore = "live: talks to real agents"]
+async fn instructions_reach_the_agent() {
+    for h in enabled().await {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = Runtime::new();
+        let report = runtime.discover().await;
+        let agent = report
+            .require(h)
+            .unwrap_or_else(|_| panic!("{h}: not discovered"));
+        let options =
+            options(h, dir.path()).instructions("End every reply with the word PINEAPPLE");
+        let (session, mut events) = runtime
+            .open(agent, options)
+            .await
+            .unwrap_or_else(|e| panic!("{h}: open failed: {e}"));
+        session
+            .prompt("Say hello in three words. No tools.")
+            .await
+            .unwrap();
+        let text = drain_to_turn_end(&session, &mut events, &format!("{h}: instructions")).await;
+        session.close().await.ok();
+        assert!(
+            text.to_uppercase().contains("PINEAPPLE"),
+            "{h}: instructions not followed: {text:?}"
+        );
+        pass(h, &format!("instructions reached the agent: {text:?}"));
+    }
+}
+
 /// Even a prompt asking to read a file cannot enable Pi's tools during generation.
 #[tokio::test]
 #[ignore = "live: talks to real agents"]
