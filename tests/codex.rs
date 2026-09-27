@@ -325,6 +325,37 @@ async fn a_subagent_child_thread_never_settles_the_parent_turn() {
     session.close().await.unwrap();
 }
 
+/// Recording 13 (0.154.0): the child's finish arrives as a second activity item
+/// under a new id. The subagent tool ends Completed once; no second tool appears.
+#[tokio::test]
+async fn a_live_shaped_subagent_ends_completed_once() {
+    let (session, mut events) = open("spawn-live", "").await;
+    session.prompt("spawn-live please").await.unwrap();
+    let mut activity = Vec::new();
+    loop {
+        match next(&mut events).await.kind {
+            EventKind::ToolUpdated(tool)
+                if tool.raw.as_ref().unwrap().name == "subAgentActivity" =>
+            {
+                let tokens = tool.subagent.and_then(|s| s.tokens);
+                activity.push((tool.id.as_str().to_owned(), tool.status, tokens));
+            }
+            EventKind::TurnEnded { .. } => break,
+            _ => {}
+        }
+    }
+    let spawn = || "call_spawn".to_owned();
+    assert_eq!(
+        activity,
+        vec![
+            (spawn(), ToolStatus::Running, None),
+            (spawn(), ToolStatus::Running, Some(22059)),
+            (spawn(), ToolStatus::Completed, Some(22059)),
+        ]
+    );
+    session.close().await.unwrap();
+}
+
 /// Failed child turn marks its subagent tool as Failed but parent still completes.
 #[tokio::test]
 async fn a_failed_child_turn_fails_its_subagent_tool() {

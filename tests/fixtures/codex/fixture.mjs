@@ -7,7 +7,8 @@
 // "mcp-tool"/"mcp-two"/"mcp-always" (MCP tool calls ask through an
 // elicitation), "sleep" (a command that only an interrupt ends), "die"
 // (exit mid-turn), "subagent" (a child thread runs a whole turn before the
-// parent's ends, "subagent-fails" for a child turn that fails),
+// parent's ends, "subagent-fails" for a child turn that fails), "spawn-live"
+// (a subagent in the live 0.154.0 order of recording 13),
 // "end-failed"/"end-aborted" (the turn ends via turn/failed / turn/aborted
 // instead of turn/completed), "refuse-start" (turn/start is refused).
 // --rename: the server renames the thread after the first turn.
@@ -322,6 +323,7 @@ async function runTurn(params) {
   }
 
   if (prompt.includes('subagent')) await runSubagent(prompt.includes('subagent-fails'));
+  if (prompt.includes('spawn-live')) await runLiveSubagent();
 
   await sleep(20); // yield so a mid-turn steer on stdin gets read, like the real server
   for (const steer of turn.steered) delta(msg.id, `steered=${steer} `);
@@ -366,5 +368,33 @@ async function runSubagent(fails) {
   notify('turn/completed', { threadId: CHILD, turn: { id: CHILD_TURN, status: fails ? 'failed' : 'completed', error: fails ? { message: 'child blew up' } : null, items: [] } });
 
   itemCompleted({ ...collab, status: 'completed', agentsStates: { [CHILD]: { status: fails ? 'errored' : 'completed' } } });
+  await sleep(10);
+}
+
+// A spawned subagent in the order 0.154.0 sends it live (recording 13): the spawn
+// is a `subAgentActivity` item, a `wait` collab call blocks on it, and the child's
+// finish arrives as a second activity item under a new id around its turn/completed.
+async function runLiveSubagent() {
+  const CHILD = 'th-child-2', CHILD_TURN = 'turn-child-2';
+  const child = (method, params) => notify(method, { threadId: CHILD, turnId: CHILD_TURN, ...params });
+  const activity = (id, kind) => ({ type: 'subAgentActivity', id, kind, agentThreadId: CHILD, agentPath: '/root/pong' });
+  notify('thread/status/changed', { threadId: CHILD, status: { type: 'idle' } });
+  itemStarted(activity('call_spawn', 'started'));
+  itemCompleted(activity('call_spawn', 'started'));
+  child('turn/started', { turn: { id: CHILD_TURN, status: 'inProgress' } });
+  const wait = { type: 'collabAgentToolCall', id: 'call_wait', tool: 'wait', status: 'inProgress', senderThreadId: THREAD.id, receiverThreadIds: [], prompt: null, model: null, reasoningEffort: null, agentsStates: {} };
+  itemStarted(wait);
+  const said = { id: 'it-child-msg-2', type: 'agentMessage', text: '', phase: 'final_answer' };
+  child('item/started', { item: said });
+  child('item/agentMessage/delta', { itemId: said.id, delta: 'PONG' });
+  child('item/completed', { item: { ...said, text: 'PONG' } });
+  const used = { totalTokens: 22059, inputTokens: 22053, cachedInputTokens: 15872, cacheWriteInputTokens: 0, outputTokens: 6, reasoningOutputTokens: 0 };
+  child('thread/tokenUsage/updated', { tokenUsage: { total: used, last: used, modelContextWindow: 258400 } });
+  const finish = activity(`subagent-completed-${CHILD_TURN}`, 'completed');
+  itemStarted(finish);
+  notify('thread/status/changed', { threadId: CHILD, status: { type: 'idle' } });
+  notify('turn/completed', { threadId: CHILD, turn: { id: CHILD_TURN, status: 'completed', error: null, items: [] } });
+  itemCompleted(finish);
+  itemCompleted({ ...wait, status: 'completed' });
   await sleep(10);
 }
