@@ -48,6 +48,7 @@ What each adapter reports after `open`. Read it from
 | `Subagents` | ✓ | ✓ | ✓ | | | |
 | `ContextUsage` | ✓ | ✓ | ✓ | ✓ | ✓ | on first sight |
 | `PlanUsage` | ✓ | ✓ | | | | |
+| `OutputSchema` | ✓ | ✓ | | | | |
 
 - **handshake**: the ACP `initialize` response says whether the agent takes
   images, loads sessions, and accepts steering. Cursor, for example, reports
@@ -112,6 +113,9 @@ unreachable one) the CLI holds later input, so the first turn and the answers
 to cancel, configure and usage requests wait for it. A running Bash reports
 `ToolProgress` only when the CLI runs with `CLAUDE_CODE_CONTAINER_ID` or
 `CLAUDE_CODE_REMOTE` set (2.1.283); a subagent's Bash sent none when probed.
+An output schema rides `--json-schema`; the CLI's `StructuredOutput` call
+arrives as a text message of its own holding the JSON, after any text the
+model wrote first.
 </Accordion>
 
 <Accordion title="Codex">
@@ -127,7 +131,10 @@ environment already has with another value, is refused. `rollback` maps to
 defensively but the capability stays off until observed live. MCP progress
 maps to `ToolProgress`, but 0.154.0 did not forward a stdio server's progress
 when probed. `probe` opens no thread: it reads `config/read` and
-`skills/list`, so the user's MCP servers and hooks never start.
+`skills/list`, so the user's MCP servers and hooks never start. An output
+schema rides every `turn/start` as `outputSchema`; the model API takes only
+strict schemas (every object `additionalProperties: false`) and fails the
+turn otherwise.
 </Accordion>
 
 <Accordion title="opencode">

@@ -392,6 +392,8 @@ struct OpenOptions {
     #[serde(default)]
     configure: BTreeMap<ConfigId, ConfigValue>,
     instructions: Option<String>,
+    /// A JSON schema each turn's final message must match (`open`, `generate`).
+    output_schema: Option<Value>,
     #[serde(default)]
     env: BTreeMap<String, String>,
     #[serde(default)]
@@ -421,6 +423,9 @@ impl OpenOptions {
         }
         if let Some(text) = self.instructions {
             options = options.instructions(text);
+        }
+        if let Some(schema) = self.output_schema {
+            options = options.output_schema(schema);
         }
         for (key, value) in self.env {
             options = options.env(key, value);

@@ -64,7 +64,7 @@ a custom ACP agent is `{"acp": {"name": "..", "path": "..", "args": [..]}}`.
 | `discover` | | `DiscoveryReport` |
 | `probe` | agent, dir? (default: temp dir), env?, args?, config_home? | `AgentDetails` |
 | `plan_usage` | agent, env?, args?, config_home? | `PlanUsage` |
-| `open` | agent, dir, resume?, fork?, fork_at?, permission_mode?, mcp_servers?, configure?, instructions?, env? (object), args? (array), config_home?, record_wire? | `SessionInfo` |
+| `open` | agent, dir, resume?, fork?, fork_at?, permission_mode?, mcp_servers?, configure?, instructions?, output_schema? (JSON schema), env? (object), args? (array), config_home?, record_wire? | `SessionInfo` |
 | `generate` | prompt, attachments?, plus everything `open` takes | string |
 | `prompt` | session, text, attachments? | `Delivery` |
 | `answer` | session, request, answer | null |
