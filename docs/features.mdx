@@ -199,7 +199,7 @@ session.configure("fast", true).await?;
 | `model` | select | Switching it rebuilds the other options' choices. Each choice's `options` lists that model's own `effort` and `fast`, for a picker to show before switching |
 | `effort` | select | Choices follow the model; a model without levels drops the option |
 | `fast` | boolean | Only when the selected model supports it. Lower latency, higher usage |
-| `mode` | select | Agent-specific: `plan`, `accept-edits`, `ask`, … `plan` is plan mode wherever it exists; the plan arrives as `PlanProposed` |
+| `mode` | select | Agent-specific: `plan`, `accept-edits`, `ask`, … `plan` is plan mode wherever it exists; on claude and codex the plan arrives as `PlanProposed` |
 | `sandbox` | select | Codex |
 
 **Confirms:** `SessionUpdated`, carrying the new `configuration` and the

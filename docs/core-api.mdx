@@ -185,7 +185,7 @@ whole every time it changes, so there is no delta merging to get wrong.
 | `ToolUpdated` | `ToolUpdate` | Cumulative snapshot of one tool call. Replace by `id`, don't merge |
 | `ToolOutputDelta` | `tool_id`, `text` | Streamed output of a running command |
 | `PlanUpdated` | `entries` | The agent's full task list. Replaces the previous one |
-| `PlanProposed` | `markdown` | In `mode: plan`, the plan the agent proposes before it acts. On claude, the `ExitPlanMode` permission request follows: allow to implement, deny to keep planning. It reaches you in every permission mode. On codex, select an approval policy and prompt again to implement |
+| `PlanProposed` | `markdown` | Claude and codex only. In `mode: plan`, the plan the agent proposes before it acts. On claude, the `ExitPlanMode` permission request follows: allow to implement, deny to keep planning. It reaches you in every permission mode. On codex, select an approval policy and prompt again to implement |
 
 ```rust
 pub struct ToolUpdate {
