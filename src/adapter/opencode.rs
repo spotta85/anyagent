@@ -357,10 +357,17 @@ async fn bind_session(http: &Http, request: &ConnectRequest) -> Result<Value, Ag
     match &request.options.start {
         SessionStart::New => http.post("/session", json!({})).await,
         // Re-adopting the id IS the resume: opencode scopes history by it.
+        // Only a 404 means a dead token (1.18.29: an unknown `ses_` id; a
+        // malformed id is a 500); other failures keep their own error.
         SessionStart::Resume(token) => http
             .get(&format!("/session/{}", token.as_str()))
             .await
-            .map_err(|e| AgentError::ResumeFailed(e.to_string())),
+            .map_err(|e| match e {
+                AgentError::ProtocolFailed(m) if m.contains(" -> 404:") => {
+                    AgentError::ResumeFailed(m)
+                }
+                e => e,
+            }),
         SessionStart::Fork { from, at } => {
             let body = match at {
                 None => json!({}),

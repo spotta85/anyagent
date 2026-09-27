@@ -172,7 +172,9 @@ createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/mcp') { mcpGets++; return json(res, 200, mcpStatus); }
   if (req.method === 'POST' && url.pathname === '/session') { const s = newSession(); return json(res, 200, { id: s.id, title: s.title, model: s.model }); }
   if (req.method === 'POST' && p[0] === 'question' && p[2] === 'reply') { waiters[p[1]]?.(body.answers); delete waiters[p[1]]; return json(res, 200, true); }
-  if (!ses) return json(res, 404, { error: `no session ${p[1]}` });
+  // Recorded 2026-09-26 (1.18.29): an id without the `ses_` prefix is a 500.
+  if (p[0] === 'session' && !p[1]?.startsWith('ses_')) return json(res, 500, { name: 'UnknownError', data: { message: 'Unexpected server error. Check server logs for details.' } });
+  if (!ses) return json(res, 404, { name: 'NotFoundError', data: { message: `Session not found: ${p[1]}` } });
   if (req.method === 'GET' && p.length === 2) return json(res, 200, { id: ses.id, title: ses.title, model: ses.model });
   if (req.method === 'GET' && p[2] === 'message') return json(res, 200, ses.messages.map((m) => ({ info: m, parts: [] })));
   if (req.method === 'POST' && p[2] === 'prompt_async') { if (busy[ses.id]) return json(res, 400, { error: 'busy' }); runTurn(ses, body, '').catch(() => process.exit(1)); return json(res, 202, {}); }

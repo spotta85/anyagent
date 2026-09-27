@@ -468,8 +468,12 @@ async fn open_thread(
             "thread/fork"
         }
     };
+    // Only an unknown thread means a dead token (0.154.0: -32600 "no rollout
+    // found for thread id …"); a malformed id or anything else stays itself.
     wire.roundtrip(method, params).await.map_err(|e| match e {
-        WireError::Rpc(m) if method == "thread/resume" => AgentError::ResumeFailed(m),
+        WireError::Rpc(m) if method == "thread/resume" && m.starts_with("no rollout found") => {
+            AgentError::ResumeFailed(m)
+        }
         e => e.into_error(),
     })
 }

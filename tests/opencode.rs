@@ -460,6 +460,21 @@ async fn fork_cuts_after_the_anchor_or_at_the_tip() {
     }
 }
 
+/// Only a 404 on the session fetch is `ResumeFailed`; a 500 stays a
+/// protocol failure.
+#[tokio::test]
+async fn only_a_missing_session_fails_the_resume() {
+    for (token, resume_failed) in [("ses_gone", true), ("3b1c9f2e-5a6d", false)] {
+        let options = SessionOptions::in_dir(std::env::temp_dir()).resume(token.into());
+        let err = open_with("resume-gone", "", options).await.err().unwrap();
+        assert_eq!(
+            matches!(err, AgentError::ResumeFailed(_)),
+            resume_failed,
+            "{token}: {err}"
+        );
+    }
+}
+
 /// A task-tool child session streams under its task tool and its
 /// permission reaches the caller.
 #[tokio::test]

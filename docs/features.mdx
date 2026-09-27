@@ -94,7 +94,8 @@ let (session, events) = runtime
 **Confirms:** `open` returns. `session.info()` has the resume token,
 capabilities, and config options.
 **Gates:** none. Fails typed: `AuthRequired { login }` when logged out,
-`HandshakeTimeout` after 30 s, `ResumeFailed` for a bad token.
+`HandshakeTimeout` after 30 s, `ResumeFailed` when the agent has no
+conversation for the token.
 
 Drain `Events` continuously. It buffers 1024 events; a consumer that falls a
 full buffer behind is treated as gone and the session closes. `close()` ends
