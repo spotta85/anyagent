@@ -69,6 +69,7 @@ pub(crate) enum DriverCommand {
         answer: Answer,
     },
     Configure(ConfigId, ConfigValue),
+    /// Must be answered with `DriverEvent::RolledBack`.
     Rollback(NonZeroU32, RollbackScope),
     /// Summarize the session's context now. Most wires run it as a turn of
     /// their own; the adapter only triggers it and lets its frames decode.
@@ -104,6 +105,8 @@ pub(crate) enum DriverEvent {
     TurnEnded(StopReason),
     /// Outcome of the last `Steer` command.
     Steered(bool),
+    /// Outcome of the last `Rollback` command; `Err` carries the agent's reason.
+    RolledBack(Result<(), String>),
     /// The agent changed advertised details or configuration.
     InfoChanged(DriverInfo),
     /// The agent's credentials stopped working mid-session. The engine fails
@@ -238,6 +241,11 @@ impl Emitter {
             message: message.into(),
         }))
         .await
+    }
+
+    /// A rollback that did not happen, with the reason the caller gets.
+    pub(crate) async fn rollback_refused(&self, reason: impl Into<String>) -> Result<(), Gone> {
+        self.send(DriverEvent::RolledBack(Err(reason.into()))).await
     }
 
     /// The agent went away: report how it died before the stream closes.

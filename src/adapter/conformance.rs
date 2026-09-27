@@ -962,6 +962,67 @@ async fn compact_runs_on_an_idle_session_and_reports_the_compaction() {
     ));
 }
 
+/// `rollback` resolves with the agent's verdict: a confirmation is `Ok`, a
+/// refusal is `InvalidRequest` carrying the agent's reason.
+#[tokio::test]
+async fn rollback_resolves_with_the_agents_verdict() {
+    let one = std::num::NonZeroU32::new(1).unwrap();
+    let scope = crate::RollbackScope::Conversation;
+    let script = Script {
+        rollback: true,
+        ..Script::default()
+    };
+    let (session, _events) = open(MockAdapter::new(script), None).await;
+    session.rollback(one, scope).await.unwrap();
+
+    let script = Script {
+        rollback: true,
+        rollback_refusal: Some("nothing to roll back".into()),
+        ..Script::default()
+    };
+    let (session, _events) = open(MockAdapter::new(script), None).await;
+    let err = session.rollback(one, scope).await.err().unwrap();
+    assert!(
+        matches!(&err, crate::AgentError::InvalidRequest(r) if r == "nothing to roll back"),
+        "{err}"
+    );
+}
+
+/// A second rollback while one waits for the agent is `SessionBusy`; an
+/// agent that dies meanwhile fails the waiting call with `SessionClosed`.
+#[tokio::test]
+async fn a_rollback_while_one_is_pending_is_busy() {
+    use crate::AgentError;
+    let one = std::num::NonZeroU32::new(1).unwrap();
+    let scope = crate::RollbackScope::Conversation;
+    // The agent stays busy after the turn, so the first rollback waits.
+    let script = Script {
+        rollback: true,
+        ..Script::default()
+    }
+    .turn(vec![Step::End(completed()), Step::Sleep(300)]);
+    let (session, mut events) = open(MockAdapter::new(script), None).await;
+    session.prompt("one").await.unwrap();
+    collect(&mut events, 2).await;
+    let (first, second) = tokio::join!(session.rollback(one, scope), session.rollback(one, scope));
+    first.unwrap();
+    assert!(matches!(second, Err(AgentError::SessionBusy)), "{second:?}");
+
+    let script = Script {
+        rollback: true,
+        ..Script::default()
+    }
+    .turn(vec![Step::End(completed()), Step::Sleep(100), Step::Die]);
+    let (session, mut events) = open(MockAdapter::new(script), None).await;
+    session.prompt("one").await.unwrap();
+    collect(&mut events, 2).await;
+    let result = session.rollback(one, scope).await;
+    assert!(
+        matches!(result, Err(AgentError::SessionClosed)),
+        "{result:?}"
+    );
+}
+
 /// Pulls events until `count` turns have started, answering any request;
 /// returns the prompt ids of those turns in order.
 async fn drain_turn_starts(session: &Session, events: &mut Events, count: usize) -> Vec<PromptId> {

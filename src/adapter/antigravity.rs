@@ -444,7 +444,7 @@ impl Drive {
             }
             DriverCommand::Rollback(..) => {
                 self.events
-                    .diagnostic(DiagnosticLevel::Warning, "rollback is not supported on agy")
+                    .rollback_refused("rollback is not supported on agy")
                     .await
             }
             DriverCommand::Close => unreachable!("handled in run"),

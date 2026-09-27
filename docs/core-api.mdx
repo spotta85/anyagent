@@ -86,7 +86,7 @@ confirms the result.
 | `dequeue(prompt_id)` | Drop a queued prompt before it starts | |
 | `answer(request_id, answer)` | Answer a permission or question, exactly once | `RequestClosed` |
 | `configure(id, value)` | Change a live config option | `SessionUpdated` |
-| `rollback(turns, scope)` | Rewind completed turns in place. Session must be idle | `SessionUpdated`, or a `Diagnostic` on refusal |
+| `rollback(turns, scope)` | Rewind completed turns in place. Session must be idle. Returns once the agent answers; a refusal is `InvalidRequest` | `SessionUpdated` |
 | `compact()` | Ask the agent to summarize its context. Session must be idle | `ContextCompacted` |
 | `cancel(clear_queue)` | Stop the running turn; optionally drop the queue too | `TurnEnded { Cancelled }` |
 | `close()` | End the agent session and wait for cleanup | stream ends |
@@ -239,7 +239,7 @@ the account's quota is used.
 | `ContextUsage` | `used_tokens`, `window_tokens`, `cost_usd` | How full this session's window is |
 | `ContextCompacted` | | The agent compacted; the next `ContextUsage` drops |
 | `PlanUsageUpdated` | `PlanUsage` | Account quota, pushed without asking |
-| `Diagnostic` | `Diagnostic` | Non-fatal but worth surfacing: a rejected rollback, a stall, a wire oddity. Log these |
+| `Diagnostic` | `Diagnostic` | Non-fatal but worth surfacing: a stall, a wire oddity. Log these |
 
 ## AgentDetails and capabilities
 
@@ -298,9 +298,9 @@ enum is `#[non_exhaustive]`.
 | `HandshakeTimeout` | Launch plus handshake exceeded 30 s |
 | `UnsupportedFeature` | You called something the capability set does not include |
 | `InvalidConfiguration` | Bad option id or value, or an isolation request the agent cannot honour |
-| `InvalidRequest` | Answering a closed request, dequeueing a started prompt |
+| `InvalidRequest` | Answering a closed request, dequeueing a started prompt, a rollback the agent refused (its reason) |
 | `ResumeFailed` | The agent has no conversation for the token. Other resume failures keep their own variant |
-| `SessionBusy` | `rollback` or `compact` while a turn is running |
+| `SessionBusy` | `rollback` or `compact` while a turn is running, or `rollback` while another is pending |
 | `ProtocolFailed` | The wire misbehaved |
 | `ProcessExited { status, stderr }` | The agent died |
 | `SessionClosed` | A call after `close` |

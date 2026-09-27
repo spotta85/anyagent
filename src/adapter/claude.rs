@@ -1051,7 +1051,7 @@ impl Drive {
     /// Emulated rollback: respawn forked at the last kept turn's assistant
     /// message. The resume token clears until the fork names itself on the
     /// next `system/init`; the old session stays on disk. A failed respawn
-    /// closes the session.
+    /// refuses the rollback and closes the session.
     async fn rollback(
         &mut self,
         turns: std::num::NonZeroU32,
@@ -1061,21 +1061,17 @@ impl Drive {
         if n >= self.history.len() {
             return self
                 .events
-                .diagnostic(
-                    DiagnosticLevel::Warning,
-                    format!(
-                        "rollback({n}) rejected: {} completed turns, and at least one must \
-                         remain (open a new session instead)",
-                        self.history.len()
-                    ),
-                )
+                .rollback_refused(format!(
+                    "rollback({n}) rejected: {} completed turns, and at least one must \
+                     remain (open a new session instead)",
+                    self.history.len()
+                ))
                 .await;
         }
         let Some(cut) = self.history[self.history.len() - n - 1].assistant.clone() else {
             return self
                 .events
-                .diagnostic(
-                    DiagnosticLevel::Warning,
+                .rollback_refused(
                     "rollback rejected: the turn at the cut point produced no assistant message",
                 )
                 .await;
@@ -1083,10 +1079,7 @@ impl Drive {
         let Some(token) = self.info.resume_token.clone() else {
             return self
                 .events
-                .diagnostic(
-                    DiagnosticLevel::Warning,
-                    "rollback rejected: no provider session id yet",
-                )
+                .rollback_refused("rollback rejected: no provider session id yet")
                 .await;
         };
         // Files first, on the still-live process: a failed rewind leaves the
@@ -1095,8 +1088,7 @@ impl Drive {
             let Some(user) = self.history[self.history.len() - n].user.clone() else {
                 return self
                     .events
-                    .diagnostic(
-                        DiagnosticLevel::Warning,
+                    .rollback_refused(
                         "rollback rejected: the first dropped turn has no user message to \
                          rewind files at",
                     )
@@ -1105,7 +1097,7 @@ impl Drive {
             if let Err(e) = self.rewind_files(&user).await? {
                 return self
                     .events
-                    .diagnostic(DiagnosticLevel::Warning, format!("rollback rejected: {e}"))
+                    .rollback_refused(format!("rollback rejected: {e}"))
                     .await;
             }
         }
@@ -1126,11 +1118,12 @@ impl Drive {
                 self.info.resume_token = None;
                 self.events
                     .send(DriverEvent::InfoChanged(self.info.clone()))
-                    .await
+                    .await?;
+                self.events.send(DriverEvent::RolledBack(Ok(()))).await
             }
             Err(e) => {
                 self.events
-                    .diagnostic(DiagnosticLevel::Error, format!("rollback failed: {e}"))
+                    .rollback_refused(format!("rollback failed: {e}"))
                     .await?;
                 self.events.exited(&mut self.child).await;
                 Err(Gone)

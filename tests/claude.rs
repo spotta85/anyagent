@@ -240,7 +240,7 @@ async fn files_rollback_rewinds_at_the_first_dropped_turn() {
     session.close().await.unwrap();
 }
 
-/// Files rollback refusal emits diagnostic and leaves session/token/files untouched.
+/// Files rollback refusal fails the call and leaves session/token/files untouched.
 #[tokio::test]
 async fn files_rollback_refusal_leaves_the_session_untouched() {
     let dir = std::env::temp_dir().join(format!("anyagent-rwfail-{}", std::process::id()));
@@ -249,24 +249,19 @@ async fn files_rollback_refusal_leaves_the_session_untouched() {
         echoed_turn(&session, &mut events, prompt).await;
     }
 
-    // The rejection is a diagnostic; nothing is rewound and nothing respawns.
-    session
+    // The rejection is the call's error; nothing is rewound and nothing respawns.
+    let err = session
         .rollback(
             std::num::NonZeroU32::new(1).unwrap(),
             RollbackScope::ConversationAndFiles,
         )
         .await
+        .err()
         .unwrap();
-    loop {
-        if let EventKind::Diagnostic(d) = next(&mut events).await.kind {
-            assert!(
-                d.message.contains("rollback rejected"),
-                "got: {}",
-                d.message
-            );
-            break;
-        }
-    }
+    assert!(
+        matches!(&err, AgentError::InvalidRequest(r) if r.starts_with("rollback rejected")),
+        "{err}"
+    );
     assert!(!dir.join("rewound-at.txt").exists());
     assert_eq!(session.info().resume_token.unwrap().as_str(), "sess-c1");
     session.prompt("three").await.unwrap();

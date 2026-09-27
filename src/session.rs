@@ -170,8 +170,8 @@ impl Session {
 
     /// Rewinds provider-owned conversation context by completed turns; the
     /// files scope also restores agent-changed files to the cut point.
-    /// Requires an idle session and rollback support. `SessionUpdated`
-    /// confirms success; a diagnostic reports rejection.
+    /// Requires an idle session and rollback support. Resolves once the
+    /// agent reports the outcome; a refusal is `InvalidRequest(reason)`.
     pub async fn rollback(
         &self,
         turns: NonZeroU32,
@@ -243,6 +243,7 @@ pub(crate) fn start(
         state: TurnState::Idle,
         queue: VecDeque::new(),
         steer: None,
+        rollback: None,
         steer_supported: connection
             .info
             .details
@@ -425,6 +426,8 @@ struct Engine {
     queue: VecDeque<(PromptId, Input)>,
     /// A steer the adapter has not answered yet; resolved by `Steered`.
     steer: Option<(PromptId, Input, Reply<Delivery>)>,
+    /// A rollback's caller, waiting for the adapter's `RolledBack`.
+    rollback: Option<Reply<()>>,
     steer_supported: bool,
     quiet_user: Option<Duration>,
     quiet_agent: Option<Duration>,
@@ -552,8 +555,14 @@ impl Engine {
             Command::Configure(id, value, reply) => {
                 let _ = reply.send(self.handle_configure(id, value).await);
             }
+            // The reply waits for the adapter's `RolledBack`.
             Command::Rollback(turns, scope, reply) => {
-                let _ = reply.send(self.handle_rollback(turns, scope).await);
+                match self.handle_rollback(turns, scope).await {
+                    Ok(()) => self.rollback = Some(reply),
+                    Err(e) => {
+                        let _ = reply.send(Err(e));
+                    }
+                }
             }
             Command::Compact(reply) => {
                 let result = self.handle_compact().await;
@@ -682,7 +691,8 @@ impl Engine {
         self.forward(DriverCommand::Configure(id, value))
     }
 
-    /// Checks rollback support and idleness, then forwards.
+    /// Checks rollback support, idleness, and that no rollback is pending,
+    /// then forwards.
     async fn handle_rollback(
         &mut self,
         turns: NonZeroU32,
@@ -695,7 +705,7 @@ impl Engine {
         {
             return Err(AgentError::UnsupportedFeature("file rollback".into()));
         }
-        if matches!(self.state, TurnState::Running { .. }) {
+        if matches!(self.state, TurnState::Running { .. }) || self.rollback.is_some() {
             return Err(AgentError::SessionBusy);
         }
         self.forward(DriverCommand::Rollback(turns, scope))
@@ -785,6 +795,11 @@ impl Engine {
         match ev {
             DriverEvent::TurnAck => self.awaiting_ack = false,
             DriverEvent::Steered(accepted) => self.resolve_steer(accepted).await,
+            DriverEvent::RolledBack(outcome) => {
+                if let Some(reply) = self.rollback.take() {
+                    let _ = reply.send(outcome.map_err(AgentError::InvalidRequest));
+                }
+            }
             // Usage outside a turn is nobody's; it must not reach the next one.
             DriverEvent::TurnUsage(usage) => {
                 if matches!(self.state, TurnState::Running { .. }) {
@@ -922,6 +937,9 @@ impl Engine {
     /// The driver's event stream ended: a clean close, or the agent died.
     async fn driver_gone(&mut self) {
         self.done = true;
+        if let Some(reply) = self.rollback.take() {
+            let _ = reply.send(Err(AgentError::SessionClosed));
+        }
         if let Some(waiters) = self.closing.take() {
             for waiter in waiters {
                 let _ = waiter.send(Ok(()));

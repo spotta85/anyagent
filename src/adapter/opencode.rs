@@ -1560,10 +1560,7 @@ impl Drive {
             .await
             .ok();
         let Some(anchor) = messages.and_then(|m| user_anchor(&m, turns)) else {
-            return self
-                .events
-                .diagnostic(DiagnosticLevel::Warning, "nothing to roll back")
-                .await;
+            return self.events.rollback_refused("nothing to roll back").await;
         };
         let reverted = self
             .http
@@ -1574,15 +1571,16 @@ impl Drive {
             .await;
         match reverted {
             // Nothing advertised changes (the session rewinds in place), but
-            // the resulting `SessionUpdated` is the documented confirmation.
+            // `SessionUpdated` still marks it before `RolledBack` settles the call.
             Ok(_) => {
                 self.events
                     .send(DriverEvent::InfoChanged(self.info.clone()))
-                    .await
+                    .await?;
+                self.events.send(DriverEvent::RolledBack(Ok(()))).await
             }
             Err(e) => {
                 self.events
-                    .diagnostic(DiagnosticLevel::Warning, format!("rollback rejected: {e}"))
+                    .rollback_refused(format!("rollback rejected: {e}"))
                     .await
             }
         }
