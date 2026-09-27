@@ -3,10 +3,10 @@
 Things T3 Code's server needed from its agent layer that anyagent did not have. Each row is one feature of T3 and what anyagent does about it today.
 
 ```
-33 gaps found  ──►  20 fixed  ·  3 partly fixed  ·  10 open
+33 gaps found  ──►  26 fixed  ·  3 partly fixed  ·  4 open
 ```
 
-How they were fixed: [gaps-plan.md](gaps-plan.md).
+How they were fixed: [gaps-plan.md](gaps-plan.md) (round 1), [gaps-plan-2.md](gaps-plan-2.md) (round 2).
 
 ## Fixed
 
@@ -32,29 +32,31 @@ How they were fixed: [gaps-plan.md](gaps-plan.md).
 | Claude MCP secrets in argv | bearer header of T3's MCP server | Declared servers ride claude's control channel; a server that fails to connect is a warning |
 | Full-access approved a proposed plan | plan mode under `full-access` | The engine never answers a plan's approval by itself |
 | Secrets in `Debug` output | logs | `SessionOptions` and `McpServer` print env and header names only |
+| Workspace skills | the composer's skill picker | `SlashCommand.source`: `Builtin` or `Skill { path, scope }`. codex gives path and scope; claude gives scope only |
+| Subagent progress | `task.progress`, role and model on `task.started` | `ToolUpdate.subagent { role, model, summary, tokens }`: claude fills all four, codex model and tokens, opencode role and model. A background subagent stays `Running` until it finishes |
+| Live events | `turn.diff.updated`, `tool.progress`, `model.rerouted` | `TurnDiff`, `ToolProgress`, `ModelRerouted`. They ride a running turn and never open one. claude sends progress only when it runs remote or in a container |
+| Deny with a message | T3 stops claude at its plan by declining the exit request | `Answer::Deny { message }`. claude and opencode pass the text to the model; codex and ACP have no field for it |
+| Withdraw a request | `respondToRequest(.., "cancel")` | `Answer::Cancel`, valid for any open request |
+| MCP tool kind on ACP agents | tool rows for T3's MCP tools | `_meta` names the server and tool on antigravity, kiro and qwen: `ToolKind::Mcp` |
 
 ## Partly fixed
 
-| Feature | Fixed | Still missing | Size (lines) |
+| Feature | Fixed | Still missing | Why |
 |---|---|---|---|
-| Session-free status check | A claude probe runs no user hooks and no user MCP servers | codex and ACP probes still open a throwaway session (their details come from the thread or session reply) | ~60 |
-| Isolated one-shot generation | claude `generate` runs no user hooks and no user MCP servers | An output schema (`--json-schema`, `--output-schema`); isolation on other agents | ~40 |
-| Workspace skills | `probe_with` in the workspace's dir returns that workspace's commands | `SlashCommand.source: Builtin \| Skill { path, scope }` | ~30 |
+| Session-free status check | claude: no user hooks or MCP servers. codex: no thread at all | ACP agents still open a throwaway session | Their login state and commands only come with a session |
+| Isolated one-shot generation | claude isolation; an output schema on claude and codex (`output_schema`, `Capability::OutputSchema`) | Isolation and schemas on the other agents | Their wire has neither |
+| MCP secrets and servers | codex header and env values ride its environment, never argv | MCP on antigravity's native CLI | `agy` has no per-session MCP config; its ACP server takes MCP servers |
 
 ## Open
 
+All four need the owner's decision; none is blocked by code.
+
 | Feature | T3 call | What anyagent lacks | Proposed change | Size (lines) |
 |---|---|---|---|---|
-| Banked resets on claude | the usage panel's reset credits | The CLI's `get_usage` returns the block as `null` (2.1.283). The data needs the login token and a direct API call, which anyagent does not do. The parser is in place for when the CLI passes it through | Owner decision: read the token, or wait for the CLI | ~40 |
-| Redeem a reset credit | `ProviderInstance.consumeResetCredit` | No account actions | `Runtime::redeem_reset(agent)` | ~40 |
+| Banked resets on claude | the usage panel's reset credits | The CLI's `get_usage` returns the block as `null` (2.1.283). The data needs the login token and a direct API call, which anyagent does not do. The parser is in place for when the CLI passes it through | Read the token, or wait for the CLI | ~40 |
 | In-app login | `ProviderInstance.auth` | `LoginMethod::Terminal { command }` only; anyagent cannot run a login | `Runtime::login(agent, method)` streaming url, code, done, failed; `logout(agent)` | ~120 |
+| Redeem a reset credit | `ProviderInstance.consumeResetCredit` | No account actions | `Runtime::redeem_reset(agent)` (codex) | ~40 |
 | Feedback upload | `adapter.uploadFeedback` | No command | `Session::upload_feedback { reason }` (codex) | ~30 |
-| Withdraw a permission request | `respondToRequest(.., "cancel")` | No withdraw answer. `answer(DenyOnce)` then `cancel_turn` has the same effect | `PermissionChoice::Cancel`, only if an app needs the difference | ~20 |
-| Subagent progress | `task.progress`, role and model on `task.started` | A subagent is a tool with a title and status | `ToolUpdate.subagent: Option<SubagentInfo>` | ~50 |
-| Live events: turn diff, tool progress, model rerouted | `turn.diff.updated`, `tool.progress`, `model.rerouted` | Not mapped; the app still gets the final diff, the tool's end state, and a warning | One event kind or field each | ~60 |
-| MCP on antigravity; codex MCP env in argv | T3's MCP server | `agy` has no per-session MCP config. codex passes stdio env and non-bearer headers as `-c` overrides | None known for `agy`; a config file for codex | ~50 |
-| Deny with a message | T3 stops claude at its plan by declining the exit request | A deny carries no text, so claude is told "User denied this action" and the tool row reads failed. claude still stops and the next turn runs | `Answer::Permission` with an optional message, passed where the wire takes one | ~20 |
-| MCP tool kind on ACP agents | tool rows for T3's MCP tools | An ACP agent's MCP call is `ToolKind::Other` although its `_meta.mcp` names the server and tool (seen on antigravity's ACP server) | Map `_meta.mcp` to `ToolKind::Mcp` | ~15 |
 
 ## Known small limits
 
@@ -68,3 +70,9 @@ Found by the reviews, not worth a row each. They are listed with file and line i
 | Two identical MCP calls in flight on codex | The approval is shown on one of the two |
 | claude `mode` lists 4 choices | The CLI can report `dontAsk` or `auto`, which are not in the list |
 | cursor asks no permission for edits | An approval-required app still sees files written unasked; commands do ask |
+| A codex probe can miss skills | codex loads plugin skills about 0.5 s after it starts; a probe lists the ones loaded by then |
+| A codex probe's `sandbox` in a trusted dir | Reads `read-only` where a thread would say `workspace-write`; `open` reports the real value |
+| codex takes strict output schemas only | Every object needs `additionalProperties: false` and all properties required |
+| A codex stdio MCP server cannot set `PATH`, or a name codex's environment holds with another value | codex forwards env by name; the open fails with the name |
+| `tokens` on a subagent differs per agent | claude: the latest call's size. codex: the child thread's total |
+| Nested text from a claude background subagent opens a turn | No recording shows one; tools and progress do not |

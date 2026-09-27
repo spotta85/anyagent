@@ -5,7 +5,7 @@ T3 Code's server talked to six agents through its own adapters. The fork replace
 ```
 before (wc -l at 679c34c096)              after
 ProviderService                           ProviderService
-  ├ ClaudeAdapter   (5.6k)                  └ provider/anyagent/ (2.2k: adapter, driver, snapshot, events, text-gen)
+  ├ ClaudeAdapter   (5.6k)                  └ provider/anyagent/ (2.3k: adapter, driver, snapshot, events, text-gen)
   ├ CodexAdapter + SessionRuntime (5.5k)          │
   ├ OpenCodeAdapter + runtime (5.1k)              └ anyagent-ts ── anyagent serve ── claude · codex · cursor · grok · opencode · antigravity
   ├ GrokAdapter     (2.2k)
@@ -17,26 +17,30 @@ ProviderService                           ProviderService
 
 ## Numbers
 
-`git diff --numstat main..anyagent` on the fork (head `2f67c4072f`), one bucket per file, from [measure.sh](measure.sh). Tests: `*.test.ts`, test fixtures and examples, `apps/server/integration/`, the ACP mock agent script. Docs: `*.md`. `pnpm-lock.yaml` left out.
+`git diff --numstat main..anyagent` on the fork (head `7f297bb45d`), one bucket per file, from [measure.sh](measure.sh). Tests: `*.test.ts`, test fixtures and examples, `apps/server/integration/`, the ACP mock agent script. Docs: `*.md`. `pnpm-lock.yaml` left out.
 
 | | Deleted | Added |
 |---|---|---|
-| Hand-written agent code (product) | **41,549** | 2,355 (2,197 in `provider/anyagent/`, 158 elsewhere) |
+| Hand-written agent code (product) | **41,549** | 2,475 (2,312 in `provider/anyagent/`, 163 elsewhere) |
 | Generated protocol schemas | 68,414 | 0 |
-| Tests | 50,824 | 2,738 |
-| Live check script (`scripts/anyagent-port-check.ts`) | – | 1,474 |
-| Docs | 46 | 163 |
+| Tests | 50,824 | 3,070 |
+| Live check script (`scripts/anyagent-port-check.ts`) | – | 1,647 |
+| Docs | 46 | 189 |
 | of the deleted product lines: Antigravity sign-in over T3's ACP runtime (needed the deleted runtime) | 1,262 | |
 
-Server `provider/` folder, hand-written, before → after: 48,893 → about 17,070 lines. What is left is T3's own logic: registries, `ProviderService`, auth, session directory, maintenance and updates, skills, model catalog, Antigravity installer. T3's skills code is kept but unused until the workspace-skills gap lands.
+Server `provider/` folder, hand-written, before → after: 48,893 → about 17,070 lines. What is left is T3's own logic: registries, `ProviderService`, auth, session directory, maintenance and updates, skills, model catalog, Antigravity installer. T3's skill picker is filled from anyagent's commands that are skills.
 
 ## What the port serves
 
-Two rounds. The first replaced the adapters. The second closed the gaps the first one found, in anyagent, and wired them into T3.
+Three rounds. The first replaced the adapters. The second and third closed the gaps the first one found, in anyagent, and wired them into T3.
 
 | T3 feature | Served by |
 |---|---|
 | Sessions, streaming, tools with diffs, permissions, questions, subagents | anyagent events |
+| Subagent rows: role, model, progress, tokens | `ToolUpdate.subagent` |
+| Tool progress, the turn's running diff, model rerouted | `ToolProgress`, `TurnDiff`, `ModelRerouted` |
+| Cancel an approval; decline with a reason | `Answer::Cancel`, `Answer::Deny { message }` |
+| Skill picker | `SlashCommand.source` |
 | Model and option pickers, per model | `ConfigChoice.options` |
 | Plan mode with a proposed plan | `mode: plan`, `PlanProposed` |
 | Runtime modes: approval-required, auto-accept-edits, full-access | `PermissionMode` `Ask`, `AcceptEdits`, `AutoApprove` |
@@ -44,12 +48,12 @@ Two rounds. The first replaced the adapters. The second closed the gaps the firs
 | Turn token usage, usage limits with banked resets | `TurnEnded.usage`, `plan_usage` |
 | T3's MCP server in every session | `mcp_servers`; secrets stay off the command line and out of the wire log |
 | Session instructions, instance binary, environment, home, launch args | `instructions`, agent `{ id, path }`, `env`, `config_home`, `args` |
-| Titles, branch names, commit messages, with images | `generate` with `attachments` |
+| Titles, branch names, commit messages, with images | `generate` with `attachments`, and `output_schema` on claude and codex |
 | Native wire log | `record_wire` |
 
 ## What was verified
 
-18 rows, driven over T3's WebSocket RPC against the real agents (script `scripts/anyagent-port-check.ts` in the fork). Every cell that is not PASS says why.
+23 rows, driven over T3's WebSocket RPC against the real agents (script `scripts/anyagent-port-check.ts` in the fork). Every cell that is not PASS says why.
 
 | Row | claude | codex | cursor | grok | opencode | antigravity |
 |---|---|---|---|---|---|---|
@@ -70,12 +74,17 @@ Two rounds. The first replaced the adapters. The second closed the gaps the firs
 | plan | PASS | PASS | not proven (quota) | SKIP: no plan mode | SKIP: no plan mode | SKIP: no plan mode |
 | accept-edits | PASS | SKIP: sandbox never asks | not proven (quota) | not proven (quota) | PASS | PASS |
 | mcp-tool | PASS | PASS | not proven (quota) | not proven (quota) | PASS | PASS |
+| turn-diff | SKIP: sends none | PASS | not proven (quota) | SKIP: sends none | SKIP: sends none | SKIP: sends none |
+| subagent-info | PASS | PASS⁴ | not proven (quota) | SKIP: ran no subagent | PASS⁴ | SKIP: ran no subagent |
+| cancel-request | PASS | PASS | not proven (quota) | PASS | PASS | PASS |
+| skills | PASS | PASS | not proven (quota) | SKIP: reads no skill folder | PASS | SKIP: reads no skill folder |
+| schema-generate | PASS | PASS | not proven (quota) | SKIP: no output schema | SKIP: no output schema | SKIP: no output schema |
 
-¹ Passed, or was seen on the wire, before that account's free quota ran out mid-run. ² Ran with cursor's quota out; the check reads a config event or the outgoing wire, not the reply. ³ opencode's free model answered a queued prompt with the wrong text in 3 of 4 runs; the wire shows the prompt arrived intact. Not an adapter or anyagent fault.
+¹ Passed, or was seen on the wire, before that account's free quota ran out mid-run. ² Ran with cursor's quota out; the check reads a config event or the outgoing wire, not the reply. ³ opencode's free model answered a queued prompt with the wrong text in 3 of 4 runs; the wire shows the prompt arrived intact. Not an adapter or anyagent fault. ⁴ Failed on the first run: anyagent did not link codex's spawned children and read no subagent info from opencode. Both fixed in anyagent, then passed.
 
-No cell failed because of anyagent.
+No cell fails because of anyagent. Two did on their first run (⁴); the live check is what found them.
 
-T3's server suite: 4,417 tests pass, 2 skipped, 307 files. Typecheck, lint and format clean.
+T3's server suite: 4,428 tests pass, 2 skipped, 307 files. Typecheck, lint and format clean.
 
 ## Reproduce
 
@@ -99,8 +108,8 @@ bash /path/to/anyagent/docs/ports/t3-code/measure.sh   # the per-bucket table ab
 | Redeeming a banked reset is not offered; the count is shown | gaps row "Redeem a reset credit" |
 | Claude shows no banked resets | The claude CLI does not report them (gaps row "Banked resets on claude") |
 | On cursor, approval-required threads write files without asking | cursor's ACP agent asks permission for commands, not for edits |
-| A claude plan's exit request shows as a failed tool row in the plan turn | T3 declines it to stop at the plan, and a decline cannot carry a message |
-| codex and ACP status checks open a throwaway session | gaps row "Session-free status check" |
+| ACP status checks open a throwaway session | gaps row "Session-free status check" |
+| claude's skills show in the `/` menu, not the skill picker | claude names no path for a skill, and T3's picker needs one |
 | Settings with no anyagent equivalent do nothing | codex shadow home, claude auto-compact window, cursor API endpoint, antigravity auth fields, opencode external server |
 
-Plans and reports: [plan.md](plan.md) (the port), [gaps-plan.md](gaps-plan.md) (the gap fixes), [baseline.md](baseline.md).
+Plans and reports: [plan.md](plan.md) (the port), [gaps-plan.md](gaps-plan.md) and [gaps-plan-2.md](gaps-plan-2.md) (the gap fixes), [baseline.md](baseline.md).
