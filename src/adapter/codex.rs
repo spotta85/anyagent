@@ -158,9 +158,9 @@ type Env = Vec<(String, String)>;
 
 /// The MCP servers as `-c mcp_servers.<name>.<key>=<toml>` launch overrides
 /// plus the env pairs they need, the wire having no per-thread declaration.
-/// Header values ride env vars the override names (`bearer_token_env_var`,
-/// `env_http_headers`; codex 0.154.0, 2026-09-27). SSE is not a codex transport.
-fn mcp_overrides(servers: &[McpServer]) -> Result<(Vec<String>, Env), AgentError> {
+/// Values ride env vars the override names (`env_vars`, `bearer_token_env_var`,
+/// `env_http_headers`; codex 0.154.0, 2026-09-27) atop the launch env `base`. No SSE.
+fn mcp_overrides(servers: &[McpServer], base: &Env) -> Result<(Vec<String>, Env), AgentError> {
     let quote = |s: &str| serde_json::to_string(s).unwrap_or_default();
     let table = |map: &std::collections::BTreeMap<String, String>| {
         let pairs: Vec<String> = map
@@ -187,11 +187,30 @@ fn mcp_overrides(servers: &[McpServer]) -> Result<(Vec<String>, Env), AgentError
             args.push(format!("{}={value}", key(field)));
         };
         match &server.connection {
-            McpConnection::Stdio { command, args, env } => {
+            McpConnection::Stdio {
+                command,
+                args,
+                env: vars,
+            } => {
                 push("command", quote(&command.to_string_lossy()));
                 push("args", serde_json::to_string(args).unwrap_or_default());
-                if !env.is_empty() {
-                    push("env", table(env));
+                for (name, value) in vars {
+                    // codex forwards stdio env by name, so codex's own env must agree.
+                    let held = base.iter().chain(&env).rev().find(|(n, _)| n == name);
+                    let held = held
+                        .map(|(_, v)| v.clone())
+                        .or_else(|| std::env::var(name).ok());
+                    if held.is_some_and(|v| v != *value) {
+                        return Err(AgentError::InvalidConfiguration(format!(
+                            "codex MCP server `{}` sets `{name}`, already set to another value",
+                            server.name
+                        )));
+                    }
+                    env.push((name.clone(), value.clone()));
+                }
+                if !vars.is_empty() {
+                    let names = serde_json::to_string(&vars.keys().collect::<Vec<_>>());
+                    push("env_vars", names.unwrap_or_default());
                 }
             }
             McpConnection::Http { url, headers } => {
@@ -249,7 +268,7 @@ async fn launch(
     create_config_home(&request.options).await?;
     // Overrides must follow the subcommand: before it, app-server 0.154.0
     // accepts them and starts no server (live-verified 2026-09-27).
-    let (overrides, mcp_env) = mcp_overrides(&request.options.mcp_servers)?;
+    let (overrides, mcp_env) = mcp_overrides(&request.options.mcp_servers, &env)?;
     let mut args = vec!["app-server".to_owned()];
     args.extend(overrides);
     env.extend(mcp_env);
@@ -2279,7 +2298,7 @@ mod tests {
                 headers,
             },
         };
-        let (args, env) = mcp_overrides(&[server]).unwrap();
+        let (args, env) = mcp_overrides(&[server], &Vec::new()).unwrap();
         let joined = args.join(" ");
         assert!(
             joined.contains(

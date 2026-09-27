@@ -104,10 +104,10 @@ Opts into the app-server's experimental API. Approval policy and sandbox
 switch live. `mode: plan` is codex's plan collaboration mode and keeps the
 last approval policy; to leave it, select an approval policy and prompt
 again. Images ride as `localImage` items. Client MCP servers ride as
-launch overrides (stdio and HTTP; no SSE). HTTP header values ride env vars
-the overrides name, never argv. Known limit: stdio `env` values travel as
-`-c` overrides in argv: codex's one env key for stdio, `env_vars`, forwards a
-variable only under its own name. `rollback` maps to
+launch overrides (stdio and HTTP; no SSE). Header and env values ride env
+vars the overrides name, never argv. codex forwards stdio MCP env by name, so
+a declared name is also set on codex itself; a name codex's environment
+already has with another value is refused. `rollback` maps to
 `thread/revert`; files are never restored. Questions are translated
 defensively but the capability stays off until observed live.
 </Accordion>
