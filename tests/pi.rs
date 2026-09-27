@@ -262,6 +262,7 @@ async fn a_turn_streams_text_reasoning_tools_and_usage_then_settles() {
                 source: anyagent::CompletionSource::Protocol,
             },
             background: Vec::new(),
+            usage: None,
         },
         "agent_settled ends the turn deterministically"
     );
@@ -478,6 +479,7 @@ async fn a_failed_model_turn_ends_the_turn_as_failed() {
                 message: "the provider refused".into(),
             },
             background: Vec::new(),
+            usage: None,
         }
     );
 }

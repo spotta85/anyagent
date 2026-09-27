@@ -114,6 +114,9 @@ pub enum EventKind {
     TurnEnded {
         stop: StopReason,
         background: Vec<ToolId>, // still running after the turn ended
+        /// Tokens this turn spent, when the agent reports them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<TurnUsage>,
     },
 }
 
@@ -345,6 +348,18 @@ pub enum QuestionAnswer {
 // ---------------------------------------------------------------------------
 // Usage and diagnostics
 // ---------------------------------------------------------------------------
+
+/// Tokens one turn spent, summed over its model calls.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct TurnUsage {
+    /// Input tokens, cached ones included.
+    pub input_tokens: u64,
+    /// The part of `input_tokens` read from cache.
+    pub cached_input_tokens: u64,
+    /// Output tokens, reasoning included.
+    pub output_tokens: u64,
+}
 
 /// Plan quota windows for the logged-in account.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

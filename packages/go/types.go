@@ -384,6 +384,7 @@ type ContextUsage struct {
 type TurnEnded struct {
 	Stop       StopReason `json:"stop"`
 	Background []string   `json:"background"`
+	Usage      *TurnUsage `json:"usage,omitempty"`
 }
 
 // EventKind: exactly one field is set.
@@ -1410,6 +1411,13 @@ const (
 	CompletionSourceProtocol CompletionSource = "Protocol"
 	CompletionSourceInferred CompletionSource = "Inferred"
 )
+
+// TurnUsage: Tokens one turn spent, summed over its model calls.
+type TurnUsage struct {
+	InputTokens       uint64 `json:"input_tokens"`
+	CachedInputTokens uint64 `json:"cached_input_tokens"`
+	OutputTokens      uint64 `json:"output_tokens"`
+}
 
 // DiscoveryReport: What `discover` found and what it could not read.
 type DiscoveryReport struct {

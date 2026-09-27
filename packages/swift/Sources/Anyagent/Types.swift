@@ -455,10 +455,12 @@ public struct ContextUsage: Codable, Sendable, Equatable {
 public struct TurnEnded: Codable, Sendable, Equatable {
     public var stop: StopReason
     public var background: [String]
+    public var usage: TurnUsage?
 
-    public init(stop: StopReason, background: [String]) {
+    public init(stop: StopReason, background: [String], usage: TurnUsage? = nil) {
         self.stop = stop
         self.background = background
+        self.usage = usage
     }
 }
 
@@ -1536,6 +1538,25 @@ public enum CompletionSource: String, Codable, Sendable, Equatable {
 
     public init(from decoder: Decoder) throws {
         self = Self(rawValue: try String(from: decoder)) ?? .unrecognized
+    }
+}
+
+/// Tokens one turn spent, summed over its model calls.
+public struct TurnUsage: Codable, Sendable, Equatable {
+    public var inputTokens: UInt64
+    public var cachedInputTokens: UInt64
+    public var outputTokens: UInt64
+
+    public init(inputTokens: UInt64, cachedInputTokens: UInt64, outputTokens: UInt64) {
+        self.inputTokens = inputTokens
+        self.cachedInputTokens = cachedInputTokens
+        self.outputTokens = outputTokens
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case inputTokens = "input_tokens"
+        case cachedInputTokens = "cached_input_tokens"
+        case outputTokens = "output_tokens"
     }
 }
 
