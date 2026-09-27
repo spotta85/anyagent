@@ -1307,6 +1307,93 @@
           "additionalProperties": false
         },
         {
+          "description": "A running tool reports what it is doing, or for how long it has run.",
+          "type": "object",
+          "properties": {
+            "ToolProgress": {
+              "type": "object",
+              "properties": {
+                "tool_id": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "elapsed_ms": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "uint64",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "tool_id"
+              ]
+            }
+          },
+          "required": [
+            "ToolProgress"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "The whole turn's changes so far as one unified diff; replaces the previous one.",
+          "type": "object",
+          "properties": {
+            "TurnDiff": {
+              "type": "object",
+              "properties": {
+                "unified": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "unified"
+              ]
+            }
+          },
+          "required": [
+            "TurnDiff"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "The agent answered with another model than the selected one.",
+          "type": "object",
+          "properties": {
+            "ModelRerouted": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "string"
+                },
+                "to": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "from",
+                "to"
+              ]
+            }
+          },
+          "required": [
+            "ModelRerouted"
+          ],
+          "additionalProperties": false
+        },
+        {
           "description": "The agent's full current task list; replaces the previous one.",
           "type": "object",
           "properties": {

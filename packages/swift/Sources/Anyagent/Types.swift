@@ -451,6 +451,44 @@ public struct ToolOutputDelta: Codable, Sendable, Equatable {
     }
 }
 
+public struct ToolProgress: Codable, Sendable, Equatable {
+    public var toolId: String
+    public var message: String?
+    public var elapsedMs: UInt64?
+
+    public init(toolId: String, message: String? = nil, elapsedMs: UInt64? = nil) {
+        self.toolId = toolId
+        self.message = message
+        self.elapsedMs = elapsedMs
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case toolId = "tool_id"
+        case message
+        case elapsedMs = "elapsed_ms"
+    }
+}
+
+public struct TurnDiff: Codable, Sendable, Equatable {
+    public var unified: String
+
+    public init(unified: String) {
+        self.unified = unified
+    }
+}
+
+public struct ModelRerouted: Codable, Sendable, Equatable {
+    public var from: String
+    public var to: String
+    public var reason: String?
+
+    public init(from: String, to: String, reason: String? = nil) {
+        self.from = from
+        self.to = to
+        self.reason = reason
+    }
+}
+
 public struct PlanUpdated: Codable, Sendable, Equatable {
     public var entries: [PlanEntry]
 
@@ -517,6 +555,9 @@ public enum EventKind: Codable, Sendable, Equatable {
     case messageEnded(MessageEnded)
     case toolUpdated(ToolUpdate)
     case toolOutputDelta(ToolOutputDelta)
+    case toolProgress(ToolProgress)
+    case turnDiff(TurnDiff)
+    case modelRerouted(ModelRerouted)
     case planUpdated(PlanUpdated)
     case planProposed(PlanProposed)
     case requestOpened(Request)
@@ -541,6 +582,9 @@ public enum EventKind: Codable, Sendable, Equatable {
         case .messageEnded: "MessageEnded"
         case .toolUpdated: "ToolUpdated"
         case .toolOutputDelta: "ToolOutputDelta"
+        case .toolProgress: "ToolProgress"
+        case .turnDiff: "TurnDiff"
+        case .modelRerouted: "ModelRerouted"
         case .planUpdated: "PlanUpdated"
         case .planProposed: "PlanProposed"
         case .requestOpened: "RequestOpened"
@@ -573,6 +617,9 @@ public enum EventKind: Codable, Sendable, Equatable {
         case "MessageEnded": self = .messageEnded(try c.decode(MessageEnded.self, forKey: Key("MessageEnded")))
         case "ToolUpdated": self = .toolUpdated(try c.decode(ToolUpdate.self, forKey: Key("ToolUpdated")))
         case "ToolOutputDelta": self = .toolOutputDelta(try c.decode(ToolOutputDelta.self, forKey: Key("ToolOutputDelta")))
+        case "ToolProgress": self = .toolProgress(try c.decode(ToolProgress.self, forKey: Key("ToolProgress")))
+        case "TurnDiff": self = .turnDiff(try c.decode(TurnDiff.self, forKey: Key("TurnDiff")))
+        case "ModelRerouted": self = .modelRerouted(try c.decode(ModelRerouted.self, forKey: Key("ModelRerouted")))
         case "PlanUpdated": self = .planUpdated(try c.decode(PlanUpdated.self, forKey: Key("PlanUpdated")))
         case "PlanProposed": self = .planProposed(try c.decode(PlanProposed.self, forKey: Key("PlanProposed")))
         case "RequestOpened": self = .requestOpened(try c.decode(Request.self, forKey: Key("RequestOpened")))
@@ -596,6 +643,9 @@ public enum EventKind: Codable, Sendable, Equatable {
         case .messageEnded(let v): try encoder.tagged("MessageEnded", v)
         case .toolUpdated(let v): try encoder.tagged("ToolUpdated", v)
         case .toolOutputDelta(let v): try encoder.tagged("ToolOutputDelta", v)
+        case .toolProgress(let v): try encoder.tagged("ToolProgress", v)
+        case .turnDiff(let v): try encoder.tagged("TurnDiff", v)
+        case .modelRerouted(let v): try encoder.tagged("ModelRerouted", v)
         case .planUpdated(let v): try encoder.tagged("PlanUpdated", v)
         case .planProposed(let v): try encoder.tagged("PlanProposed", v)
         case .requestOpened(let v): try encoder.tagged("RequestOpened", v)
