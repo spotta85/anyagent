@@ -489,6 +489,27 @@ async fn launch_options_reach_the_adapter() {
     }
 }
 
+/// `generate`'s `attachments` reach the adapter's `Input` beside the prompt.
+#[tokio::test]
+async fn generate_attachments_reach_the_adapter() {
+    let script = Script {
+        echo_input: true,
+        ..Script::default()
+    }
+    .turn(vec![Step::End(completed())]);
+    let mut wire = Wire::start(script).await;
+    let file = wire.dir.path().join("shot.png");
+    wire.send(
+        json!({"id": 1, "cmd": "generate", "agent": "mock", "dir": wire.dir(),
+        "prompt": "hi", "attachments": [file]}),
+    )
+    .await;
+    let reply = wire.reply(1).await;
+    let text = reply["ok"].as_str().unwrap_or_else(|| panic!("{reply}"));
+    let input: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(input, json!({"text": "hi", "attachments": [file]}));
+}
+
 /// `probe` runs throwaway in `dir`, or the temp dir without one; the
 /// `{id, path}` agent form pins the executable.
 #[tokio::test]

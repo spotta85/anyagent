@@ -609,3 +609,39 @@ pub(crate) fn cap(mut s: String, at: usize) -> String {
     }
     s
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Only a new session owes its instructions to the first prompt; a
+    /// resumed or forked one (ACP and agy refuse forks anyway) owes none.
+    #[test]
+    fn only_a_new_session_owes_instructions() {
+        let token = ResumeToken::new("t1");
+        let new = SessionOptions::in_dir(".").instructions("Be brief.");
+        assert_eq!(
+            first_prompt_instructions(&new).as_deref(),
+            Some("Be brief.")
+        );
+        let resumed = new.clone().resume(token.clone());
+        assert_eq!(first_prompt_instructions(&resumed), None);
+        let forked = new.fork_from(token, None);
+        assert_eq!(first_prompt_instructions(&forked), None);
+    }
+
+    /// Owed instructions lead the first plain prompt once; a slash command
+    /// before it passes untouched.
+    #[test]
+    fn instructions_skip_a_slash_command_and_are_paid_once() {
+        let mut owed = Some("Be brief.".to_owned());
+        let sent = |owed: &mut Option<String>, text: &str| {
+            with_instructions(owed, Input::text(text))
+                .as_text()
+                .to_owned()
+        };
+        assert_eq!(sent(&mut owed, "/init"), "/init");
+        assert_eq!(sent(&mut owed, "hi"), "Be brief.\n\nhi");
+        assert_eq!(sent(&mut owed, "again"), "again");
+    }
+}

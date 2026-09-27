@@ -90,6 +90,9 @@ pub struct Script {
     /// Refuse `open` and `plan_usage` with `InvalidRequest` whose detail is
     /// a JSON echo of the launch options received, so a test can read them.
     pub echo_options: bool,
+    /// Start each turn's text with the prompt's `Input` as JSON (text and
+    /// attachments), so a test can read what reached the adapter.
+    pub echo_input: bool,
 }
 
 impl Default for Script {
@@ -111,6 +114,7 @@ impl Default for Script {
             rollback_refusal: None,
             options: Vec::new(),
             echo_options: false,
+            echo_input: false,
         }
     }
 }
@@ -269,7 +273,7 @@ async fn drive(
             return;
         };
         match cmd {
-            DriverCommand::StartTurn { .. } => {
+            DriverCommand::StartTurn { input } => {
                 if let Some(kind) = script.stale_before_ack.clone()
                     && !send(DriverEvent::event(kind)).await
                 {
@@ -279,6 +283,10 @@ async fn drive(
                     return;
                 }
                 steps = script.turns.pop_front().unwrap_or_default().into();
+                if script.echo_input {
+                    let echo = serde_json::to_string(&input).expect("an input serializes");
+                    steps.push_front(Step::Emit(text("echo", &echo)));
+                }
                 turn_open = true;
             }
             DriverCommand::Steer { .. } => {
