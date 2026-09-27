@@ -12,7 +12,7 @@ use anyagent::{
     AgentError, AgentInstallation, Answer, AuthStatus, Capability, ConfigId, ConfigKind,
     ConfigValue, Event, EventKind, Events, Input, McpServer, McpTransport, MessageId,
     PermissionChoice, QuestionAnswer, Request, RollbackScope, Runtime, Session, SessionOptions,
-    StopReason, ToolKind, ToolStatus, TurnOrigin, TurnUsage,
+    StopReason, SubagentInfo, ToolKind, ToolStatus, TurnOrigin, TurnUsage,
 };
 
 mod common;
@@ -503,8 +503,8 @@ async fn only_a_missing_session_fails_the_resume() {
     }
 }
 
-/// A task-tool child session streams under its task tool and its
-/// permission reaches the caller.
+/// A task-tool child session streams under its task tool, its permission
+/// reaches the caller, and the task names the child's role and model.
 #[tokio::test]
 async fn a_child_session_nests_under_its_task_tool() {
     let (session, mut events) = open("child", "").await;
@@ -512,6 +512,7 @@ async fn a_child_session_nests_under_its_task_tool() {
     let mut nested_text = String::new();
     let mut text = String::new();
     let mut task_parent = None;
+    let mut infos = Vec::new();
     loop {
         let event = next(&mut events).await;
         let parent = event
@@ -524,6 +525,9 @@ async fn a_child_session_nests_under_its_task_tool() {
                 nested_text.push_str(&t);
             }
             EventKind::TextDelta { text: t, .. } => text.push_str(&t),
+            EventKind::ToolUpdated(tool) if tool.kind == ToolKind::Subagent => {
+                infos.push(tool.subagent)
+            }
             EventKind::RequestOpened(Request::Permission(request)) => {
                 assert_eq!(request.tool.title, "bash ls");
                 session
@@ -538,6 +542,12 @@ async fn a_child_session_nests_under_its_task_tool() {
     assert_eq!(nested_text, "child text");
     assert!(text.contains("child=once"), "{text}");
     assert!(task_parent.unwrap().as_str().starts_with("call_task"));
+    let general = Some(SubagentInfo {
+        role: Some("general".into()),
+        model: Some("opencode/ling-3.0-flash-fin-free".into()),
+        ..SubagentInfo::default()
+    });
+    assert_eq!(infos, vec![general.clone(), general]);
     session.close().await.unwrap();
 }
 

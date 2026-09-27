@@ -130,16 +130,19 @@ function abortTurn(ses, asst) {
 // asks a permission of its own, then finishes.
 async function runChild(ses, asst, say) {
   const sid = ses.id;
-  const task = part(sid, asst.id, { type: 'tool', tool: 'task', callID: `call_task_${partN}`, state: { status: 'running', input: { description: 'review' } } });
-  partUpdated(sid, task);
   const child = newSession(sid);
+  // The task's running state as live 1.18.29 sent it (2026-09-27, T3 wire log, trimmed).
+  const metadata = { parentSessionId: sid, sessionId: child.id, model: { modelID: 'ling-3.0-flash-fin-free', providerID: 'opencode' } };
+  const input = { command: 'ls files in directory', description: 'review', prompt: 'List all files.', subagent_type: 'general' };
+  const task = part(sid, asst.id, { type: 'tool', tool: 'task', callID: `call_task_${partN}`, state: { title: 'review', metadata, status: 'running', input, time: { start: 1 } } });
+  partUpdated(sid, task);
   emit('session.created', { sessionID: child.id, info: { id: child.id, parentID: sid, title: 'Child session - 2026' } });
   const cm = message(child.id, 'assistant');
   emit('message.updated', { sessionID: child.id, info: cm });
   partUpdated(child.id, part(child.id, cm.id, { type: 'text', text: 'child text' }));
   const resp = await ask('per', child.id, { permission: 'bash', patterns: ['ls'], metadata: { command: 'ls' }, tool: { messageID: cm.id, callID: 'call_child' } });
   emit('message.updated', { sessionID: child.id, info: { ...cm, time: { ...cm.time, completed: 4 } } });
-  partUpdated(sid, { ...task, state: { status: 'completed', input: task.state.input, output: `child ${resp}` } });
+  partUpdated(sid, { ...task, state: { ...task.state, status: 'completed', output: `child ${resp}` } });
   say(`child=${resp} `);
 }
 
