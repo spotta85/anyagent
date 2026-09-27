@@ -2002,7 +2002,8 @@ fn stop_reason(frame: &Value) -> StopReason {
             source: CompletionSource::Protocol,
         };
     }
-    // `aborted_tools`: a permission denied with `interrupt` (probed 2026-09-27, 2.1.283).
+    // A deny with `interrupt` ends `aborted_tools`, or `aborted_streaming` when
+    // it lands mid-stream (both probed 2026-09-27, 2.1.283).
     if matches!(
         frame["terminal_reason"].as_str(),
         Some("aborted_streaming" | "aborted_tools")
