@@ -73,7 +73,9 @@ match &details.auth {
 
 **Confirms:** `AgentDetails`. The same struct is available later as
 `session.info().details`.
-**Gates:** none.
+**Gates:** none. `probe_with(&agent, options)` probes with your dir, env,
+args and config home. On claude a probe skips your hooks and MCP servers,
+so MCP-provided prompts are not in `commands`.
 
 anyagent never reads or holds credentials and never drives a login flow. It
 tells you the exact command or env var to show the user. Keep several
@@ -334,6 +336,7 @@ the parent's turn; anyagent consumes the child's turn bookkeeping.
 
 ```rust
 let usage = runtime.plan_usage(&agent).await?;        // plan name, 5-hour and weekly windows, banked resets
+let work = runtime.plan_usage_with(&agent, &SessionOptions::in_dir(".").config_home("/logins/work")).await?;
 for entry in runtime.plan_usage_all().await {          // every installed agent, for a dashboard
     ui.card(&entry.agent.name, entry.usage);
 }
