@@ -31,7 +31,7 @@ conversation, like one-shot text generation and reading account quota.
 | `discover()` | `DiscoveryReport` | Instant, read-only scan: installed agents plus missing ones with install hints |
 | `prewarm()` | | Start the discovery scan early |
 | `probe(&agent)` | `AgentDetails` | Opens a throwaway session (~1 s) to learn version, auth, capabilities, config options, commands |
-| `probe_with(&agent, options)` | `AgentDetails` | `probe` with your dir, env, args, config home. Always throwaway; `resume` / `fork` is `InvalidConfiguration` |
+| `probe_with(&agent, options)` | `AgentDetails` | `probe` with your dir, env, args, config home. In a workspace's dir it returns that workspace's commands, each with its `source`. Always throwaway; `resume` / `fork` is `InvalidConfiguration` |
 | `probe_auth(&agent)` | `AuthStatus` | Cheaper probe when you only need the login state |
 | `open(&agent, options)` | `(Session, Events)` | Spawn the agent and hand back the two halves |
 | `generate(&agent, options, prompt)` | `String` | One-shot text: opens, prompts, declines tools, closes |
@@ -267,9 +267,22 @@ pub struct AgentDetails {
     pub auth: AuthStatus,               // Authenticated { kind, account } | Unauthenticated { login } | Unknown
     pub capabilities: Capabilities,     // .supports(Capability::Fork)
     pub config_options: Vec<ConfigOption>,  // id, name, kind (Select | Boolean), current, live
-    pub commands: Vec<SlashCommand>,
+    pub commands: Vec<SlashCommand>,    // name, description, input_hint, source
+}
+
+pub enum CommandSource {
+    Builtin,                                                // part of the agent
+    Skill { path: Option<PathBuf>, scope: Option<String> }, // a skill on disk
 }
 ```
+
+`source` lets a skill picker list skills apart from built-in commands:
+
+| Agent | A command is a `Skill` when | `path` | `scope` |
+|---|---|---|---|
+| codex | it comes from `skills/list` (disabled skills are left out) | its `SKILL.md` | `user`, `repo`, `system`, `admin` |
+| claude | the CLI's `/skills` menu lists it | none: the CLI does not say | `user`, `project`, `plugin`, `claude.ai sync` |
+| others | never: every command is `Builtin` | | |
 
 A `Capability` is one optional thing this agent can do on this connection.
 Check `capabilities.supports(..)` before offering a feature, and never
