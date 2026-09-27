@@ -213,7 +213,7 @@ id in `turn_info.parent_tool_id`. That is how you nest it in a UI.
 | `role` | `subagent_type` from the Agent input | not sent |
 | `model` | the Agent input's `model`, when the parent picks one | not sent |
 | `summary` | the latest progress line | not sent |
-| `tokens` | the task's `total_tokens` | the child thread's token total |
+| `tokens` | size of the subagent's latest model call (`total_tokens`) | running total of the child thread; not comparable with claude's |
 
 Other agents leave it `None`. A background subagent stays `Running` past its
 turn and is listed in `TurnEnded.background`; its later updates start no turn.
