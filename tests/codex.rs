@@ -1041,15 +1041,18 @@ async fn progress_diff_and_reroute_are_events() {
         .unwrap();
     let (mut calls, mut progress, mut diffs, mut reroutes, mut diagnostics) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut turn = None;
     loop {
-        match next(&mut events).await.kind {
+        let event = next(&mut events).await;
+        match event.kind {
+            EventKind::TurnStarted { .. } => turn = event.turn_info,
             EventKind::ToolUpdated(tool) if matches!(tool.kind, ToolKind::Mcp { .. }) => {
                 calls.push(tool.id)
             }
             EventKind::ToolProgress {
                 tool_id, message, ..
             } => progress.push((tool_id, message)),
-            EventKind::TurnDiff { unified } => diffs.push(unified),
+            EventKind::TurnDiff { unified } => diffs.push((unified, event.turn_info)),
             reroute @ EventKind::ModelRerouted { .. } => reroutes.push(reroute),
             EventKind::Diagnostic(d) => diagnostics.push(d.message),
             EventKind::RequestOpened(request) => session
@@ -1065,7 +1068,13 @@ async fn progress_diff_and_reroute_are_events() {
     }
     assert_eq!(progress, [(calls[0].clone(), Some("halfway there".into()))]);
     assert_eq!(diffs.len(), 1);
-    assert!(diffs[0].contains("+++ b/fruit.txt\n@@ -0,0 +1 @@\n+PEAR\n"));
+    assert!(
+        diffs[0]
+            .0
+            .contains("+++ b/fruit.txt\n@@ -0,0 +1 @@\n+PEAR\n")
+    );
+    assert!(turn.is_some());
+    assert_eq!(diffs[0].1, turn, "the diff rides the prompted turn");
     let reroute = EventKind::ModelRerouted {
         from: "gpt-6".into(),
         to: "gpt-6-mini".into(),

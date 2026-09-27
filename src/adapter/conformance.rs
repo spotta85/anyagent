@@ -325,8 +325,8 @@ async fn bookkeeping_after_turn_end_is_not_a_turn_and_late_stops_are_diagnostics
     assert!(matches!(late_stop.kind, EventKind::Diagnostic(_)));
 }
 
-/// Tool progress, the turn diff and a reroute are content: after the prompted
-/// turn ended, each opens an agent turn and rides it.
+/// Tool progress, the turn diff and a reroute ride the prompted turn they arrive
+/// in; after it ended, each is content that opens an agent turn and rides it.
 #[tokio::test]
 async fn live_events_ride_the_running_turn() {
     let diff = EventKind::TurnDiff {
@@ -339,23 +339,26 @@ async fn live_events_ride_the_running_turn() {
     };
     for kind in [progress("t1"), diff, reroute] {
         let script = Script::default().turn(vec![
+            Step::Emit(kind.clone()),
             Step::End(completed()),
             Step::Emit(kind.clone()),
             Step::End(completed()),
         ]);
         let (session, mut events) = open(MockAdapter::new(script), None).await;
         session.prompt("go").await.unwrap();
-        let _prompted = collect(&mut events, 2).await;
-        let started = next(&mut events).await;
-        assert_eq!(
-            started.kind,
-            EventKind::TurnStarted {
-                origin: TurnOrigin::Agent
-            }
-        );
-        let event = next(&mut events).await;
-        assert_eq!(event.kind, kind);
-        assert_eq!(event.turn_info, started.turn_info);
+        for by_agent in [false, true] {
+            let started = next(&mut events).await;
+            let EventKind::TurnStarted { origin } = &started.kind else {
+                panic!("expected a turn start, got {:?}", started.kind)
+            };
+            assert_eq!(*origin == TurnOrigin::Agent, by_agent);
+            let event = next(&mut events).await;
+            assert_eq!(event.kind, kind);
+            assert!(event.turn_info.is_some());
+            assert_eq!(event.turn_info, started.turn_info);
+            let ended = next(&mut events).await;
+            assert!(matches!(ended.kind, EventKind::TurnEnded { .. }));
+        }
     }
 }
 
