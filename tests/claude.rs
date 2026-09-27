@@ -270,6 +270,40 @@ async fn files_rollback_refusal_leaves_the_session_untouched() {
     session.close().await.unwrap();
 }
 
+/// A fork that dies at launch ends the session: the rollback call gets
+/// `SessionClosed`, and the stream says why before it fails.
+#[tokio::test]
+async fn a_failed_rollback_respawn_closes_the_session() {
+    let (session, mut events) = open("rollback-dies", "--echo-uuid --fork-fails").await;
+    for prompt in ["one", "two"] {
+        echoed_turn(&session, &mut events, prompt).await;
+    }
+    let err = session
+        .rollback(
+            std::num::NonZeroU32::new(1).unwrap(),
+            RollbackScope::Conversation,
+        )
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(err, AgentError::SessionClosed), "{err}");
+    let mut failed = false;
+    while let Some(item) = events.next().await {
+        match item {
+            Ok(event) => {
+                if let EventKind::Diagnostic(d) = event.kind {
+                    failed |= d.message.starts_with("rollback failed");
+                }
+            }
+            Err(e) => {
+                assert!(matches!(e, AgentError::ProcessExited { .. }), "{e}");
+                break;
+            }
+        }
+    }
+    assert!(failed, "the stream names the failed respawn");
+}
+
 /// Fork at MessageEnded fork_point branches at cut; tip fork creates new session without cut.
 #[tokio::test]
 async fn fork_from_branches_at_a_message_and_at_the_tip() {

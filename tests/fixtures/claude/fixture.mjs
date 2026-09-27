@@ -8,7 +8,8 @@
 // --token-source-key (the credential named in tokenSource itself),
 // --echo-config-home (echo the CLAUDE_CONFIG_DIR the child received),
 // --rewind-fails (rewind_files answers with an error envelope),
-// --denied (a settings rule refuses a Bash call).
+// --denied (a settings rule refuses a Bash call), --fork-fails (a fork
+// launch dies before speaking).
 import { createInterface } from 'node:readline';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 
@@ -25,6 +26,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // is a fresh process with a new session id, like the real CLI (recording 09).
 const FORK_AT = (process.argv.find((a) => a.startsWith('--resume-session-at=')) ?? '').slice(20) || null;
 const S = flag('--fork-session') ? 'sess-fork-1' : 'sess-c1';
+if (flag('--fork-fails') && flag('--fork-session')) { process.stderr.write('boom: fork failed\n'); process.exit(1); }
 if (flag('--echo-relaunch')) appendFileSync('launches.jsonl', JSON.stringify(process.argv) + '\n');
 let recalled = flag('--echo-relaunch') && flag('--resume') && existsSync('history.json') ? JSON.parse(readFileSync('history.json', 'utf8')) : [];
 let n = 0;

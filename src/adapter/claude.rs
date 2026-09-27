@@ -1121,9 +1121,10 @@ impl Drive {
                     .await?;
                 self.events.send(DriverEvent::RolledBack(Ok(()))).await
             }
+            // The session is dead: no `RolledBack`, so the caller gets `SessionClosed`.
             Err(e) => {
                 self.events
-                    .rollback_refused(format!("rollback failed: {e}"))
+                    .diagnostic(DiagnosticLevel::Error, format!("rollback failed: {e}"))
                     .await?;
                 self.events.exited(&mut self.child).await;
                 Err(Gone)
