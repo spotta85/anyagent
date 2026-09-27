@@ -286,6 +286,24 @@ async fn a_probe_opens_no_thread() {
     assert_eq!(current("sandbox"), "workspace-write");
 }
 
+/// A probe's recording redacts the `config/read` reply: it is the user's codex config.
+#[tokio::test]
+async fn a_probe_recording_redacts_the_codex_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let wire = dir.path().join("wire.jsonl");
+    let agent = AgentInstallation::at("codex", wrapper("probe-redact", ""));
+    let options = SessionOptions::in_dir(dir.path()).record_wire(&wire);
+    Runtime::new().probe_with(&agent, options).await.unwrap();
+    // `skills/list` goes out after the config reply came in: both are written.
+    common::sent_frames(&wire, 1, |f| f["method"] == "skills/list").await;
+    let recording = std::fs::read_to_string(&wire).unwrap();
+    assert!(
+        recording.contains(r#""config":"<redacted>""#),
+        "{recording}"
+    );
+    assert!(!recording.contains("sandbox_mode"), "{recording}");
+}
+
 /// A probe reports the caller's `configure` choices over the config file's, as
 /// `thread/start` would echo them.
 #[tokio::test]

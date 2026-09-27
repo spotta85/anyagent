@@ -76,8 +76,8 @@ impl LineWire {
 
 /// Tees raw protocol frames to a JSONL file when `record_wire` is set: one
 /// `{"dir":"in"|"out","frame":<frame>}` per line, append-only and flushed
-/// per line. Unredacted except declared MCP servers' header and env values;
-/// unbounded: a local debug artifact. A write failure is reported once as a
+/// per line. Unredacted except declared MCP servers' header and env values and
+/// codex's config; unbounded: a local debug artifact. A write failure is reported once as a
 /// `Diagnostic`; recording never fails a turn.
 #[derive(Clone)]
 pub(crate) struct WireRecorder {
@@ -125,7 +125,7 @@ impl WireRecorder {
         Some(Self { lines })
     }
 
-    /// Records one frame in the given direction, MCP secrets redacted. Never
+    /// Records one frame in the given direction, secrets redacted. Never
     /// blocks or errors; a gone writer just loses the frame.
     pub(crate) fn record(&self, dir: &'static str, frame: &Value) {
         let mut entry = json!({ "dir": dir, "frame": frame });
@@ -133,6 +133,10 @@ impl WireRecorder {
             if let Some(servers) = entry["frame"].pointer_mut(at) {
                 redact_mcp_servers(servers);
             }
+        }
+        // codex's `config/read` reply is the user's whole config file.
+        if let Some(config) = entry["frame"].pointer_mut("/result/config") {
+            *config = json!("<redacted>");
         }
         let mut line = entry.to_string();
         line.push('\n');
