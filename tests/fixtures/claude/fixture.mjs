@@ -45,6 +45,14 @@ const assistantTool = (id, name, input, frameUuid) => send({ type: 'assistant', 
 const resultFrame = (extra) => send({ type: 'result', session_id: S, uuid: uid(), subtype: 'success', is_error: false, stop_reason: 'end_turn', terminal_reason: 'completed', num_turns: 1, total_cost_usd: 0.01, usage: {}, modelUsage: { 'claude-sonnet-5': { contextWindow: 200000 } }, result: 'done', ...extra });
 
 let ctrlWaiters = {}, turn = null, inited = false, reqN = 0, queue = [], woke = false, mcpServers = {};
+// Commands and `/skills` menu rows, shaped like 2.1.283 (probed 2026-09-27): only
+// built-ins carry `builtin`; a row names a skill, its source label, no path.
+const COMMANDS = [
+  { name: 'compact', description: 'Compact context', argumentHint: '', builtin: true },
+  { name: 'review', description: 'Review a diff (project)', argumentHint: '' },
+];
+const skillRow = (name, source) => ({ name, display_name: name, description: name, source, tokens: 10, state: 'on', advertised: true, handles: {} });
+const SKILLS = [skillRow('review', 'project')];
 
 const rl = createInterface({ input: process.stdin });
 rl.on('line', (line) => {
@@ -77,7 +85,7 @@ function onControl(m) {
       const fast = si > -1 && JSON.parse(process.argv[si + 1]).fastMode === true;
       return reply({
         fast_mode_state: fast ? 'on' : 'off',
-        commands: [{ name: 'compact', description: 'Compact context', argumentHint: '' }],
+        commands: COMMANDS,
         models: [
           { value: 'default', displayName: 'Default (recommended)', description: 'Opus 5 with 1M context', supportsFastMode: !flag('--no-fast-metadata'), supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] },
           { value: 'sonnet', displayName: 'Sonnet', description: 'Fast for everyday tasks', supportedEffortLevels: ['low', 'high'] },
@@ -121,6 +129,8 @@ function onControl(m) {
     }
     case 'get_binary_version':
       return reply({ version: '2.1.241', buildTime: '2026-08-22T22:46:48Z' });
+    case 'get_skills_dialog':
+      return reply({ skills: SKILLS });
     case 'get_usage':
       // Slim shape recorded 2026-09-06 (2.1.261): no `limits` array.
       if (flag('--slim-usage'))
@@ -180,6 +190,11 @@ async function runTurn(m) {
   // "die-auth" loses the credentials: the synthetic API-error message and
   // its result frame, exactly as the CLI emits them with no stored login.
   const prompt = typeof m.message.content === 'string' ? m.message.content : (m.message.content.find(b => b.type === 'text')?.text ?? '');
+  // "new-skill": a skill found mid-turn; the CLI pushes the whole command list again.
+  if (prompt.includes('new-skill')) {
+    SKILLS.push(skillRow('fresh', 'user'));
+    send({ type: 'system', subtype: 'commands_changed', commands: [...COMMANDS, { name: 'fresh', description: 'fresh (user)', argumentHint: '' }], uuid: uid(), session_id: S });
+  }
   if (prompt.includes('die-auth')) {
     send({ type: 'assistant', message: { id: 'err_1', model: '<synthetic>', role: 'assistant', content: [{ type: 'text', text: 'Not logged in · Please run /login' }], usage: USAGE }, session_id: S, uuid: uid(), parent_tool_use_id: null, error: 'authentication_failed', is_api_error_message: true });
     send({ type: 'result', session_id: S, uuid: uid(), subtype: 'success', is_error: true, stop_reason: 'stop_sequence', terminal_reason: 'api_error', num_turns: 1, total_cost_usd: 0, usage: {}, modelUsage: {}, result: 'Not logged in · Please run /login', user_message_uuid: u });
