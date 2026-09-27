@@ -28,8 +28,8 @@ use crate::error::AgentError;
 use crate::event::{
     Answer, Choice, ChoiceId, CompletionSource, Diagnostic, DiagnosticLevel, EventKind, Extensions,
     FileDiff, MessageId, PermissionChoice, PermissionRequest, PlanUsage, Question, QuestionAnswer,
-    QuestionId, QuestionRequest, RawTool, Request, RequestId, ResetCredits, StopReason, ToolId,
-    ToolInput, ToolKind, ToolStatus, ToolUpdate, TurnUsage, UsageWindow,
+    QuestionId, QuestionRequest, RawTool, Request, RequestId, ResetCredits, StopReason,
+    SubagentInfo, ToolId, ToolInput, ToolKind, ToolStatus, ToolUpdate, TurnUsage, UsageWindow,
 };
 use crate::process::{self, Spawn};
 
@@ -808,8 +808,8 @@ struct Drive {
     /// Active tool items by id. An interrupted turn leaves them with no
     /// `item/completed` (probed 2026-08-27); they are cancelled at turn end.
     tools: HashMap<String, ToolUpdate>,
-    /// Subagent child threads: child threadId → the `subAgentActivity` tool
-    /// that owns it. Cleared at turn end with the tools it points into.
+    /// Subagent child threads: child threadId → the `subAgentActivity` or
+    /// `spawnAgent` tool that owns it. Cleared at turn end with the tools it points into.
     children: HashMap<String, ToolId>,
     /// Set while a child thread's frame is being translated, so every content
     /// event it produces rides that subagent tool.
@@ -1380,20 +1380,43 @@ impl Drive {
                     return Ok(());
                 }
                 self.children.insert(child.to_owned(), ToolId::new(&id));
-                self.on_tool_item(&id, item).await
+                self.on_tool(tool_update(item)).await
             }
-            _ => self.on_tool_item(&id, item).await,
+            // A spawn call names its child and model once completed (T3 live 2026-09-27, 0.154.0,
+            // recording 14). The first tool naming a child owns it and stays Running until it ends.
+            "collabAgentToolCall" if item["tool"] == "spawnAgent" => {
+                let mut tool = tool_update(item);
+                tool.subagent = item["model"]
+                    .as_str()
+                    .filter(|model| !model.is_empty())
+                    .map(|model| SubagentInfo {
+                        model: Some(model.to_owned()),
+                        ..SubagentInfo::default()
+                    });
+                for child in item["receiverThreadIds"].as_array().into_iter().flatten() {
+                    let child = child.as_str().unwrap_or_default().to_owned();
+                    let owner = self
+                        .children
+                        .entry(child)
+                        .or_insert_with(|| tool.id.clone());
+                    if *owner == tool.id && tool.status == ToolStatus::Completed {
+                        tool.status = ToolStatus::Running;
+                    }
+                }
+                self.on_tool(tool).await
+            }
+            _ => self.on_tool(tool_update(item)).await,
         }
     }
 
-    /// A tool-shaped item: emit the snapshot and keep the active ones, so an
-    /// interrupt or a child turn end can still settle them.
-    async fn on_tool_item(&mut self, id: &str, item: &Value) -> Result<(), Gone> {
-        let tool = tool_update(item);
+    /// A tool snapshot: emit it and keep the active ones, so an interrupt or a
+    /// child turn end can still settle them.
+    async fn on_tool(&mut self, tool: ToolUpdate) -> Result<(), Gone> {
+        let id = tool.id.as_str().to_owned();
         if tool.status.is_active() {
-            self.tools.insert(id.to_owned(), tool.clone());
+            self.tools.insert(id, tool.clone());
         } else {
-            self.tools.remove(id);
+            self.tools.remove(&id);
         }
         self.content(EventKind::ToolUpdated(tool)).await
     }

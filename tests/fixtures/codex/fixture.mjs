@@ -8,7 +8,8 @@
 // elicitation), "sleep" (a command that only an interrupt ends), "die"
 // (exit mid-turn), "subagent" (a child thread runs a whole turn before the
 // parent's ends, "subagent-fails" for a child turn that fails), "spawn-live"
-// (a subagent in the live 0.154.0 order of recording 13),
+// (a subagent in the live 0.154.0 order of recording 13), "spawn-collab"
+// (recording 14's `spawnAgent` subagent, replayed),
 // "end-failed"/"end-aborted" (the turn ends via turn/failed / turn/aborted
 // instead of turn/completed), "refuse-start" (turn/start is refused).
 // --rename: the server renames the thread after the first turn.
@@ -19,7 +20,7 @@
 // A turn/start in the `plan` collaboration mode also yields a `plan` item
 // ("no-plan": one with empty text).
 import { createInterface } from 'node:readline';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 
 // FIXTURE_ARGV_LOG, set through the session's env: log the launch args there.
 if (process.env.FIXTURE_ARGV_LOG) appendFileSync(process.env.FIXTURE_ARGV_LOG, JSON.stringify(process.argv.slice(2)) + '\n');
@@ -346,6 +347,7 @@ async function runTurn(params) {
 
   if (prompt.includes('subagent')) await runSubagent(prompt.includes('subagent-fails'));
   if (prompt.includes('spawn-live')) await runLiveSubagent();
+  if (prompt.includes('spawn-collab')) await replayCollabSubagent();
 
   await sleep(20); // yield so a mid-turn steer on stdin gets read, like the real server
   for (const steer of turn.steered) delta(msg.id, `steered=${steer} `);
@@ -380,7 +382,8 @@ function endTurn(status, error = null, method = 'turn/completed') {
 async function runSubagent(fails) {
   const CHILD = 'th-child-1', CHILD_TURN = 'turn-child-1';
   const child = (method, params) => notify(method, { threadId: CHILD, turnId: CHILD_TURN, ...params });
-  const collab = item({ type: 'collabAgentToolCall', tool: 'spawnAgent', senderThreadId: THREAD.id, receiverThreadIds: [CHILD], agentsStates: {}, status: 'inProgress', prompt: 'review the diff' });
+  // The spawn call names its child only once completed (recording 14).
+  const collab = item({ type: 'collabAgentToolCall', tool: 'spawnAgent', senderThreadId: THREAD.id, receiverThreadIds: [], agentsStates: {}, status: 'inProgress', prompt: 'review the diff' });
   itemStarted(collab);
   const activity = item({ type: 'subAgentActivity', agentThreadId: CHILD, agentPath: '.codex/agents/reviewer.md', kind: 'started' });
   itemStarted(activity);
@@ -395,7 +398,7 @@ async function runSubagent(fails) {
   child('turn/plan/updated', { plan: [{ step: 'child step', status: 'inProgress' }] });
   notify('turn/completed', { threadId: CHILD, turn: { id: CHILD_TURN, status: fails ? 'failed' : 'completed', error: fails ? { message: 'child blew up' } : null, items: [] } });
 
-  itemCompleted({ ...collab, status: 'completed', agentsStates: { [CHILD]: { status: fails ? 'errored' : 'completed' } } });
+  itemCompleted({ ...collab, status: 'completed', receiverThreadIds: [CHILD], agentsStates: { [CHILD]: { status: fails ? 'errored' : 'completed' } } });
   await sleep(10);
 }
 
@@ -423,5 +426,16 @@ async function runLiveSubagent() {
   notify('turn/completed', { threadId: CHILD, turn: { id: CHILD_TURN, status: 'completed', error: null, items: [] } });
   itemCompleted(finish);
   itemCompleted({ ...wait, status: 'completed' });
+  await sleep(10);
+}
+
+// Recording 14 replayed verbatim from the `spawnAgent` call through the `wait` call's end,
+// its parent thread and turn swapped for this one's.
+async function replayCollabSubagent() {
+  const frames = readFileSync(new URL('14-collab-subagent.jsonl', import.meta.url), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((f) => f.method);
+  const from = frames.findIndex((f) => f.params.item?.tool === 'spawnAgent');
+  const to = frames.findLastIndex((f) => f.params.item?.tool === 'wait');
+  const { threadId, turnId } = frames[from].params;
+  for (const f of frames.slice(from, to + 1)) send(JSON.parse(JSON.stringify(f).replaceAll(threadId, THREAD.id).replaceAll(turnId, turn.id)));
   await sleep(10);
 }
