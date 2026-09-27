@@ -10,8 +10,8 @@ use futures::StreamExt;
 use anyagent::{
     AgentError, AgentInstallation, Answer, AuthKind, AuthStatus, Capability, ConfigId, ConfigKind,
     ConfigValue, DeliveryKind, Event, EventKind, Events, Input, LoginMethod, McpServer,
-    PermissionChoice, PlanStatus, QuestionAnswer, Request, Runtime, Session, SessionOptions,
-    StopReason, ToolInput, ToolKind, ToolStatus,
+    PermissionChoice, PermissionRequest, PlanStatus, QuestionAnswer, Request, Runtime, Session,
+    SessionOptions, StopReason, ToolInput, ToolKind, ToolStatus, ToolUpdate,
 };
 
 mod common;
@@ -76,6 +76,36 @@ async fn diagnostics_until(events: &mut Events, stop: impl Fn(&EventKind) -> boo
         }
         if stop(&kind) {
             return seen;
+        }
+    }
+}
+
+/// Runs one MCP-approval turn, answering each permission with `choice`.
+/// Returns the text, the requests, the MCP tool snapshots, and the stop.
+async fn mcp_turn(
+    session: &Session,
+    events: &mut Events,
+    prompt: &str,
+    choice: PermissionChoice,
+) -> (String, Vec<PermissionRequest>, Vec<ToolUpdate>, StopReason) {
+    session.prompt(prompt).await.unwrap();
+    let (mut text, mut requests, mut states) = (String::new(), Vec::new(), Vec::new());
+    loop {
+        match next(events).await.kind {
+            EventKind::TextDelta { text: t, .. } => text.push_str(&t),
+            EventKind::ToolUpdated(tool) if matches!(tool.kind, ToolKind::Mcp { .. }) => {
+                states.push(tool)
+            }
+            EventKind::RequestOpened(Request::Permission(request)) => {
+                let id = request.id.clone();
+                requests.push(request);
+                session
+                    .answer(id, Answer::Permission(choice))
+                    .await
+                    .unwrap();
+            }
+            EventKind::TurnEnded { stop, .. } => return (text, requests, states, stop),
+            _ => {}
         }
     }
 }
@@ -777,42 +807,44 @@ async fn an_mcp_tool_approval_maps_to_a_permission() {
             ToolStatus::Failed,
         ),
     ] {
-        session.prompt("mcp-tool please").await.unwrap();
-        let mut text = String::new();
-        let mut states = Vec::new();
-        let stop = loop {
-            match next(&mut events).await.kind {
-                EventKind::TextDelta { text: t, .. } => text.push_str(&t),
-                EventKind::ToolUpdated(tool) if tool.kind == mcp => states.push(tool),
-                EventKind::RequestOpened(Request::Permission(request)) => {
-                    // The request names no item; its tool is the call `item/started` opened.
-                    assert_eq!(request.tool.id, states[0].id);
-                    assert_eq!(request.tool.kind, mcp);
-                    assert_eq!(
-                        request.options,
-                        vec![
-                            PermissionChoice::AllowOnce,
-                            PermissionChoice::AllowAlways,
-                            PermissionChoice::DenyOnce,
-                        ]
-                    );
-                    assert_eq!(
-                        request.detail.as_deref(),
-                        Some("Allow the probe MCP server to run tool \"secret_word\"?")
-                    );
-                    session
-                        .answer(request.id, Answer::Permission(choice))
-                        .await
-                        .unwrap();
-                }
-                EventKind::TurnEnded { stop, .. } => break stop,
-                _ => {}
-            }
-        };
+        let (text, requests, states, stop) =
+            mcp_turn(&session, &mut events, "mcp-tool please", choice).await;
+        // The request names no item; its tool is the call `item/started` opened.
+        assert_eq!(requests[0].tool.id, states[0].id);
+        assert_eq!(requests[0].tool.kind, mcp);
+        assert_eq!(
+            requests[0].options,
+            vec![
+                PermissionChoice::AllowOnce,
+                PermissionChoice::AllowAlways,
+                PermissionChoice::DenyOnce,
+            ]
+        );
+        assert_eq!(
+            requests[0].detail.as_deref(),
+            Some("Allow the probe MCP server to run tool \"secret_word\"?")
+        );
         assert!(text.contains(reply), "{text}");
         assert_eq!(states.last().unwrap().status, status);
         assert!(matches!(stop, StopReason::Completed { .. }), "{stop:?}");
     }
+    session.close().await.unwrap();
+}
+
+/// Two in-flight calls of one tool: each approval lands on the call whose
+/// arguments its `tool_params` carries.
+#[tokio::test]
+async fn an_mcp_approval_picks_the_call_by_its_arguments() {
+    let (session, mut events) = open("mcp-two", "").await;
+    let (_, requests, states, _) = mcp_turn(
+        &session,
+        &mut events,
+        "mcp-two please",
+        PermissionChoice::AllowOnce,
+    )
+    .await;
+    let asked: Vec<_> = requests.iter().map(|r| &r.tool.id).collect();
+    assert_eq!(asked, vec![&states[0].id, &states[1].id]);
     session.close().await.unwrap();
 }
 

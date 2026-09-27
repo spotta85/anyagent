@@ -269,16 +269,23 @@ async function runTurn(params) {
     delta(msg.id, `write=${resp?.decision} `);
   }
 
-  if (prompt.includes('mcp-tool')) {
+  if (prompt.includes('mcp-')) {
     // Recorded 2026-09-27 (codex 0.154.0): names the server, not the item; decline fails it.
-    const call = item({ type: 'mcpToolCall', server: 'probe', tool: 'secret_word', status: 'inProgress', arguments: {}, result: null, error: null });
-    itemStarted(call);
-    const resp = await ask('mcpServer/elicitation/request', { serverName: 'probe', mode: 'form', _meta: { codex_approval_kind: 'mcp_tool_call', persist: ['session', 'always'], tool_description: 'Returns the secret word.', tool_params: {}, tool_params_display: [] }, message: 'Allow the probe MCP server to run tool "secret_word"?', requestedSchema: { type: 'object', properties: {} } });
-    if (turn.interrupted) return endTurn('interrupted');
-    notify('serverRequest/resolved', { threadId: THREAD.id, requestId: serverReqN - 1 });
-    const accepted = resp?.action === 'accept';
-    itemCompleted({ ...call, status: accepted ? 'completed' : 'failed', error: accepted ? null : { message: 'user rejected MCP tool call' } });
-    delta(msg.id, `mcpcall=${[resp?.action, resp?._meta?.persist].filter(Boolean).join('/')} `);
+    // "mcp-two" runs two calls of one tool; each is asked about while both are in flight.
+    const args = prompt.includes('mcp-two') ? [{ word: 'a' }, { word: 'b' }] : [{}];
+    const calls = args.map((a) => item({ type: 'mcpToolCall', server: 'probe', tool: 'secret_word', status: 'inProgress', arguments: a, result: null, error: null }));
+    calls.forEach(itemStarted);
+    const resps = [];
+    for (const call of calls) {
+      resps.push(await ask('mcpServer/elicitation/request', { serverName: 'probe', mode: 'form', _meta: { codex_approval_kind: 'mcp_tool_call', persist: ['session', 'always'], tool_description: 'Returns the secret word.', tool_params: call.arguments, tool_params_display: [] }, message: 'Allow the probe MCP server to run tool "secret_word"?', requestedSchema: { type: 'object', properties: {} } }));
+      if (turn.interrupted) return endTurn('interrupted');
+      notify('serverRequest/resolved', { threadId: THREAD.id, requestId: serverReqN - 1 });
+    }
+    calls.forEach((call, i) => {
+      const accepted = resps[i]?.action === 'accept';
+      itemCompleted({ ...call, status: accepted ? 'completed' : 'failed', error: accepted ? null : { message: 'user rejected MCP tool call' } });
+      delta(msg.id, `mcpcall=${[resps[i]?.action, resps[i]?._meta?.persist].filter(Boolean).join('/')} `);
+    });
   }
 
   if (prompt.includes('subagent')) await runSubagent(prompt.includes('subagent-fails'));
