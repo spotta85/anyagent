@@ -279,16 +279,16 @@ impl Runtime {
     /// an API-key login) return `UnsupportedFeature`. May spawn a short-lived
     /// agent process; results are cached for 60 s.
     pub async fn plan_usage(&self, agent: &AgentInstallation) -> Result<PlanUsage, AgentError> {
-        self.plan_usage_with(agent, &throwaway_options()).await
+        self.plan_usage_with(agent, throwaway_options()).await
     }
 
     /// `plan_usage` for the login these options point at.
     pub async fn plan_usage_with(
         &self,
         agent: &AgentInstallation,
-        options: &SessionOptions,
+        options: SessionOptions,
     ) -> Result<PlanUsage, AgentError> {
-        require_new(options, "plan usage")?;
+        require_new(&options, "plan usage")?;
         let key = (
             agent.id.clone(),
             agent.executable_path.clone(),
@@ -305,7 +305,7 @@ impl Runtime {
             .adapters
             .get(&agent.id)
             .ok_or_else(|| AgentError::UnsupportedFeature("plan usage".into()))?;
-        let usage = adapter.plan_usage(agent, options).await?;
+        let usage = adapter.plan_usage(agent, &options).await?;
         let mut cache = self.usage_cache.lock().unwrap();
         // Drop expired entries: a key holds the login's env values.
         cache.retain(|_, (at, _)| at.elapsed() < USAGE_CACHE_TTL);
@@ -572,7 +572,7 @@ mod tests {
                 Err(AgentError::InvalidConfiguration(_))
             ));
             assert!(matches!(
-                runtime.plan_usage_with(&agent, &options).await,
+                runtime.plan_usage_with(&agent, options).await,
                 Err(AgentError::InvalidConfiguration(_))
             ));
         }

@@ -133,7 +133,7 @@ async fn handle(state: &State, cmd: Cmd) -> Result<Reply, Fail> {
         Cmd::PlanUsage { agent, options } => {
             let agent = state.resolve(agent).await?;
             let options = options.into_session_options(std::env::temp_dir());
-            Reply::ok(state.runtime.plan_usage_with(&agent, &options).await?)
+            Reply::ok(state.runtime.plan_usage_with(&agent, options).await?)
         }
         Cmd::Generate {
             agent,
