@@ -199,7 +199,7 @@ pub struct McpServer {
     pub(crate) connection: McpConnection,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub(crate) enum McpConnection {
@@ -274,6 +274,30 @@ impl McpServer {
             McpConnection::Stdio { .. } => McpTransport::Stdio,
             McpConnection::Http { .. } => McpTransport::Http,
             McpConnection::Sse { .. } => McpTransport::Sse,
+        }
+    }
+}
+
+impl std::fmt::Debug for McpConnection {
+    /// Env and header names only: their values may be credentials.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            McpConnection::Stdio { command, args, env } => f
+                .debug_struct("Stdio")
+                .field("command", command)
+                .field("args", args)
+                .field("env", &env.keys().collect::<Vec<_>>())
+                .finish(),
+            McpConnection::Http { url, headers } => f
+                .debug_struct("Http")
+                .field("url", url)
+                .field("headers", &headers.keys().collect::<Vec<_>>())
+                .finish(),
+            McpConnection::Sse { url, headers } => f
+                .debug_struct("Sse")
+                .field("url", url)
+                .field("headers", &headers.keys().collect::<Vec<_>>())
+                .finish(),
         }
     }
 }
@@ -656,5 +680,18 @@ mod tests {
         let text = format!("{options:?}");
         assert!(text.contains(r#"env: {"API_KEY"}"#), "{text}");
         assert!(!text.contains("sk-secret"), "{text}");
+    }
+
+    /// `Debug` of an MCP server names its env vars and headers, never their values.
+    #[test]
+    fn mcp_debug_hides_env_and_header_values() {
+        let stdio = McpServer::stdio("db", "/bin/db", ["--ro"]).with("DB_TOKEN", "sk-stdio");
+        let http = McpServer::http("web", "https://x.test").with("Authorization", "sk-http");
+        let sse = McpServer::sse("feed", "https://y.test").with("X-Key", "sk-sse");
+        let text = format!("{stdio:?} {http:?} {sse:?}");
+        for name in ["DB_TOKEN", "Authorization", "X-Key"] {
+            assert!(text.contains(name), "{text}");
+        }
+        assert!(!text.contains("sk-"), "{text}");
     }
 }
