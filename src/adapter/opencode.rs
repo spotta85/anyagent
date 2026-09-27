@@ -41,6 +41,7 @@ use crate::event::{
     Answer, Choice, ChoiceId, CompletionSource, DiagnosticLevel, EventKind, MessageId,
     PermissionChoice, PermissionRequest, Question, QuestionAnswer, QuestionId, QuestionRequest,
     RawTool, Request, RequestId, StopReason, ToolId, ToolInput, ToolKind, ToolStatus, ToolUpdate,
+    TurnUsage,
 };
 use crate::process::{self, Spawn};
 
@@ -88,6 +89,7 @@ impl Adapter for OpencodeAdapter {
                 scratch: TurnScratch::default(),
                 tide: String::new(),
                 cost: 0.0,
+                turn_usage: TurnUsage::default(),
                 turn: Turn::Idle,
                 admit_deadline: None,
                 aborting: false,
@@ -638,6 +640,8 @@ struct Drive {
     tide: String,
     /// Session cost so far, summed over step-finishes.
     cost: f64,
+    /// What the running turn has spent, summed over its own step-finishes.
+    turn_usage: TurnUsage,
     turn: Turn,
     /// When a taken prompt must have gone busy by; a dropped one fails
     /// loudly instead of hanging the deterministic turn forever.
@@ -749,6 +753,7 @@ impl Drive {
                 self.turn = Turn::Sent;
                 self.aborting = false;
                 self.turn_error = None;
+                self.turn_usage = TurnUsage::default();
                 self.start_turn(&input).await?;
             }
             // `summarize` streams the summary and settles like a turn, so
@@ -1215,10 +1220,12 @@ impl Drive {
             .await
     }
 
-    /// A step boundary carries the turn's running token and cost totals.
+    /// A step boundary carries that step's tokens and cost: they add to the
+    /// turn's usage, and the step's total is the context occupancy.
     async fn on_step_finish(&mut self, part: &Value) -> Result<(), Gone> {
         let tokens = &part["tokens"];
         self.cost += part["cost"].as_f64().unwrap_or_default();
+        self.add_turn_usage(tokens).await?;
         // Other step-finish shapes carry the components without a `total`.
         let sum = |v: &Value| v.as_u64().unwrap_or_default();
         let used = tokens["total"]
@@ -1241,6 +1248,20 @@ impl Drive {
                     .and_then(|m| self.windows.get(&m).copied()),
                 cost_usd: (self.cost > 0.0).then_some(self.cost),
             })
+            .await
+    }
+
+    /// Adds one step's tokens to the turn and reports the sum. opencode
+    /// splits cache out of `input` and reasoning out of `output` (1.18.29).
+    async fn add_turn_usage(&mut self, tokens: &Value) -> Result<(), Gone> {
+        let count = |v: &Value| v.as_u64().unwrap_or_default();
+        let cached = count(&tokens["cache"]["read"]);
+        self.turn_usage.input_tokens +=
+            count(&tokens["input"]) + cached + count(&tokens["cache"]["write"]);
+        self.turn_usage.cached_input_tokens += cached;
+        self.turn_usage.output_tokens += count(&tokens["output"]) + count(&tokens["reasoning"]);
+        self.events
+            .send(DriverEvent::TurnUsage(self.turn_usage))
             .await
     }
 
@@ -1440,6 +1461,8 @@ impl Drive {
         self.turn = Turn::Sent;
         self.aborting = false;
         self.turn_error = None;
+        // The summary is a model call of its own (probed 1.18.29).
+        self.turn_usage = TurnUsage::default();
         let path = format!("/session/{}/summarize", self.session_id);
         match self.http.post(&path, body).await {
             Ok(_) => {
