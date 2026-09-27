@@ -22,7 +22,7 @@ pub enum AgentError {
     InvalidRequest(String),
     #[error("could not resume session: {0}")]
     ResumeFailed(String),
-    #[error("session is busy with a running turn")]
+    #[error("session is busy")]
     SessionBusy,
     #[error("protocol failure: {0}")]
     ProtocolFailed(String),
