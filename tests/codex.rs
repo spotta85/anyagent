@@ -1607,6 +1607,8 @@ async fn a_conflicting_stdio_env_name_is_refused() {
     let (session, _events) = open_with("mcp-same", "", same).await.unwrap();
     session.close().await.unwrap();
     let path = std::env::var("PATH").unwrap();
+    // Windows has no HOME; USERPROFILE is its always-set counterpart.
+    let home = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
     for (var, options) in [
         (
             "TOOL_KEY",
@@ -1620,10 +1622,7 @@ async fn a_conflicting_stdio_env_name_is_refused() {
                 .mcp_server(server("b", "TOOL_KEY", "v-one"))
                 .mcp_server(server("a", "TOOL_KEY", "v-two")),
         ),
-        (
-            "HOME",
-            base.clone().mcp_server(server("a", "HOME", "v-two")),
-        ),
+        (home, base.clone().mcp_server(server("a", home, "v-two"))),
         ("PATH", base.clone().mcp_server(server("a", "PATH", &path))),
     ] {
         let err = open_with("mcp-conflict", "", options).await.err().unwrap();
