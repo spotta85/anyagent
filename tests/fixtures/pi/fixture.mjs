@@ -9,11 +9,15 @@
 // first prompt is refused). Prompt words steer scenarios: "tool" (a bash
 // call with streamed output), "sleep" (a tool only an abort ends), "ask"
 // (an extension select dialog mid-turn), "confirm" (a timed confirm dialog),
-// "fail" (the model errors).
+// "fail" (the model errors), "wake" (pi runs once more, unprompted, after
+// settling).
 import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { appendFileSync } from 'node:fs';
 
+// FIXTURE_ARGV_LOG, set through the session's env: log the launch args there.
+if (process.env.FIXTURE_ARGV_LOG) appendFileSync(process.env.FIXTURE_ARGV_LOG, JSON.stringify(process.argv.slice(2)) + '\n');
 const flag = (name) => process.argv.includes(name);
 const send = (frame) => process.stdout.write(JSON.stringify(frame) + '\n');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -95,7 +99,10 @@ async function onCommand(cmd) {
       }
       if (streaming) return no("Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.");
       ok();
-      return run(cmd.message);
+      await run(cmd.message);
+      // An extension's `sendCustomMessage` with `triggerTurn`: a run nobody prompted.
+      if (String(cmd.message).includes('wake')) await run('woken by an extension');
+      return;
     }
     // Like pi 0.84.4: a session with nothing worth summarizing is refused
     // (probed live). The success path is modelled, not recorded: pi cannot
@@ -179,6 +186,9 @@ async function turn(message) {
   if ((!flag('--no-tools') || flag('--ignore-no-tools')) && (scenario.includes('tool') || scenario.includes('sleep'))) {
     await toolCall(scenario.includes('sleep'));
     if (aborting) return end('error', 'This operation was aborted');
+    // The tool call ends one LLM call; the answer is a second assistant message.
+    end('toolUse');
+    send({ type: 'message_start', message: { role: 'assistant', content: [], stopReason: 'pending' } });
   }
   if (scenario.includes('fail')) return end('error', 'the provider refused');
 
@@ -244,4 +254,5 @@ const message_ = (role, content) => {
   send({ type: 'message_end', message: { role, content } });
 };
 
-const usage = () => ({ input: 1200, output: 34, cacheRead: 0, cacheWrite: 0, totalTokens: 1234, cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0, total: 0.03 } });
+// pi-ai's shape: `input` excludes the cache, `reasoning` is part of `output`.
+const usage = () => ({ input: 1000, output: 34, cacheRead: 150, cacheWrite: 50, reasoning: 10, totalTokens: 1234, cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0, total: 0.03 } });

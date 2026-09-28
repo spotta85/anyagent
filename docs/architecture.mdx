@@ -75,8 +75,8 @@ whole contract an adapter has to meet.
               ◄────────────────────────────────
               DriverEvent (adapter → engine)
               Event { kind, parent_tool_id, extensions }
-              TurnAck · TurnEnded · Steered · InfoChanged
-              AuthLost · Exited
+              TurnAck · TurnEnded · Steered · RolledBack
+              InfoChanged · AuthLost · Exited
 ```
 
 | `DriverEvent` | The adapter is saying |
@@ -85,9 +85,13 @@ whole contract an adapter has to meet.
 | `TurnAck` | "I've started the turn you asked for; what follows belongs to it" |
 | `TurnEnded(reason)` | "the wire says the turn is over" |
 | `Steered(bool)` | "your steer was accepted" or "rejected, requeue it" |
+| `RolledBack(result)` | "your rollback happened" or "it did not, here is why" |
 | `InfoChanged` | "the agent changed its settings or capabilities" |
 | `AuthLost` | "credentials stopped working mid-session" |
 | `Exited` | "the process died; here is stderr" |
+
+Every `Steer` gets exactly one `Steered`, and every `Rollback` exactly one
+`RolledBack`, unless the adapter dies first (the caller then gets `SessionClosed`).
 
 An adapter never sends `TurnStarted`, `TurnEnded`, `RequestClosed`,
 `SessionUpdated`, or `StatusChanged` as content. The engine owns those and

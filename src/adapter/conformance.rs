@@ -285,12 +285,17 @@ async fn trailing_content_beats_a_queued_prompt_to_the_next_turn() {
     ));
 }
 
-/// Background bookkeeping after end carries no turn; extra stop becomes Diagnostic.
+/// Background bookkeeping after end (progress, a nested tool, completion) carries
+/// no turn; extra stop becomes Diagnostic.
 #[tokio::test]
 async fn bookkeeping_after_turn_end_is_not_a_turn_and_late_stops_are_diagnostics() {
     let script = Script::default().turn(vec![
         Step::Emit(tool("bg", ToolStatus::Running)),
         Step::End(completed()),
+        Step::Emit(tool("bg", ToolStatus::Running)),
+        Step::Emit(progress("bg")),
+        Step::Nested(ToolId::new("bg"), tool("sub", ToolStatus::Running)),
+        Step::Nested(ToolId::new("bg"), progress("sub")),
         Step::Emit(tool("bg", ToolStatus::Completed)),
         Step::End(completed()),
     ]);
@@ -304,11 +309,62 @@ async fn bookkeeping_after_turn_end_is_not_a_turn_and_late_stops_are_diagnostics
         &ended.kind,
         EventKind::TurnEnded { background, .. } if *background == vec![ToolId::new("bg")]
     ));
-    let late_tool = next(&mut events).await;
-    assert!(matches!(late_tool.kind, EventKind::ToolUpdated(_)));
-    assert!(late_tool.turn_info.is_none(), "bookkeeping carries no turn");
+    let late = [
+        tool("bg", ToolStatus::Running),
+        progress("bg"),
+        tool("sub", ToolStatus::Running),
+        progress("sub"),
+        tool("bg", ToolStatus::Completed),
+    ];
+    for kind in late {
+        let late_tool = next(&mut events).await;
+        assert_eq!(late_tool.kind, kind);
+        assert!(late_tool.turn_info.is_none(), "bookkeeping carries no turn");
+    }
     let late_stop = next(&mut events).await;
     assert!(matches!(late_stop.kind, EventKind::Diagnostic(_)));
+}
+
+/// Tool progress, the turn diff and a reroute ride the prompted turn they arrive
+/// in; while idle each arrives outside any turn and opens none.
+#[tokio::test]
+async fn live_events_ride_a_running_turn_and_never_open_one() {
+    let diff = EventKind::TurnDiff {
+        unified: "diff --git a/a.txt b/a.txt".into(),
+    };
+    let reroute = EventKind::ModelRerouted {
+        from: "big".into(),
+        to: "small".into(),
+        reason: Some("highRiskCyberActivity".into()),
+    };
+    for kind in [progress("t1"), diff, reroute] {
+        let script = Script::default().turn(vec![
+            Step::Emit(kind.clone()),
+            Step::End(completed()),
+            Step::Emit(kind.clone()),
+        ]);
+        let (session, mut events) = open(MockAdapter::new(script), None).await;
+        session.prompt("go").await.unwrap();
+        let started = next(&mut events).await;
+        assert!(matches!(started.kind, EventKind::TurnStarted { .. }));
+        let event = next(&mut events).await;
+        assert_eq!(event.kind, kind);
+        assert_eq!(event.turn_info, started.turn_info);
+        let ended = next(&mut events).await;
+        assert!(matches!(ended.kind, EventKind::TurnEnded { .. }));
+        let idle = next(&mut events).await;
+        assert_eq!(idle.kind, kind);
+        assert!(idle.turn_info.is_none(), "opened a turn: {:?}", idle.kind);
+    }
+}
+
+/// A progress report of tool `id` after one second.
+fn progress(id: &str) -> EventKind {
+    EventKind::ToolProgress {
+        tool_id: ToolId::new(id),
+        message: None,
+        elapsed_ms: Some(1000),
+    }
 }
 
 /// Slow consumer with 1000 deltas (<1024) loses nothing and preserves sequence order.
@@ -767,6 +823,49 @@ async fn cancel_with_clear_drops_a_pending_steer() {
     );
 }
 
+/// `cancel_turn` with a stale id changes nothing, not even the queue; with
+/// the running turn's id it ends that turn `Cancelled`.
+#[tokio::test]
+async fn cancel_turn_ends_only_the_running_turn_it_names() {
+    let script = Script::default()
+        .turn(vec![Step::End(completed())])
+        .turn(parked_turn())
+        .turn(vec![Step::End(completed())]);
+    let (session, mut events) = open(MockAdapter::new(script), None).await;
+    let started = |kind| match kind {
+        DeliveryKind::Started { turn_id } => turn_id,
+        other => panic!("expected a start, got {other:?}"),
+    };
+    let stale = started(session.prompt("one").await.unwrap().kind);
+    collect(&mut events, 2).await;
+    let running = started(session.prompt("two").await.unwrap().kind);
+    let queued = session.prompt("three").await.unwrap();
+    collect(&mut events, 2).await;
+
+    session.cancel_turn(stale, true).await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), next(&mut events))
+            .await
+            .is_err(),
+        "a stale id cancels nothing"
+    );
+
+    session.cancel_turn(running, false).await.unwrap();
+    let kinds = collect(&mut events, 3).await;
+    assert!(matches!(kinds[0], EventKind::RequestClosed { .. }));
+    assert!(matches!(
+        kinds[1],
+        EventKind::TurnEnded {
+            stop: StopReason::Cancelled,
+            ..
+        }
+    ));
+    // The stale cancel kept the queue, so the third prompt starts now.
+    assert!(
+        matches!(&kinds[2], EventKind::TurnStarted { origin: TurnOrigin::Prompt(p) } if *p == queued.prompt_id)
+    );
+}
+
 /// AutoApprove only ever answers with a one-time allow; a request that
 /// does not offer one reaches the caller instead.
 #[tokio::test]
@@ -799,6 +898,154 @@ async fn auto_approve_forwards_requests_without_a_one_time_allow() {
         .answer(request.id(), Answer::Permission(PermissionChoice::DenyOnce))
         .await
         .unwrap();
+}
+
+/// AcceptEdits allows an edit once by itself; an Execute request, and an
+/// edit that offers no one-time allow, still reach the caller.
+#[tokio::test]
+async fn accept_edits_allows_edits_and_forwards_the_rest() {
+    let script = Script::default().turn(vec![
+        Step::Emit(edit_permission("r1", PermissionChoice::AllowOnce)),
+        Step::AwaitAnswer,
+        Step::Emit(permission("r2")),
+        Step::AwaitAnswer,
+        Step::Emit(edit_permission("r3", PermissionChoice::AllowAlways)),
+        Step::AwaitAnswer,
+        Step::End(completed()),
+    ]);
+    let dir = tempfile::tempdir().unwrap();
+    let options =
+        SessionOptions::in_dir(dir.path()).permission_mode(crate::PermissionMode::AcceptEdits);
+    let (session, mut events) = open(MockAdapter::new(script), Some(options)).await;
+    session.prompt("go").await.unwrap();
+    let mut forwarded = Vec::new();
+    loop {
+        match next(&mut events).await.kind {
+            EventKind::RequestOpened(request) => {
+                forwarded.push(request.id());
+                session
+                    .answer(request.id(), Answer::Permission(PermissionChoice::DenyOnce))
+                    .await
+                    .unwrap();
+            }
+            EventKind::TurnEnded { .. } => break,
+            _ => {}
+        }
+    }
+    assert_eq!(forwarded, [RequestId::new("r2"), RequestId::new("r3")]);
+}
+
+/// AutoApprove never approves a proposed plan: the request right after
+/// `PlanProposed` reaches the caller, and a later one is allowed unasked again.
+#[tokio::test]
+async fn auto_approve_forwards_the_request_that_approves_a_plan() {
+    let plan = EventKind::PlanProposed {
+        markdown: "1. Add a README".into(),
+    };
+    let script = Script::default().turn(vec![
+        Step::Emit(plan),
+        Step::Emit(permission("r1")),
+        Step::AwaitAnswer,
+        Step::Emit(permission("r2")),
+        Step::AwaitAnswer,
+        Step::End(completed()),
+    ]);
+    let dir = tempfile::tempdir().unwrap();
+    let options =
+        SessionOptions::in_dir(dir.path()).permission_mode(crate::PermissionMode::AutoApprove);
+    let (session, mut events) = open(MockAdapter::new(script), Some(options)).await;
+    session.prompt("plan it").await.unwrap();
+    let mut forwarded = Vec::new();
+    loop {
+        match next(&mut events).await.kind {
+            EventKind::RequestOpened(request) => {
+                forwarded.push(request.id());
+                session.answer(request.id(), allow()).await.unwrap();
+            }
+            EventKind::TurnEnded { .. } => break,
+            _ => {}
+        }
+    }
+    assert_eq!(forwarded, [RequestId::new("r1")]);
+}
+
+/// `Deny` needs a request that offers `DenyOnce`; a refused one stays open.
+#[tokio::test]
+async fn deny_is_refused_without_deny_once_and_the_request_stays_open() {
+    let mut request = permission("r1");
+    let EventKind::RequestOpened(crate::Request::Permission(allow_only)) = &mut request else {
+        unreachable!()
+    };
+    allow_only.options = vec![PermissionChoice::AllowOnce];
+    let script = Script::default().turn(vec![
+        Step::Emit(request),
+        Step::AwaitAnswer,
+        Step::End(completed()),
+    ]);
+    let (session, mut events) = open(MockAdapter::new(script), None).await;
+    session.prompt("go").await.unwrap();
+    let _started = next(&mut events).await;
+    let _opened = next(&mut events).await;
+    let deny = Answer::Deny {
+        message: "no".into(),
+    };
+    assert!(matches!(
+        session.answer(RequestId::new("r1"), deny).await,
+        Err(crate::AgentError::InvalidRequest(_))
+    ));
+    session.answer(RequestId::new("r1"), allow()).await.unwrap();
+    let kinds = collect(&mut events, 2).await;
+    assert!(matches!(kinds[0], EventKind::RequestClosed { .. }));
+    assert!(matches!(kinds[1], EventKind::TurnEnded { .. }));
+}
+
+/// `Cancel` closes any open request: a permission and a question alike.
+#[tokio::test]
+async fn cancel_closes_a_permission_and_a_question() {
+    use crate::{Question, QuestionId, QuestionRequest, Request};
+    let question = EventKind::RequestOpened(Request::Question(QuestionRequest {
+        id: RequestId::new("r2"),
+        questions: vec![Question {
+            id: QuestionId::new("q1"),
+            text: "Proceed?".into(),
+            header: None,
+            choices: Vec::new(),
+            multi_select: false,
+            allows_free_text: true,
+        }],
+    }));
+    let script = Script::default().turn(vec![
+        Step::Emit(permission("r1")),
+        Step::AwaitAnswer,
+        Step::Emit(question),
+        Step::AwaitAnswer,
+        Step::End(completed()),
+    ]);
+    let (session, mut events) = open(MockAdapter::new(script), None).await;
+    session.prompt("go").await.unwrap();
+    let mut closed = Vec::new();
+    loop {
+        match next(&mut events).await.kind {
+            EventKind::RequestOpened(request) => {
+                session.answer(request.id(), Answer::Cancel).await.unwrap()
+            }
+            EventKind::RequestClosed { request_id } => closed.push(request_id),
+            EventKind::TurnEnded { .. } => break,
+            _ => {}
+        }
+    }
+    assert_eq!(closed, [RequestId::new("r1"), RequestId::new("r2")]);
+}
+
+/// A permission request for an Edit tool offering `allow` or a one-time deny.
+fn edit_permission(id: &str, allow: PermissionChoice) -> EventKind {
+    let mut request = permission(id);
+    let EventKind::RequestOpened(crate::Request::Permission(edit)) = &mut request else {
+        unreachable!()
+    };
+    edit.tool.kind = crate::ToolKind::Edit;
+    edit.options = vec![allow, PermissionChoice::DenyOnce];
+    request
 }
 
 /// A stalled consumer that overflows during the close itself still gets
@@ -916,6 +1163,67 @@ async fn compact_runs_on_an_idle_session_and_reports_the_compaction() {
     ));
 }
 
+/// `rollback` resolves with the agent's verdict: a confirmation is `Ok`, a
+/// refusal is `InvalidRequest` carrying the agent's reason.
+#[tokio::test]
+async fn rollback_resolves_with_the_agents_verdict() {
+    let one = std::num::NonZeroU32::new(1).unwrap();
+    let scope = crate::RollbackScope::Conversation;
+    let script = Script {
+        rollback: true,
+        ..Script::default()
+    };
+    let (session, _events) = open(MockAdapter::new(script), None).await;
+    session.rollback(one, scope).await.unwrap();
+
+    let script = Script {
+        rollback: true,
+        rollback_refusal: Some("nothing to roll back".into()),
+        ..Script::default()
+    };
+    let (session, _events) = open(MockAdapter::new(script), None).await;
+    let err = session.rollback(one, scope).await.err().unwrap();
+    assert!(
+        matches!(&err, crate::AgentError::InvalidRequest(r) if r == "nothing to roll back"),
+        "{err}"
+    );
+}
+
+/// A second rollback while one waits for the agent is `SessionBusy`; an
+/// agent that dies meanwhile fails the waiting call with `SessionClosed`.
+#[tokio::test]
+async fn a_rollback_while_one_is_pending_is_busy() {
+    use crate::AgentError;
+    let one = std::num::NonZeroU32::new(1).unwrap();
+    let scope = crate::RollbackScope::Conversation;
+    // The agent stays busy after the turn, so the first rollback waits.
+    let script = Script {
+        rollback: true,
+        ..Script::default()
+    }
+    .turn(vec![Step::End(completed()), Step::Sleep(300)]);
+    let (session, mut events) = open(MockAdapter::new(script), None).await;
+    session.prompt("one").await.unwrap();
+    collect(&mut events, 2).await;
+    let (first, second) = tokio::join!(session.rollback(one, scope), session.rollback(one, scope));
+    first.unwrap();
+    assert!(matches!(second, Err(AgentError::SessionBusy)), "{second:?}");
+
+    let script = Script {
+        rollback: true,
+        ..Script::default()
+    }
+    .turn(vec![Step::End(completed()), Step::Sleep(100), Step::Die]);
+    let (session, mut events) = open(MockAdapter::new(script), None).await;
+    session.prompt("one").await.unwrap();
+    collect(&mut events, 2).await;
+    let result = session.rollback(one, scope).await;
+    assert!(
+        matches!(result, Err(AgentError::SessionClosed)),
+        "{result:?}"
+    );
+}
+
 /// Pulls events until `count` turns have started, answering any request;
 /// returns the prompt ids of those turns in order.
 async fn drain_turn_starts(session: &Session, events: &mut Events, count: usize) -> Vec<PromptId> {
@@ -940,4 +1248,33 @@ async fn collect(events: &mut Events, count: usize) -> Vec<EventKind> {
         kinds.push(next(events).await.kind);
     }
     kinds
+}
+
+/// The latest usage of a turn rides its `TurnEnded`; usage reported after
+/// the end is dropped, not carried into the next turn.
+#[tokio::test]
+async fn turn_usage_rides_turn_ended_and_never_leaks_into_the_next_turn() {
+    let usage = |input_tokens| crate::event::TurnUsage {
+        input_tokens,
+        cached_input_tokens: 2,
+        output_tokens: 3,
+    };
+    let script = Script::default()
+        .turn(vec![
+            Step::Usage(usage(10)),
+            Step::Usage(usage(25)),
+            Step::End(completed()),
+            Step::Usage(usage(99)),
+        ])
+        .turn(vec![Step::End(completed())]);
+    let (session, mut events) = open(MockAdapter::new(script), None).await;
+    session.prompt("one").await.unwrap();
+    let kinds = collect(&mut events, 2).await;
+    assert!(matches!(&kinds[1], EventKind::TurnEnded { usage: Some(u), .. } if *u == usage(25)));
+    session.prompt("two").await.unwrap();
+    let kinds = collect(&mut events, 2).await;
+    assert!(matches!(
+        &kinds[1],
+        EventKind::TurnEnded { usage: None, .. }
+    ));
 }

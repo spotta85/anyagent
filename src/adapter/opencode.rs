@@ -12,9 +12,9 @@
 //! too; the engine queues prompts instead. All routes and event names live in
 //! this file so a future v2 swap is contained.
 //!
-//! High level: `connect` → `launch` (spawn, health, bus, `handshake`) →
-//! `driver_info`; then `Drive::run` turns commands into HTTP calls and SSE
-//! frames into events (`handle_command`, `handle_frame`, `on_*`).
+//! High level: `connect` → `launch` (spawn, health, bus, MCP servers,
+//! `handshake`) → `driver_info`; then `Drive::run` turns commands into HTTP
+//! calls and SSE frames into events (`handle_command`, `handle_frame`, `on_*`).
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -28,19 +28,22 @@ use tokio::sync::mpsc;
 use crate::adapter::{
     Adapter, CLOSE_GRACE, ConnectRequest, DriverCommand, DriverConnection, DriverEvent, DriverInfo,
     Emitter, FRAME_BUFFER, Gone, HANDSHAKE_TIMEOUT, OUTPUT_CAP, WireRecorder, apply_selection,
-    attach, cap, level_choices, login_methods, offers, plan_entries, selected, set_effort_option,
+    attach, cap, level_choices, login_methods, model_options, offers, plan_entries, selected,
+    set_effort_option,
 };
 use crate::agent::{
-    AgentDetails, AuthKind, AuthStatus, Capabilities, Capability, ConfigChoice, ConfigId,
-    ConfigKind, ConfigOption, ConfigValue, Input, LoginMethod, PermissionMode, ResumeToken,
-    SessionConfiguration, SessionOptions, SessionStart, SlashCommand,
+    AgentDetails, AuthKind, AuthStatus, Capabilities, Capability, CommandSource, ConfigChoice,
+    ConfigId, ConfigKind, ConfigOption, ConfigValue, Input, LoginMethod, McpConnection, McpServer,
+    McpTransport, PermissionMode, ResumeToken, SessionConfiguration, SessionOptions, SessionStart,
+    SlashCommand,
 };
 use crate::error::AgentError;
 use crate::event::Extensions;
 use crate::event::{
     Answer, Choice, ChoiceId, CompletionSource, DiagnosticLevel, EventKind, MessageId,
     PermissionChoice, PermissionRequest, Question, QuestionAnswer, QuestionId, QuestionRequest,
-    RawTool, Request, RequestId, StopReason, ToolId, ToolInput, ToolKind, ToolStatus, ToolUpdate,
+    RawTool, Request, RequestId, StopReason, SubagentInfo, ToolId, ToolInput, ToolKind, ToolStatus,
+    ToolUpdate, TurnUsage,
 };
 use crate::process::{self, Spawn};
 
@@ -82,12 +85,15 @@ impl Adapter for OpencodeAdapter {
                 info: launched.info,
                 session_id: launched.session_id,
                 throwaway: request.options.throwaway,
+                instructions: request.options.instructions.clone(),
                 windows: launched.windows,
                 variants: launched.variants,
+                mcp_servers: None,
                 login: login_methods(&request.installation, Some(&request.options)),
                 scratch: TurnScratch::default(),
                 tide: String::new(),
                 cost: 0.0,
+                turn_usage: TurnUsage::default(),
                 turn: Turn::Idle,
                 admit_deadline: None,
                 aborting: false,
@@ -142,13 +148,6 @@ async fn launch_once(
     request: &ConnectRequest,
     recorder: Option<WireRecorder>,
 ) -> Result<Launched, AgentError> {
-    if !request.options.mcp_servers.is_empty() {
-        // Client MCP servers would need a `POST /mcp` per server after open;
-        // deferred until a consumer needs it.
-        return Err(AgentError::UnsupportedFeature(
-            "client-declared MCP servers on opencode".into(),
-        ));
-    }
     let port = free_port()?;
     let secret = secret();
     let mut server = spawn_server(request, port, &secret).await?;
@@ -166,6 +165,8 @@ async fn launch_once(
     let boot = async {
         let version = await_health(&http).await?;
         let frames = open_bus(&http, recorder.clone()).await?;
+        // Before the session exists, so a refused server leaves none behind.
+        add_mcp_servers(&http, &request.options.mcp_servers).await?;
         let (info, session_id, windows, variants) =
             handshake(&http, request, recorder, version).await?;
         Ok((frames, info, session_id, windows, variants))
@@ -221,7 +222,7 @@ async fn spawn_server(
     port: u16,
     secret: &str,
 ) -> Result<process::Child, AgentError> {
-    let mut env = crate::adapter::config_home_env(&request.installation, &request.options)?;
+    let mut env = crate::adapter::launch_env(&request.installation, &request.options)?;
     // The server's basic-auth gate: a per-session secret, so no other local
     // process can drive the port.
     env.push(("OPENCODE_SERVER_USERNAME".into(), "opencode".into()));
@@ -230,15 +231,17 @@ async fn spawn_server(
         "OPENCODE_CONFIG_CONTENT".into(),
         config_content(request.options.permission_mode).to_string(),
     ));
+    let mut args = vec![
+        "serve".into(),
+        "--hostname".into(),
+        "127.0.0.1".into(),
+        "--port".into(),
+        port.to_string(),
+    ];
+    args.extend(request.options.args.iter().cloned());
     process::spawn(Spawn {
         exec_path: request.installation.executable_path.clone(),
-        args: vec![
-            "serve".into(),
-            "--hostname".into(),
-            "127.0.0.1".into(),
-            "--port".into(),
-            port.to_string(),
-        ],
+        args,
         cwd: request.options.cwd().clone(),
         env,
     })
@@ -272,7 +275,8 @@ async fn handshake(
         .as_str()
         .ok_or_else(|| AgentError::ProtocolFailed("session create returned no id".into()))?
         .to_owned();
-    let choices = model_choices(&providers, &connected);
+    let variants = model_variants(&providers);
+    let choices = model_choices(&providers, &connected, &variants);
     let (model, effort) = start_config(&request.options, &choices)?;
     let mut info = driver_info(
         choices,
@@ -290,7 +294,6 @@ async fn handshake(
             &ConfigValue::Text(model),
         );
     }
-    let variants = model_variants(&providers);
     sync_effort(&mut info, &variants);
     if let Some(effort) = effort {
         let value = ConfigValue::Text(effort.clone());
@@ -318,15 +321,56 @@ async fn await_health(http: &Http) -> Result<Option<String>, AgentError> {
     }
 }
 
+/// Adds each declared MCP server with `POST /mcp`; opencode keeps them per
+/// server process (one per session here). A refused one fails the open.
+async fn add_mcp_servers(http: &Http, servers: &[McpServer]) -> Result<(), AgentError> {
+    for server in servers {
+        let body = json!({ "name": server.name, "config": mcp_config(&server.connection) });
+        // Every server's status comes back; a refusal is `failed` + `error`.
+        let statuses = http.post("/mcp", body).await?;
+        let status = &statuses[server.name.as_str()];
+        if status["status"] != "connected" {
+            let reason = status["error"].as_str().or(status["status"].as_str());
+            return Err(AgentError::InvalidConfiguration(format!(
+                "opencode refused MCP server `{}`: {}",
+                server.name,
+                reason.unwrap_or("not added")
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// One server as opencode's `local` or `remote` config. A remote server is
+/// tried over streamable HTTP, then SSE, on the same URL (probed 1.18.29).
+fn mcp_config(connection: &McpConnection) -> Value {
+    match connection {
+        McpConnection::Stdio { command, args, env } => {
+            let mut argv = vec![command.to_string_lossy().into_owned()];
+            argv.extend(args.iter().cloned());
+            json!({ "type": "local", "command": argv, "environment": env })
+        }
+        McpConnection::Http { url, headers } | McpConnection::Sse { url, headers } => {
+            json!({ "type": "remote", "url": url, "headers": headers })
+        }
+    }
+}
+
 /// Creates, resumes, or forks the provider session and returns its record.
 async fn bind_session(http: &Http, request: &ConnectRequest) -> Result<Value, AgentError> {
     match &request.options.start {
         SessionStart::New => http.post("/session", json!({})).await,
         // Re-adopting the id IS the resume: opencode scopes history by it.
+        // Only a 404 is a dead token (1.18.29; a malformed id is a 500).
         SessionStart::Resume(token) => http
             .get(&format!("/session/{}", token.as_str()))
             .await
-            .map_err(|e| AgentError::ResumeFailed(e.to_string())),
+            .map_err(|e| match e {
+                AgentError::ProtocolFailed(m) if m.contains(" -> 404:") => {
+                    AgentError::ResumeFailed(m)
+                }
+                e => e,
+            }),
         SessionStart::Fork { from, at } => {
             let body = match at {
                 None => json!({}),
@@ -381,11 +425,13 @@ fn with_permission(mut config: Value, ours: Value) -> Value {
     config
 }
 
-/// The permission rules for a mode. `Ask` forces every tool to prompt but
-/// lets the question tool run so it surfaces as a question, not a permission.
+/// The permission rules for a mode. `Ask` and `AcceptEdits` prompt for every
+/// tool; the question tool runs so it surfaces as a question.
 fn permission_config(mode: PermissionMode) -> Value {
     match mode {
-        PermissionMode::Ask => json!({ "*": "ask", "question": "allow" }),
+        PermissionMode::Ask | PermissionMode::AcceptEdits => {
+            json!({ "*": "ask", "question": "allow" })
+        }
         PermissionMode::AutoApprove => json!({ "*": "allow" }),
     }
 }
@@ -419,19 +465,24 @@ fn driver_info(
             auth,
             // Steer is absent (v1 queues); RollbackFiles and PlanUsage are
             // not on this wire. Subagents are task-tool child sessions.
-            capabilities: Capabilities::new([
-                Capability::Images,
-                Capability::Resume,
-                Capability::Fork,
-                Capability::Permissions,
-                Capability::Questions,
-                Capability::Rollback,
-                Capability::Compact,
-                Capability::SlashCommands,
-                Capability::Plan,
-                Capability::ContextUsage,
-                Capability::Subagents,
-            ]),
+            capabilities: {
+                let mut capabilities = Capabilities::new([
+                    Capability::Images,
+                    Capability::Resume,
+                    Capability::Fork,
+                    Capability::Permissions,
+                    Capability::Questions,
+                    Capability::Rollback,
+                    Capability::Compact,
+                    Capability::SlashCommands,
+                    Capability::Plan,
+                    Capability::ContextUsage,
+                    Capability::Subagents,
+                ]);
+                capabilities.mcp_transports =
+                    vec![McpTransport::Stdio, McpTransport::Http, McpTransport::Sse];
+                capabilities
+            },
             config_options,
             commands: slash_commands(commands),
         },
@@ -448,9 +499,13 @@ fn driver_info(
     }
 }
 
-/// The models of the connected providers as config choices, valued
-/// `providerID/modelID` because a prompt needs both halves.
-fn model_choices(providers: &Value, connected: &Value) -> Vec<ConfigChoice> {
+/// The connected providers' models as choices valued `providerID/modelID`
+/// (a prompt needs both halves), each with its variants as `effort`.
+fn model_choices(
+    providers: &Value,
+    connected: &Value,
+    variants: &HashMap<String, Vec<String>>,
+) -> Vec<ConfigChoice> {
     let connected: Vec<&str> = connected
         .as_array()
         .into_iter()
@@ -466,10 +521,10 @@ fn model_choices(providers: &Value, connected: &Value) -> Vec<ConfigChoice> {
             continue;
         }
         for (mid, model) in provider["models"].as_object().into_iter().flatten() {
+            let value = format!("{pid}/{mid}");
             choices.push(ConfigChoice {
-                value: format!("{pid}/{mid}"),
-                label: model["name"].as_str().unwrap_or(mid).to_owned(),
-                description: None,
+                options: model_options(variant_choices(variants, &value), None, false),
+                ..ConfigChoice::new(value, model["name"].as_str().unwrap_or(mid), None)
             });
         }
     }
@@ -514,6 +569,7 @@ fn slash_commands(commands: &Value) -> Vec<SlashCommand> {
                     .unwrap_or_default()
                     .to_owned(),
                 input_hint: None,
+                source: CommandSource::Builtin,
             })
         })
         .collect()
@@ -584,10 +640,17 @@ fn model_variants(providers: &Value) -> HashMap<String, Vec<String>> {
 /// prompt as `variant`.
 fn sync_effort(info: &mut DriverInfo, variants: &HashMap<String, Vec<String>>) {
     let choices = selected(info, "model")
-        .and_then(|model| variants.get(&model))
-        .map(|names| level_choices(names.iter().map(String::as_str)))
+        .map(|model| variant_choices(variants, &model))
         .unwrap_or_default();
     set_effort_option(info, choices, selected(info, "effort"));
+}
+
+/// One model's variants as effort levels; none for a model without any.
+fn variant_choices(variants: &HashMap<String, Vec<String>>, model: &str) -> Vec<ConfigChoice> {
+    variants
+        .get(model)
+        .map(|names| level_choices(names.iter().map(String::as_str)))
+        .unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------
@@ -601,16 +664,11 @@ struct Pending {
     request: Request,
 }
 
-/// How the answer reaches the server. Permissions reply on their owning
-/// session: a task-tool child asks on its own session id.
+/// How the answer reaches the server. Both reply routes take the request
+/// id alone, so a task-tool child's request needs no session id.
 enum Reply {
-    Permission {
-        permission_id: String,
-        session_id: String,
-    },
-    Question {
-        question_id: String,
-    },
+    Permission { permission_id: String },
+    Question { question_id: String },
 }
 
 struct Drive {
@@ -624,12 +682,17 @@ struct Drive {
     session_id: String,
     /// Deleted at close so it never shows in the user's session list.
     throwaway: bool,
+    /// The caller's instructions, sent as `system` with every prompt.
+    instructions: Option<String>,
     /// Login methods for a mid-session credential loss.
     login: Vec<LoginMethod>,
     /// Context window per model, for `ContextUsage`.
     windows: HashMap<String, u64>,
     /// Reasoning variants per model, behind the `effort` option.
     variants: HashMap<String, Vec<String>>,
+    /// Every MCP server name opencode knows (the user's own too), read on
+    /// the first tool that may be MCP; types those calls.
+    mcp_servers: Option<Vec<String>>,
     /// Everything that lives for one turn; reset at idle.
     scratch: TurnScratch,
     /// Highest assistant `msg_…` id ever minted. Ids sort by creation time,
@@ -638,6 +701,8 @@ struct Drive {
     tide: String,
     /// Session cost so far, summed over step-finishes.
     cost: f64,
+    /// What the running turn has spent, summed over its own step-finishes.
+    turn_usage: TurnUsage,
     turn: Turn,
     /// When a taken prompt must have gone busy by; a dropped one fails
     /// loudly instead of hanging the deterministic turn forever.
@@ -749,6 +814,7 @@ impl Drive {
                 self.turn = Turn::Sent;
                 self.aborting = false;
                 self.turn_error = None;
+                self.turn_usage = TurnUsage::default();
                 self.start_turn(&input).await?;
             }
             // `summarize` streams the summary and settles like a turn, so
@@ -813,6 +879,9 @@ impl Drive {
         let mut body = json!({ "parts": parts });
         if let Some(model) = self.model_body() {
             body["model"] = model;
+        }
+        if let Some(text) = &self.instructions {
+            body["system"] = json!(text);
         }
         if let Some(ConfigValue::Text(effort)) = self
             .info
@@ -1171,11 +1240,18 @@ impl Drive {
         let call_id = part["callID"].as_str().unwrap_or_default().to_owned();
         let name = part["tool"].as_str().unwrap_or_default();
         let state = &part["state"];
-        let mut tool = self
-            .scratch
-            .tools
-            .remove(&call_id)
-            .unwrap_or_else(|| fresh_tool(&call_id, name));
+        let mut tool = match self.scratch.tools.remove(&call_id) {
+            Some(tool) => tool,
+            None => {
+                let mut tool = fresh_tool(&call_id, name);
+                // Built-ins win; an unknown `<server>_<tool>` may be MCP.
+                if tool.kind == ToolKind::Other && name.contains('_') {
+                    let servers = self.mcp_servers().await;
+                    tool.kind = mcp_kind(name, servers).unwrap_or(ToolKind::Other);
+                }
+                tool
+            }
+        };
         apply_state(&mut tool, name, state);
         let done = matches!(tool.status, ToolStatus::Completed | ToolStatus::Failed);
         if parent.is_none()
@@ -1197,6 +1273,19 @@ impl Drive {
             .await
     }
 
+    /// Every MCP server name, from `GET /mcp` once per session. A failed
+    /// read counts as none, so it never fails the turn.
+    async fn mcp_servers(&mut self) -> &[String] {
+        if self.mcp_servers.is_none() {
+            let statuses = self.http.get_quick("/mcp").await.unwrap_or_default();
+            let names = statuses
+                .as_object()
+                .map(|all| all.keys().cloned().collect());
+            self.mcp_servers = Some(names.unwrap_or_default());
+        }
+        self.mcp_servers.as_deref().unwrap_or_default()
+    }
+
     /// The agent's task list is a plan, not a tool call: one snapshot per
     /// finished write. A child's plan rides its task tool, never the
     /// parent's plan chip.
@@ -1215,21 +1304,22 @@ impl Drive {
             .await
     }
 
-    /// A step boundary carries the turn's running token and cost totals.
+    /// A step boundary carries that step's tokens and cost: they add to the
+    /// turn's usage, and the step's total is the context occupancy.
     async fn on_step_finish(&mut self, part: &Value) -> Result<(), Gone> {
         let tokens = &part["tokens"];
         self.cost += part["cost"].as_f64().unwrap_or_default();
+        self.add_turn_usage(tokens).await?;
         // Other step-finish shapes carry the components without a `total`.
-        let sum = |v: &Value| v.as_u64().unwrap_or_default();
         let used = tokens["total"]
             .as_u64()
             .filter(|t| *t > 0)
             .unwrap_or_else(|| {
-                sum(&tokens["input"])
-                    + sum(&tokens["output"])
-                    + sum(&tokens["reasoning"])
-                    + sum(&tokens["cache"]["read"])
-                    + sum(&tokens["cache"]["write"])
+                count(&tokens["input"])
+                    + count(&tokens["output"])
+                    + count(&tokens["reasoning"])
+                    + count(&tokens["cache"]["read"])
+                    + count(&tokens["cache"]["write"])
             });
         if used == 0 {
             return Ok(());
@@ -1241,6 +1331,19 @@ impl Drive {
                     .and_then(|m| self.windows.get(&m).copied()),
                 cost_usd: (self.cost > 0.0).then_some(self.cost),
             })
+            .await
+    }
+
+    /// Adds one step's tokens to the turn and reports the sum. opencode
+    /// splits cache out of `input` and reasoning out of `output` (1.18.29).
+    async fn add_turn_usage(&mut self, tokens: &Value) -> Result<(), Gone> {
+        let cached = count(&tokens["cache"]["read"]);
+        self.turn_usage.input_tokens +=
+            count(&tokens["input"]) + cached + count(&tokens["cache"]["write"]);
+        self.turn_usage.cached_input_tokens += cached;
+        self.turn_usage.output_tokens += count(&tokens["output"]) + count(&tokens["reasoning"]);
+        self.events
+            .send(DriverEvent::TurnUsage(self.turn_usage))
             .await
     }
 
@@ -1267,16 +1370,11 @@ impl Drive {
             ],
             detail: permission_detail(props),
         });
-        let session_id = props["sessionID"]
-            .as_str()
-            .unwrap_or(&self.session_id)
-            .to_owned();
         self.scratch.requests.insert(
             id,
             Pending {
                 reply: Reply::Permission {
                     permission_id: permission_id.to_owned(),
-                    session_id,
                 },
                 request: request.clone(),
             },
@@ -1320,21 +1418,13 @@ impl Drive {
         };
         let sent = match (&pending.reply, &answer) {
             (
-                Reply::Permission {
-                    permission_id,
-                    session_id,
-                },
-                Answer::Permission(choice),
+                Reply::Permission { permission_id },
+                Answer::Permission(_) | Answer::Deny { .. } | Answer::Cancel,
             ) => {
-                let response = match choice {
-                    PermissionChoice::AllowOnce => "once",
-                    PermissionChoice::AllowAlways => "always",
-                    _ => "reject",
-                };
                 self.http
                     .post_quick(
-                        &format!("/session/{session_id}/permissions/{permission_id}"),
-                        json!({ "response": response }),
+                        &format!("/permission/{permission_id}/reply"),
+                        permission_reply(&answer),
                     )
                     .await
             }
@@ -1344,6 +1434,12 @@ impl Drive {
                         &format!("/question/{question_id}/reply"),
                         json!({ "answers": question_answers(answers) }),
                     )
+                    .await
+            }
+            // The reject route takes no body (OpenAPI `/doc`, 1.18.29).
+            (Reply::Question { question_id }, Answer::Cancel) => {
+                self.http
+                    .post_quick(&format!("/question/{question_id}/reject"), json!({}))
                     .await
             }
             // Unreachable past engine shape validation; reopen rather than
@@ -1440,6 +1536,8 @@ impl Drive {
         self.turn = Turn::Sent;
         self.aborting = false;
         self.turn_error = None;
+        // The summary is a model call of its own (probed 1.18.29).
+        self.turn_usage = TurnUsage::default();
         let path = format!("/session/{}/summarize", self.session_id);
         match self.http.post(&path, body).await {
             Ok(_) => {
@@ -1464,16 +1562,18 @@ impl Drive {
     /// Note `GET /message` still lists reverted messages afterward: the revert
     /// trims the model's context, not the listing.
     async fn rollback(&mut self, turns: u32) -> Result<(), Gone> {
-        let messages = self
-            .http
-            .get(&format!("/session/{}/message", self.session_id))
-            .await
-            .ok();
-        let Some(anchor) = messages.and_then(|m| user_anchor(&m, turns)) else {
-            return self
-                .events
-                .diagnostic(DiagnosticLevel::Warning, "nothing to roll back")
-                .await;
+        let path = format!("/session/{}/message", self.session_id);
+        let messages = match self.http.get(&path).await {
+            Ok(messages) => messages,
+            Err(e) => {
+                return self
+                    .events
+                    .rollback_refused(format!("rollback rejected: {e}"))
+                    .await;
+            }
+        };
+        let Some(anchor) = user_anchor(&messages, turns) else {
+            return self.events.rollback_refused("nothing to roll back").await;
         };
         let reverted = self
             .http
@@ -1483,16 +1583,16 @@ impl Drive {
             )
             .await;
         match reverted {
-            // Nothing advertised changes (the session rewinds in place), but
-            // the resulting `SessionUpdated` is the documented confirmation.
+            // `SessionUpdated` marks the rewind; `RolledBack` then settles the call.
             Ok(_) => {
                 self.events
                     .send(DriverEvent::InfoChanged(self.info.clone()))
-                    .await
+                    .await?;
+                self.events.send(DriverEvent::RolledBack(Ok(()))).await
             }
             Err(e) => {
                 self.events
-                    .diagnostic(DiagnosticLevel::Warning, format!("rollback rejected: {e}"))
+                    .rollback_refused(format!("rollback rejected: {e}"))
                     .await
             }
         }
@@ -1601,6 +1701,11 @@ fn busy_status(status: &Value) -> bool {
     matches!(status["type"].as_str(), Some("busy") | Some("retry"))
 }
 
+/// One token count of a step-finish, zero when absent.
+fn count(tokens: &Value) -> u64 {
+    tokens.as_u64().unwrap_or_default()
+}
+
 /// The spawn a newborn direct child binds to: oldest still-running spawn
 /// without a child of its own. `None` leaves the child unbound (silent).
 fn select_spawn(
@@ -1655,6 +1760,7 @@ fn fresh_tool(call_id: &str, name: &str) -> ToolUpdate {
         diffs: Vec::new(),
         locations: Vec::new(),
         raw: None,
+        subagent: None,
     }
 }
 
@@ -1663,7 +1769,8 @@ fn tool_kind(name: &str) -> ToolKind {
     match name {
         "bash" => ToolKind::Execute,
         "read" | "list" => ToolKind::Read,
-        "edit" | "write" | "patch" => ToolKind::Edit,
+        // `apply_patch` (GPT models) takes a multi-file `patchText`: raw input.
+        "edit" | "write" | "patch" | "apply_patch" => ToolKind::Edit,
         "grep" | "glob" => ToolKind::Search,
         "webfetch" => ToolKind::Fetch,
         "task" => ToolKind::Subagent,
@@ -1671,10 +1778,37 @@ fn tool_kind(name: &str) -> ToolKind {
     }
 }
 
-/// Applies a tool state snapshot: status, decoded input, and output.
+/// An MCP call's kind: opencode names it `<server>_<tool>`, chars outside
+/// `[A-Za-z0-9_-]` made `_` (live 1.18.29: `probe dot.v2` → `probe_dot_v2_…`).
+fn mcp_kind(name: &str, servers: &[String]) -> Option<ToolKind> {
+    servers
+        .iter()
+        .filter_map(|server| {
+            let prefix = server.replace(|c: char| !c.is_ascii_alphanumeric() && c != '-', "_");
+            let tool = name.strip_prefix(&prefix)?.strip_prefix('_')?;
+            Some((prefix.len(), server, tool))
+        })
+        .max_by_key(|(len, ..)| *len)
+        .map(|(_, server, tool)| ToolKind::Mcp {
+            server: server.clone(),
+            tool: tool.to_owned(),
+        })
+}
+
+/// Applies a tool state snapshot: status, decoded input, output, and a task's subagent.
 fn apply_state(tool: &mut ToolUpdate, name: &str, state: &Value) {
     let input = &state["input"];
     apply_input(tool, name, input);
+    // A task names its agent in `input.subagent_type` and its model in `metadata.model` (live 1.18.29, 2026-09-27).
+    let role = input["subagent_type"].as_str().map(str::to_owned);
+    let model = model_value(&state["metadata"]["model"]);
+    if name == "task" && (role.is_some() || model.is_some()) {
+        tool.subagent = Some(SubagentInfo {
+            role,
+            model,
+            ..SubagentInfo::default()
+        });
+    }
     match state["status"].as_str().unwrap_or_default() {
         "pending" => tool.status = ToolStatus::Pending,
         "running" => tool.status = ToolStatus::Running,
@@ -1819,6 +1953,16 @@ fn question_answers(answers: &[QuestionAnswer]) -> Vec<Vec<String>> {
             QuestionAnswer::Text(text) => vec![text.clone()],
         })
         .collect()
+}
+
+/// The permission reply body; only a reject takes a message (OpenAPI `/doc`, 1.18.29).
+fn permission_reply(answer: &Answer) -> Value {
+    match answer {
+        Answer::Permission(PermissionChoice::AllowOnce) => json!({ "reply": "once" }),
+        Answer::Permission(PermissionChoice::AllowAlways) => json!({ "reply": "always" }),
+        Answer::Deny { message } => json!({ "reply": "reject", "message": message }),
+        _ => json!({ "reply": "reject" }),
+    }
 }
 
 /// The fork body for a `fork_point` anchor. opencode copies the messages
@@ -2370,21 +2514,44 @@ mod tests {
         assert_eq!(variants["p/a"], ["low", "high", "max", "custom"]);
         assert!(!variants.contains_key("p/c"));
 
-        let choices = model_choices(&providers, &json!(["p"]));
-        let mut info = driver_info(choices, &json!([]), &json!({}), AuthStatus::Unknown, None);
+        let choices = model_choices(&providers, &json!(["p"]), &variants);
+        // Each model choice carries its own `effort`; `c` has none.
+        let nested = |value: &str| {
+            choices
+                .iter()
+                .find(|c| c.value == value)
+                .unwrap()
+                .options
+                .clone()
+        };
+        assert!(nested("p/c").is_empty());
+        let a = nested("p/a");
+        let ConfigKind::Select { choices: levels } = &a[0].kind else {
+            panic!("effort is a select");
+        };
+        assert_eq!(levels.last().unwrap().value, "custom");
+        let mut info = driver_info(
+            choices.clone(),
+            &json!([]),
+            &json!({}),
+            AuthStatus::Unknown,
+            None,
+        );
         let select = |info: &mut DriverInfo, id: &str, value: &str| {
             apply_selection(info, &ConfigId::new(id), &ConfigValue::Text(value.into()));
         };
-        let effort = |info: &DriverInfo| {
+        let option = |info: &DriverInfo| {
             info.details
                 .config_options
                 .iter()
                 .find(|o| o.id.as_str() == "effort")
-                .map(|o| o.current.clone())
+                .cloned()
         };
+        let effort = |info: &DriverInfo| option(info).map(|o| o.current);
         select(&mut info, "model", "p/a");
         sync_effort(&mut info, &variants);
-        assert_eq!(effort(&info), Some(None));
+        // Selecting the model makes the live option its nested one.
+        assert_eq!(option(&info).as_ref(), a.first());
         select(&mut info, "effort", "high");
         // A model that still offers `high` keeps it; one that doesn't drops it.
         select(&mut info, "model", "p/b");
@@ -2407,7 +2574,7 @@ mod tests {
             { "id": "opencode", "models": { "big-pickle": { "name": "Big Pickle" } } },
             { "id": "offline", "models": { "x": { "name": "X" } } },
         ] });
-        let choices = model_choices(&providers, &json!(["opencode"]));
+        let choices = model_choices(&providers, &json!(["opencode"]), &HashMap::new());
         assert_eq!(choices.len(), 1);
         assert_eq!(choices[0].value, "opencode/big-pickle");
         assert_eq!(choices[0].label, "Big Pickle");
@@ -2539,5 +2706,19 @@ mod tests {
         assert_eq!(tool.status, ToolStatus::Failed);
         assert_eq!(tool.locations, vec![PathBuf::from("/tmp/a.txt")]);
         assert_eq!(tool.output.as_deref(), Some("denied"));
+    }
+
+    #[test]
+    fn apply_patch_is_an_edit_that_keeps_its_patch_raw() {
+        let mut tool = fresh_tool("call1", "apply_patch");
+        let input =
+            json!({ "patchText": "*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch" });
+        apply_state(
+            &mut tool,
+            "apply_patch",
+            &json!({ "status": "completed", "input": input }),
+        );
+        assert_eq!(tool.kind, ToolKind::Edit);
+        assert_eq!(tool.raw.unwrap().input, input);
     }
 }

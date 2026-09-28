@@ -61,6 +61,53 @@ fn write_stub(dir: &Path, name: &str) -> PathBuf {
     path
 }
 
+/// The launch args each fixture process logged to the `FIXTURE_ARGV_LOG`
+/// file the test set through `SessionOptions::env`, one list per process.
+pub fn logged_args(log: &Path) -> Vec<Vec<String>> {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+/// Asserts each MCP secret `(name, value)` reached the agent (its
+/// `FIXTURE_MCP_LOG`) while the wire recording holds the name and `<redacted>` only.
+pub fn assert_mcp_redacted(recording: &Path, received: &Path, secrets: &[(&str, &str)]) {
+    let recording = std::fs::read_to_string(recording).unwrap();
+    let received = std::fs::read_to_string(received).unwrap();
+    assert!(recording.contains("<redacted>"), "{recording}");
+    for (name, value) in secrets {
+        assert!(recording.contains(name), "{name} missing: {recording}");
+        assert!(!recording.contains(value), "{value} recorded: {recording}");
+        assert!(received.contains(value), "{value} not received: {received}");
+    }
+}
+
+/// The sent frames in a `record_wire` log that match `pred`, polled until
+/// `count` are there: the recorder writes in the background.
+pub async fn sent_frames(
+    log: &Path,
+    count: usize,
+    pred: impl Fn(&serde_json::Value) -> bool,
+) -> Vec<serde_json::Value> {
+    for _ in 0..80 {
+        let frames: Vec<serde_json::Value> = std::fs::read_to_string(log)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|line| line["dir"] == "out")
+            .map(|line| line["frame"].clone())
+            .filter(|frame| pred(frame))
+            .collect();
+        if frames.len() >= count {
+            return frames;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("fewer than {count} matching frames in {}", log.display());
+}
+
 /// The variable `std::env::home_dir` reads, for tests that redirect home.
 #[cfg(unix)]
 pub const HOME_VAR: &str = "HOME";

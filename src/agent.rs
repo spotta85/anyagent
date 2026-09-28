@@ -171,6 +171,8 @@ pub enum Capability {
     Subagents,
     ContextUsage,
     PlanUsage,
+    /// `SessionOptions::output_schema` is honored.
+    OutputSchema,
 }
 
 /// What `rollback` rewinds: conversation context only, or also the files
@@ -199,7 +201,7 @@ pub struct McpServer {
     pub(crate) connection: McpConnection,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub(crate) enum McpConnection {
@@ -278,6 +280,30 @@ impl McpServer {
     }
 }
 
+impl std::fmt::Debug for McpConnection {
+    /// Env and header names only: their values may be credentials.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            McpConnection::Stdio { command, args, env } => f
+                .debug_struct("Stdio")
+                .field("command", command)
+                .field("args", args)
+                .field("env", &env.keys().collect::<Vec<_>>())
+                .finish(),
+            McpConnection::Http { url, headers } => f
+                .debug_struct("Http")
+                .field("url", url)
+                .field("headers", &headers.keys().collect::<Vec<_>>())
+                .finish(),
+            McpConnection::Sse { url, headers } => f
+                .debug_struct("Sse")
+                .field("url", url)
+                .field("headers", &headers.keys().collect::<Vec<_>>())
+                .finish(),
+        }
+    }
+}
+
 /// Effective caller actions for one agent or session.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -313,6 +339,7 @@ impl Capabilities {
 
 /// A session setting the agent advertises. Well-known ids: `model`, `effort`,
 /// `mode`, `sandbox`, `fast` (boolean, lower latency with increased usage).
+/// The `mode` choice `plan` is plan mode on every agent that has one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ConfigOption {
@@ -339,6 +366,25 @@ pub struct ConfigChoice {
     pub value: String,
     pub label: String,
     pub description: Option<String>,
+    /// For a `model` choice: the options this model offers once selected.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<ConfigOption>,
+}
+
+impl ConfigChoice {
+    /// A choice with no options of its own.
+    pub(crate) fn new(
+        value: impl Into<String>,
+        label: impl Into<String>,
+        description: Option<String>,
+    ) -> Self {
+        Self {
+            value: value.into(),
+            label: label.into(),
+            description,
+            options: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -373,6 +419,31 @@ pub struct SlashCommand {
     pub name: String,
     pub description: String,
     pub input_hint: Option<String>,
+    /// Where the command comes from; absent on the wire means `Builtin`.
+    #[serde(default, skip_serializing_if = "CommandSource::is_builtin")]
+    pub source: CommandSource,
+}
+
+/// Where a slash command comes from.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum CommandSource {
+    /// Not reported as a skill by the agent.
+    #[default]
+    Builtin,
+    /// A skill on disk. `scope` is the agent's own word for where it lives ("user", "repo").
+    Skill {
+        path: Option<PathBuf>,
+        scope: Option<String>,
+    },
+}
+
+impl CommandSource {
+    /// `Builtin`, the default the wire leaves out.
+    fn is_builtin(&self) -> bool {
+        *self == Self::Builtin
+    }
 }
 
 /// What `probe` and `open` learn about an agent.
@@ -399,7 +470,10 @@ pub struct SessionConfiguration {
 pub enum PermissionMode {
     /// Forward each request to the application.
     Ask,
-    /// Allow each permission request once without forwarding it.
+    /// Allow file edits once without asking; forward every other request.
+    AcceptEdits,
+    /// Allow each permission request once without forwarding it, except a
+    /// proposed plan's approval.
     AutoApprove,
 }
 
@@ -413,12 +487,30 @@ pub struct SessionOptions {
     /// Never persisted: keeps probes and one-shot generation out of the
     /// user's session history.
     pub(crate) throwaway: bool,
+    /// Only the details are wanted (the probes): codex then stops before its
+    /// thread; the other adapters ignore it today.
+    pub(crate) details_only: bool,
     pub(crate) quiet_window: Option<Duration>,
     pub(crate) stall_after: Option<Duration>,
     pub(crate) mcp_servers: Vec<McpServer>,
     pub(crate) configure: Vec<(ConfigId, ConfigValue)>,
     pub(crate) config_home: Option<PathBuf>,
     pub(crate) record_wire: Option<PathBuf>,
+    pub(crate) instructions: Option<String>,
+    pub(crate) output_schema: Option<serde_json::Value>,
+    pub(crate) env: EnvVars,
+    pub(crate) args: Vec<String>,
+}
+
+/// The caller's env pairs for the agent; `Debug` shows the names, never the values.
+#[derive(Clone, Default, PartialEq, Eq, Hash)]
+pub(crate) struct EnvVars(pub(crate) BTreeMap<String, String>);
+
+impl std::fmt::Debug for EnvVars {
+    /// The variable names only: values may be credentials.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_set().entries(self.0.keys()).finish()
+    }
 }
 
 /// How `open` binds to a provider session.
@@ -442,12 +534,17 @@ impl SessionOptions {
             permission_mode: PermissionMode::Ask,
             no_tools: false,
             throwaway: false,
+            details_only: false,
             quiet_window: None,
             stall_after: None,
             mcp_servers: Vec::new(),
             configure: Vec::new(),
             config_home: None,
             record_wire: None,
+            instructions: None,
+            output_schema: None,
+            env: EnvVars::default(),
+            args: Vec::new(),
         }
     }
 
@@ -506,9 +603,35 @@ impl SessionOptions {
     /// turn. Unset (the default) records nothing.
     ///
     /// The file is unredacted — prompts, file contents, command output, and
-    /// possibly secrets — so treat it as sensitive and delete it after use.
+    /// possibly secrets — except the header and env values of declared MCP
+    /// servers, which read `<redacted>`. Treat it as sensitive and delete it after use.
     pub fn record_wire(mut self, path: impl Into<PathBuf>) -> Self {
         self.record_wire = Some(path.into());
+        self
+    }
+
+    /// Extra instructions for the agent, added to its system prompt.
+    pub fn instructions(mut self, text: impl Into<String>) -> Self {
+        self.instructions = Some(text.into());
+        self
+    }
+
+    /// A JSON schema the agent's final message of each turn must match.
+    /// Requires `Capability::OutputSchema`; `open` fails typed without it.
+    pub fn output_schema(mut self, schema: serde_json::Value) -> Self {
+        self.output_schema = Some(schema);
+        self
+    }
+
+    /// One environment variable for the agent process, over the inherited ones.
+    pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.env.0.insert(key.into(), value.into());
+        self
+    }
+
+    /// One extra launch argument, placed after anyagent's own.
+    pub fn arg(mut self, arg: impl Into<String>) -> Self {
+        self.args.push(arg.into());
         self
     }
 
@@ -590,5 +713,36 @@ mod tests {
         );
         let abs = std::env::temp_dir();
         assert_eq!(SessionOptions::in_dir(&abs).cwd(), &abs);
+    }
+
+    /// `Debug` of the options names each env variable but never prints its value.
+    #[test]
+    fn debug_hides_env_values() {
+        let options = SessionOptions::in_dir(".").env("API_KEY", "sk-secret");
+        let text = format!("{options:?}");
+        assert!(text.contains(r#"env: {"API_KEY"}"#), "{text}");
+        assert!(!text.contains("sk-secret"), "{text}");
+    }
+
+    /// `Debug` of an MCP server names its env vars and headers, never their values.
+    #[test]
+    fn mcp_debug_hides_env_and_header_values() {
+        let stdio = McpServer::stdio("db", "/bin/db", ["--ro"]).with("DB_TOKEN", "sk-stdio");
+        let http = McpServer::http("web", "https://x.test").with("Authorization", "sk-http");
+        let sse = McpServer::sse("feed", "https://y.test").with("X-Key", "sk-sse");
+        let text = format!("{stdio:?} {http:?} {sse:?}");
+        for name in ["DB_TOKEN", "Authorization", "X-Key"] {
+            assert!(text.contains(name), "{text}");
+        }
+        assert!(!text.contains("sk-"), "{text}");
+    }
+
+    /// A command stored before `source` existed loads as `Builtin`.
+    #[test]
+    fn a_command_stored_without_source_loads_as_builtin() {
+        let stored =
+            serde_json::json!({ "name": "compact", "description": "", "input_hint": null });
+        let command: SlashCommand = serde_json::from_value(stored).unwrap();
+        assert_eq!(command.source, CommandSource::Builtin);
     }
 }

@@ -1,16 +1,25 @@
 // Claude stream-json fixture agent, shaped like the recordings in this
 // directory (claude 2.1.241). Flags: --question (AskUserQuestion turn),
 // --eof (die mid-turn), --wake (background task wakes an agent-originated
-// turn), --subagent (nested transcript with parent_tool_use_id),
-// --logged-out (initialize reports no token source), --api-key (an env
+// turn), --subagent (nested transcript with parent_tool_use_id and task
+// frames), --progress (a Bash reports progress), --bg-subagent (a
+// background Agent reports after its turn ended), --logged-out
+// (initialize reports no token source), --api-key (an env
 // key supplies auth, still with `tokenSource: "none"`), --bedrock (an
 // AWS cloud-provider login, no Anthropic identity at all),
 // --token-source-key (the credential named in tokenSource itself),
 // --echo-config-home (echo the CLAUDE_CONFIG_DIR the child received),
-// --rewind-fails (rewind_files answers with an error envelope).
+// --rewind-fails (rewind_files answers with an error envelope),
+// --denied (a settings rule refuses a Bash call), --fork-fails (a fork
+// launch dies before speaking), --plan (a plan-mode turn that ends in an
+// ExitPlanMode request), --mcp-fails (no declared MCP server connects),
+// --mcp-refused (an older CLI refuses mcp_set_servers), --skills-refused (a
+// CLI that refuses get_skills_dialog).
 import { createInterface } from 'node:readline';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 
+// FIXTURE_ARGV_LOG, set through the session's env: log the launch args there.
+if (process.env.FIXTURE_ARGV_LOG) appendFileSync(process.env.FIXTURE_ARGV_LOG, JSON.stringify(process.argv.slice(2)) + '\n');
 const flag = (name) => process.argv.includes(name);
 const argAfter = (name) => { const i = process.argv.indexOf(name); return i > -1 ? process.argv[i + 1] : undefined; };
 // Flag settings: seeded from the launch flags, merged by apply_flag_settings.
@@ -24,6 +33,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // is a fresh process with a new session id, like the real CLI (recording 09).
 const FORK_AT = (process.argv.find((a) => a.startsWith('--resume-session-at=')) ?? '').slice(20) || null;
 const S = flag('--fork-session') ? 'sess-fork-1' : 'sess-c1';
+if (flag('--fork-fails') && flag('--fork-session')) { process.stderr.write('boom: fork failed\n'); process.exit(1); }
 if (flag('--echo-relaunch')) appendFileSync('launches.jsonl', JSON.stringify(process.argv) + '\n');
 let recalled = flag('--echo-relaunch') && flag('--resume') && existsSync('history.json') ? JSON.parse(readFileSync('history.json', 'utf8')) : [];
 let n = 0;
@@ -35,9 +45,18 @@ const delta = (d, parent = null) => ev({ type: 'content_block_delta', index: 0, 
 const msgStart = (id, parent = null) => ev({ type: 'message_start', message: { id, model: 'claude-sonnet-5', role: 'assistant', content: [], usage: USAGE } }, parent);
 const life = (cu, state) => send({ type: 'command_lifecycle', command_uuid: cu, state, uuid: uid(), session_id: S });
 const assistantTool = (id, name, input, frameUuid) => send({ type: 'assistant', message: { id: 'msg_1', model: 'claude-sonnet-5', role: 'assistant', content: [{ type: 'tool_use', id, name, input }], usage: USAGE }, session_id: S, uuid: frameUuid ?? uid(), parent_tool_use_id: null });
+const task = (subtype, fields, id = 'toolu_task') => send({ type: 'system', subtype, task_id: 'a1', tool_use_id: id, ...fields, uuid: uid(), session_id: S });
 const resultFrame = (extra) => send({ type: 'result', session_id: S, uuid: uid(), subtype: 'success', is_error: false, stop_reason: 'end_turn', terminal_reason: 'completed', num_turns: 1, total_cost_usd: 0.01, usage: {}, modelUsage: { 'claude-sonnet-5': { contextWindow: 200000 } }, result: 'done', ...extra });
 
-let ctrlWaiters = {}, turn = null, inited = false, reqN = 0, queue = [], woke = false;
+let ctrlWaiters = {}, turn = null, inited = false, reqN = 0, queue = [], woke = false, mcpServers = {};
+// Commands and `/skills` menu rows, shaped like 2.1.283 (probed 2026-09-27): only
+// built-ins carry `builtin`; a row names a skill, its source label, no path.
+const COMMANDS = [
+  { name: 'compact', description: 'Compact context', argumentHint: '', builtin: true },
+  { name: 'review', description: 'Review a diff (project)', argumentHint: '' },
+];
+const skillRow = (name, source) => ({ name, display_name: name, description: name, source, tokens: 10, state: 'on', advertised: true, handles: {} });
+const SKILLS = [skillRow('review', 'project')];
 
 const rl = createInterface({ input: process.stdin });
 rl.on('line', (line) => {
@@ -70,10 +89,11 @@ function onControl(m) {
       const fast = si > -1 && JSON.parse(process.argv[si + 1]).fastMode === true;
       return reply({
         fast_mode_state: fast ? 'on' : 'off',
-        commands: [{ name: 'compact', description: 'Compact context', argumentHint: '' }],
+        commands: COMMANDS,
         models: [
           { value: 'default', displayName: 'Default (recommended)', description: 'Opus 5 with 1M context', supportsFastMode: !flag('--no-fast-metadata'), supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] },
           { value: 'sonnet', displayName: 'Sonnet', description: 'Fast for everyday tasks', supportedEffortLevels: ['low', 'high'] },
+          { value: 'haiku', displayName: 'Haiku', description: 'Fastest for quick answers' },
         ],
         // Logged out, the real CLI still sends an account object — it just
         // names no token source (probed live 2026-08-27, claude 2.1.241).
@@ -100,8 +120,23 @@ function onControl(m) {
       return reply({});
     case 'set_model':
       return reply({});
+    // Declared MCP servers (probed 2026-09-27, 2.1.283); `errors` names each server that did not connect.
+    case 'mcp_set_servers': {
+      if (flag('--mcp-refused'))
+        return send({ type: 'control_response', response: { subtype: 'error', request_id: m.request_id, error: 'Unsupported control request subtype: mcp_set_servers' } });
+      mcpServers = m.request.servers;
+      // FIXTURE_MCP_LOG: log the servers as received, secrets included.
+      if (process.env.FIXTURE_MCP_LOG) appendFileSync(process.env.FIXTURE_MCP_LOG, JSON.stringify(mcpServers) + '\n');
+      const failure = (e) => (e.url ? `MCP endpoint not found at ${e.url}. Check the URL in your MCP config.` : 'connection failed');
+      const errors = flag('--mcp-fails') ? Object.fromEntries(Object.entries(mcpServers).map(([n, e]) => [n, failure(e)])) : {};
+      return reply({ added: Object.keys(mcpServers), removed: [], errors });
+    }
     case 'get_binary_version':
       return reply({ version: '2.1.241', buildTime: '2026-08-22T22:46:48Z' });
+    case 'get_skills_dialog':
+      if (flag('--skills-refused'))
+        return send({ type: 'control_response', response: { subtype: 'error', request_id: m.request_id, error: 'Unsupported control request subtype: get_skills_dialog' } });
+      return reply({ skills: SKILLS });
     case 'get_usage':
       // Slim shape recorded 2026-09-06 (2.1.261): no `limits` array.
       if (flag('--slim-usage'))
@@ -161,6 +196,11 @@ async function runTurn(m) {
   // "die-auth" loses the credentials: the synthetic API-error message and
   // its result frame, exactly as the CLI emits them with no stored login.
   const prompt = typeof m.message.content === 'string' ? m.message.content : (m.message.content.find(b => b.type === 'text')?.text ?? '');
+  // "new-skill": a skill found mid-turn; the CLI pushes the whole command list again.
+  if (prompt.includes('new-skill')) {
+    SKILLS.push(skillRow('fresh', 'user'));
+    send({ type: 'system', subtype: 'commands_changed', commands: [...COMMANDS, { name: 'fresh', description: 'fresh (user)', argumentHint: '' }], uuid: uid(), session_id: S });
+  }
   if (prompt.includes('die-auth')) {
     send({ type: 'assistant', message: { id: 'err_1', model: '<synthetic>', role: 'assistant', content: [{ type: 'text', text: 'Not logged in · Please run /login' }], usage: USAGE }, session_id: S, uuid: uid(), parent_tool_use_id: null, error: 'authentication_failed', is_api_error_message: true });
     send({ type: 'result', session_id: S, uuid: uid(), subtype: 'success', is_error: true, stop_reason: 'stop_sequence', terminal_reason: 'api_error', num_turns: 1, total_cost_usd: 0, usage: {}, modelUsage: {}, result: 'Not logged in · Please run /login', user_message_uuid: u });
@@ -199,18 +239,55 @@ async function runTurn(m) {
     return;
   }
 
-  const aborted = () => {
-    send({ type: 'result', session_id: S, uuid: uid(), user_message_uuid: null, subtype: 'error_during_execution', is_error: true, stop_reason: 'tool_use', terminal_reason: 'aborted_streaming', num_turns: 1, result: null, total_cost_usd: 0.005, usage: {}, modelUsage: { 'claude-sonnet-5': { contextWindow: 200000 } } });
+  // A deny with `interrupt` ends the turn as `aborted_tools` (probed 2026-09-27, 2.1.283).
+  const aborted = (reason = 'aborted_streaming') => {
+    send({ type: 'result', session_id: S, uuid: uid(), user_message_uuid: null, subtype: 'error_during_execution', is_error: true, stop_reason: 'tool_use', terminal_reason: reason, num_turns: 1, result: null, total_cost_usd: 0.005, usage: {}, modelUsage: { 'claude-sonnet-5': { contextWindow: 200000 } } });
     life(u, 'cancelled');
     turn = null;
   };
+
+  // `--json-schema` (live 2026-09-27, 2.1.283): the model may answer in text first; the CLI then
+  // makes it call `StructuredOutput`, whose input is the reply the `result` frame carries.
+  if (argAfter('--json-schema')) {
+    msgStart('msg_1');
+    delta({ type: 'text_delta', text: 'Here are a few options.' });
+    ev({ type: 'message_stop' });
+    send({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[structured-output-enforce] You MUST call the StructuredOutput tool to complete this request. Call this tool now.' }] }, parent_tool_use_id: null, session_id: S, uuid: uid(), isSynthetic: true });
+    msgStart('msg_2');
+    assistantTool('toolu_so', 'StructuredOutput', { title: 'Fix flaky login test' });
+    send({ type: 'user', message: { role: 'user', content: [{ tool_use_id: 'toolu_so', type: 'tool_result', content: 'Structured output provided successfully' }] }, parent_tool_use_id: null, session_id: S, uuid: uid(), tool_use_result: 'Structured output provided successfully' });
+    ev({ type: 'message_stop' });
+    resultFrame({ user_message_uuid: u, stop_reason: 'tool_use', result: '{"title":"Fix flaky login test"}', structured_output: { title: 'Fix flaky login test' } });
+    life(u, 'completed');
+    turn = null;
+    return;
+  }
 
   if (flag('--question')) {
     msgStart('msg_1');
     const resp = await ask({ subtype: 'can_use_tool', tool_name: 'AskUserQuestion', display_name: 'AskUserQuestion', input: { questions: [{ question: 'Which color do you prefer?', header: 'Color', options: [{ label: 'Red', description: 'Prefer red' }, { label: 'Blue', description: 'Prefer blue' }], multiSelect: false }] }, tool_use_id: 'toolu_q', requires_user_interaction: true });
     if (turn.interrupted) return aborted();
+    if (resp.response?.interrupt) return aborted('aborted_tools');
     const answer = resp.response?.updatedInput?.answers?.['Which color do you prefer?'] ?? 'none';
     delta({ type: 'text_delta', text: `answer=${answer}` });
+    ev({ type: 'message_stop' });
+    resultFrame({ user_message_uuid: u });
+    life(u, 'completed');
+    turn = null;
+    return;
+  }
+
+  // Plan mode (probed 2026-09-27, 2.1.283): ExitPlanMode asks through
+  // can_use_tool with the markdown in `input.plan`. "no-plan" sends it empty.
+  if (flag('--plan')) {
+    const input = { plan: prompt.includes('no-plan') ? '' : '# Plan\n\n1. Add README.md', planFilePath: '/plans/p.md' };
+    msgStart('msg_1');
+    assistantTool('toolu_plan', 'ExitPlanMode', input);
+    const resp = await ask({ subtype: 'can_use_tool', tool_name: 'ExitPlanMode', display_name: 'ExitPlanMode', input, tool_use_id: 'toolu_plan', requires_user_interaction: true });
+    if (turn.interrupted) return aborted();
+    // An allowed plan ends plan mode: the CLI reports its new mode.
+    if (resp.response?.behavior === 'allow') send({ type: 'system', subtype: 'status', status: null, permissionMode: 'default', uuid: uid(), session_id: S });
+    delta({ type: 'text_delta', text: `plan=${resp.response?.behavior ?? 'deny'}` });
     ev({ type: 'message_stop' });
     resultFrame({ user_message_uuid: u });
     life(u, 'completed');
@@ -243,14 +320,75 @@ async function runTurn(m) {
     return;
   }
 
+  // A background Agent (probed 2026-09-27, 2.1.283): the tool_result says `async_launched` and the
+  // notification arrived after the turn ended; progress is moved after it to act out a long agent.
+  // "bg-never-reports" launches the same Agent, and nothing more arrives for it.
+  if (flag('--bg-subagent') || prompt.includes('bg-never-reports')) {
+    msgStart('msg_1');
+    assistantTool('toolu_bga', 'Agent', { description: 'pong check', subagent_type: 'general-purpose', model: 'haiku', run_in_background: true, prompt: 'Reply PONG.' });
+    task('task_started', { description: 'pong check', subagent_type: 'general-purpose', is_backgrounded: true, task_type: 'local_agent' }, 'toolu_bga');
+    send({ type: 'user', message: { role: 'user', content: [{ tool_use_id: 'toolu_bga', type: 'tool_result', content: [{ type: 'text', text: 'Async agent launched successfully.' }] }] }, session_id: S, uuid: uid(), parent_tool_use_id: null, tool_use_result: { isAsync: true, status: 'async_launched', agentId: 'a1', description: 'pong check', resolvedModel: 'claude-haiku-4-5-20251001' } });
+    delta({ type: 'text_delta', text: 'launched' });
+    ev({ type: 'message_stop' });
+    resultFrame({ user_message_uuid: u });
+    life(u, 'completed');
+    turn = null;
+    if (prompt.includes('bg-never-reports')) return;
+    await sleep(150);
+    task('task_progress', { description: 'Running Echo the word hi', subagent_type: 'general-purpose', usage: { total_tokens: 20584, tool_uses: 1, duration_ms: 1610 }, last_tool_name: 'Bash' }, 'toolu_bga');
+    task('task_notification', { status: 'completed', summary: 'PONG', usage: { total_tokens: 21582, tool_uses: 1, duration_ms: 2716 } }, 'toolu_bga');
+    // The finished agent wakes the parent with no user frame.
+    turn = { interrupted: false };
+    msgStart('msg_w');
+    delta({ type: 'text_delta', text: 'PONG' });
+    ev({ type: 'message_stop' });
+    resultFrame({ user_message_uuid: null, result: 'PONG' });
+    turn = null;
+    return;
+  }
+
+  // A `permissions.deny` rule refuses the call (probed 2026-09-27, 2.1.283):
+  // `system/permission_denied`, then the error tool_result, no can_use_tool.
+  if (flag('--denied')) {
+    const message = 'Permission to use Bash with command echo probe-denied has been denied.';
+    msgStart('msg_1');
+    assistantTool('toolu_d1', 'Bash', { command: 'echo probe-denied', description: 'Echo' });
+    send({ type: 'system', subtype: 'permission_denied', tool_name: 'Bash', tool_use_id: 'toolu_d1', decision_reason_type: 'subcommandResults', message, uuid: uid(), session_id: S });
+    send({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', content: message, is_error: true, tool_use_id: 'toolu_d1' }] }, parent_tool_use_id: null, session_id: S, uuid: uid(), tool_use_result: `Error: ${message}`, tool_result_meta: [{ id: 'toolu_d1', non_execution_kind: 'permission-rule' }] });
+    delta({ type: 'text_delta', text: 'refused' });
+    ev({ type: 'message_stop' });
+    resultFrame({ user_message_uuid: u, permission_denials: [{ tool_name: 'Bash', tool_use_id: 'toolu_d1', tool_input: { command: 'echo probe-denied' } }] });
+    life(u, 'completed');
+    turn = null;
+    return;
+  }
+
+  // A Bash's progress (probed 2026-09-27, 2.1.283, sent only with CLAUDE_CODE_CONTAINER_ID
+  // set): the running tool rides `parent_tool_use_id`. The second names no known tool.
+  if (flag('--progress')) {
+    msgStart('msg_1');
+    assistantTool('toolu_sleep', 'Bash', { command: 'sleep 6; echo MAIN', description: 'Sleep then print' });
+    for (const parent of ['toolu_sleep', 'toolu_gone']) send({ type: 'tool_progress', tool_use_id: 'bash-progress-0', tool_name: 'Bash', parent_tool_use_id: parent, elapsed_time_seconds: 3, task_id: 'b5o0u0l9o', session_id: S, uuid: uid() });
+    send({ type: 'user', message: { role: 'user', content: [{ tool_use_id: 'toolu_sleep', type: 'tool_result', content: 'MAIN', is_error: false }] }, parent_tool_use_id: null, session_id: S, uuid: uid(), tool_use_result: { stdout: 'MAIN', stderr: '' } });
+    ev({ type: 'message_stop' });
+    resultFrame({ user_message_uuid: u });
+    life(u, 'completed');
+    turn = null;
+    return;
+  }
+
   if (flag('--subagent')) {
     msgStart('msg_1');
     delta({ type: 'text_delta', text: 'main ' });
-    assistantTool('toolu_task', 'Task', { description: 'scan files', subagent_type: 'Explore' });
+    assistantTool('toolu_task', 'Task', { description: 'scan files', subagent_type: 'Explore', model: 'haiku' });
+    // Task frames in recording 05's order: the notification lands just before the tool_result.
+    task('task_started', { description: 'scan files', subagent_type: 'Explore', is_backgrounded: false, task_type: 'local_agent' });
     msgStart('msg_s', 'toolu_task');
     send({ type: 'user', message: { role: 'user', content: 'look deeper' }, session_id: S, uuid: uid(), parent_tool_use_id: 'toolu_task' });
     delta({ type: 'text_delta', text: 'sub ' }, 'toolu_task');
     ev({ type: 'message_stop' }, 'toolu_task');
+    task('task_progress', { description: 'Running List files', subagent_type: 'Explore', usage: { total_tokens: 16390, tool_uses: 1, duration_ms: 4366 }, last_tool_name: 'Bash' });
+    task('task_notification', { status: 'completed', summary: '4 files', usage: { total_tokens: 17870, tool_uses: 1, duration_ms: 8308 } });
     send({ type: 'user', message: { role: 'user', content: [{ tool_use_id: 'toolu_task', type: 'tool_result', content: '4 files' }] }, session_id: S, uuid: uid(), parent_tool_use_id: null, tool_use_result: { status: 'completed' } });
     delta({ type: 'text_delta', text: 'done' });
     ev({ type: 'message_stop' });
@@ -278,13 +416,9 @@ async function runTurn(m) {
   // Echo the flag settings once any was set, so tests can assert switches.
   if (flags.fastMode !== undefined || flags.effortLevel !== undefined)
     delta({ type: 'text_delta', text: `fast=${flags.fastMode ?? false} effort=${flags.effortLevel ?? 'unset'} ` });
-  // Echo --mcp-config so tests can assert the launch shape.
-  const mi = process.argv.indexOf('--mcp-config');
-  if (mi > -1) {
-    const conf = JSON.parse(process.argv[mi + 1]).mcpServers;
-    const decl = Object.entries(conf).map(([n, e]) => `${e.type ?? 'stdio'}:${n}`).join(',');
-    delta({ type: 'text_delta', text: `mcp=${decl} ` });
-  }
+  // Echo the declared MCP servers so tests can assert they arrived.
+  const decl = Object.entries(mcpServers).map(([n, e]) => `${e.type ?? 'stdio'}:${n}`).join(',');
+  if (decl) delta({ type: 'text_delta', text: `mcp=${decl} ` });
   // Echo attachments so tests can assert the wire shape.
   const c = m.message.content;
   if (Array.isArray(c)) {
@@ -295,11 +429,13 @@ async function runTurn(m) {
   assistantTool('toolu_w1', 'Write', { file_path: 'a.txt', content: 'ALPHA' });
   const resp = await ask({ subtype: 'can_use_tool', tool_name: 'Write', display_name: 'Write', input: { file_path: 'a.txt', content: 'ALPHA' }, description: 'a.txt', permission_suggestions: [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }], tool_use_id: 'toolu_w1' });
   if (turn.interrupted) return aborted();
+  if (resp.response?.interrupt) return aborted('aborted_tools');
   const behavior = resp.response?.behavior ?? 'deny';
   if (behavior === 'allow') {
     send({ type: 'user', message: { role: 'user', content: [{ tool_use_id: 'toolu_w1', type: 'tool_result', content: 'File created successfully' }] }, session_id: S, uuid: uid(), parent_tool_use_id: null, tool_use_result: { type: 'create', filePath: 'a.txt', content: 'ALPHA', originalFile: null, structuredPatch: [] } });
   }
-  delta({ type: 'text_delta', text: `perm=${behavior} ` });
+  // A deny's message is the tool result the model reads.
+  delta({ type: 'text_delta', text: behavior === 'deny' ? `perm=deny(${resp.response?.message}) ` : `perm=${behavior} ` });
   if (flag('--eof')) { process.stderr.write('boom: fixture died\n'); process.exit(3); }
   // Deterministic last-assistant uuid (`a-<user uuid>`): the rollback cut
   // point a test can predict.

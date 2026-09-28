@@ -31,10 +31,12 @@ conversation, like one-shot text generation and reading account quota.
 | `discover()` | `DiscoveryReport` | Instant, read-only scan: installed agents plus missing ones with install hints |
 | `prewarm()` | | Start the discovery scan early |
 | `probe(&agent)` | `AgentDetails` | Opens a throwaway session (~1 s) to learn version, auth, capabilities, config options, commands |
+| `probe_with(&agent, options)` | `AgentDetails` | `probe` with your dir, env, args, config home. In a workspace's dir it returns that workspace's commands, each with its `source`. Always throwaway; `resume` / `fork` is `InvalidConfiguration` |
 | `probe_auth(&agent)` | `AuthStatus` | Cheaper probe when you only need the login state |
 | `open(&agent, options)` | `(Session, Events)` | Spawn the agent and hand back the two halves |
 | `generate(&agent, options, prompt)` | `String` | One-shot text: opens, prompts, declines tools, closes |
-| `plan_usage(&agent)` | `PlanUsage` | The account's subscription quota, from the agent itself |
+| `plan_usage(&agent)` | `PlanUsage` | The account's subscription quota and banked resets (`reset_credits`), from the agent itself |
+| `plan_usage_with(&agent, options)` | `PlanUsage` | `plan_usage` for the login the options point at (config home, env, args). Cached per agent, binary, config home, env and args |
 | `plan_usage_all()` | `Vec<AgentPlanUsage>` | The same for every installed agent |
 | `with_mock(script)` | `Runtime` | Feature `mock`: the real engine over a scripted agent |
 
@@ -45,6 +47,14 @@ for missing in &report.missing {               // MissingAgent { name, install_h
     println!("{}: {}", missing.name, missing.install_hint);
 }
 ```
+
+Throwaway sessions (`probe`, `probe_auth`, `generate`) on claude launch
+without the user's configured hooks and MCP servers (`--strict-mcp-config`,
+`disableAllHooks`); servers the app declares still load. So a probe's
+`commands` leave out the user's MCP-provided prompts. On codex, `probe` and
+`probe_auth` stop before `thread/start`, so no MCP server or hook starts; the
+current values come from codex's effective config (an unset sandbox reads
+`read-only`, though a trusted project's thread would say `workspace-write`).
 
 Discovery hands you `AgentInstallation` values, and every other `Runtime`
 call takes one. You can also build one by hand: `AgentInstallation::at(id, path)`
@@ -65,11 +75,15 @@ can change later goes through `Session::configure` instead.
 | `resume(token)` | Reopen an earlier session |
 | `fork_from(token, at)` | Branch a new session off an old one, at a message or at the end |
 | `mcp_server(server)` | Hand the agent one of your MCP servers (stdio, HTTP, SSE) |
-| `permission_mode(mode)` | `Ask` (forward requests) or `AutoApprove` |
+| `permission_mode(mode)` | `Ask` (forward requests), `AcceptEdits` (allow file edits, forward the rest) or `AutoApprove` |
 | `config_home(dir)` | Separate config directory, for several logins of one agent |
+| `instructions(text)` | Extra instructions added to the agent's system prompt ([per agent](/agents#launch-options)) |
+| `output_schema(schema)` | A JSON schema each turn's final message must match. Needs `OutputSchema`; `open` fails `UnsupportedFeature` without it. Codex takes only strict schemas (`additionalProperties: false`) |
+| `env(key, value)` | One env var for the agent process, over the inherited ones and `config_home`'s |
+| `arg(arg)` | One extra launch argument, after anyagent's own. Passed as is; a bad one fails `open` with the agent's error |
 | `quiet_window(dur)` | How long silence may run before completion is inferred |
 | `stall_after(dur)` | Silence before a stall `Diagnostic` (default 120 s). Never ends the turn |
-| `record_wire(path)` | Dump the raw protocol traffic to a JSONL file. Unredacted, treat as sensitive |
+| `record_wire(path)` | Dump the raw protocol traffic to a JSONL file. Unredacted except MCP server header and env values; treat as sensitive. A codex probe's `config/read` reply (your codex config) reads `<redacted>` |
 
 ## Session
 
@@ -86,9 +100,10 @@ confirms the result.
 | `dequeue(prompt_id)` | Drop a queued prompt before it starts | |
 | `answer(request_id, answer)` | Answer a permission or question, exactly once | `RequestClosed` |
 | `configure(id, value)` | Change a live config option | `SessionUpdated` |
-| `rollback(turns, scope)` | Rewind completed turns in place. Session must be idle | `SessionUpdated`, or a `Diagnostic` on refusal |
+| `rollback(turns, scope)` | Rewind completed turns in place. Session must be idle. Returns once the agent answers; a refusal is `InvalidRequest` | `SessionUpdated` |
 | `compact()` | Ask the agent to summarize its context. Session must be idle | `ContextCompacted` |
 | `cancel(clear_queue)` | Stop the running turn; optionally drop the queue too | `TurnEnded { Cancelled }` |
+| `cancel_turn(turn, clear_queue)` | `cancel`, but only if `turn` is the running turn; otherwise nothing happens | `TurnEnded { Cancelled }` |
 | `close()` | End the agent session and wait for cleanup | stream ends |
 | `info()` | Snapshot: agent, details, configuration, resume token, title, status | |
 | `status()` | `Idle`, `Working`, or `NeedsInput`, without reading the stream | |
@@ -141,7 +156,7 @@ two events bracket everything else.
 | Variant | Payload | Notes |
 |---|---|---|
 | `TurnStarted` | `origin` | `Prompt(id)` for yours, `Agent` when the agent woke itself (background work finishing) |
-| `TurnEnded` | `stop`, `background` | Exactly once per turn. `background` lists tools still running |
+| `TurnEnded` | `stop`, `background`, `usage` | Exactly once per turn. `background` lists tools still running. `usage` is the turn's `input_tokens`, `cached_input_tokens`, `output_tokens` (Claude, Codex, opencode, pi, Antigravity over `agy`; absent elsewhere) |
 
 `StopReason`:
 
@@ -174,24 +189,48 @@ whole every time it changes, so there is no delta merging to get wrong.
 |---|---|---|
 | `ToolUpdated` | `ToolUpdate` | Cumulative snapshot of one tool call. Replace by `id`, don't merge |
 | `ToolOutputDelta` | `tool_id`, `text` | Streamed output of a running command |
+| `ToolProgress` | `tool_id`, `message`, `elapsed_ms` | A running tool says what it is doing or how long it has run. claude: a Bash's `elapsed_ms`, sent by the CLI only when `CLAUDE_CODE_CONTAINER_ID` or `CLAUDE_CODE_REMOTE` is set. codex: an MCP call's `message`. Others: not sent |
+| `TurnDiff` | `unified` | Codex only. The turn's changes so far as one unified diff. Replaces the previous one |
+| `ModelRerouted` | `from`, `to`, `reason` | Codex only. The agent answered with another model than the one selected |
 | `PlanUpdated` | `entries` | The agent's full task list. Replaces the previous one |
+| `PlanProposed` | `markdown` | Claude and codex only. In `mode: plan`, the plan the agent proposes before it acts. On claude, the `ExitPlanMode` permission request follows: allow to implement, deny to keep planning. It reaches you in every permission mode. On codex, select an approval policy and prompt again to implement |
+
+`ToolProgress`, `TurnDiff` and `ModelRerouted` ride a running turn and never
+open one: while the session is idle they arrive with no `turn_info`.
 
 ```rust
 pub struct ToolUpdate {
     pub id: ToolId,
     pub kind: ToolKind,          // Read, Edit, Execute, Mcp { server, tool }, Subagent, …
     pub title: String,           // ready to display
-    pub status: ToolStatus,
+    pub status: ToolStatus,      // Pending, Running, Completed, Failed, Cancelled, Denied
     pub input: ToolInput,
     pub output: Option<String>,
     pub diffs: Vec<FileDiff>,    // typed, for edits
     pub locations: Vec<PathBuf>, // files it touched
     pub raw: Option<RawTool>,    // the agent's own name and raw input
+    pub subagent: Option<SubagentInfo>, // Subagent tools: role, model, summary, tokens
 }
 ```
 
 When `kind` is `Subagent`, every event the child produces carries that tool's
 id in `turn_info.parent_tool_id`. That is how you nest it in a UI.
+
+`subagent` says who runs and what it reports. Each change re-sends the snapshot.
+
+| Field | claude | codex | opencode |
+|---|---|---|---|
+| `role` | `subagent_type` from the Agent input | not sent | the task's `subagent_type` |
+| `model` | the Agent input's `model`, when the parent picks one | the child's model, on a `spawnAgent` call | the child's model, `provider/id` |
+| `summary` | the latest progress line | not sent | not sent |
+| `tokens` | size of the subagent's latest model call (`total_tokens`) | running total of the child thread; not comparable with claude's | not sent |
+
+codex spawns in two shapes: a `subAgentActivity` item or a `spawnAgent` call. Either one
+owns the child thread and stays `Running` until the child's turn ends. Other agents leave it `None`. A background subagent stays `Running` past its
+turn and is listed in `TurnEnded.background`; its later updates start no turn.
+
+`Denied` means the agent's permission rules or mode refused the tool without
+asking you; `output` holds the reason.
 
 ### Requests
 
@@ -223,6 +262,13 @@ match request {
 `PermissionChoice` is `AllowOnce`, `AllowAlways`, `DenyOnce`, `DenyAlways`.
 `QuestionAnswer` is `Text(String)` or `Choices(Vec<ChoiceId>)`.
 
+| Answer | Valid for | Does |
+|---|---|---|
+| `Permission(choice)` | a permission offering `choice` | picks that option |
+| `Question(answers)` | a question | one answer per question, in order |
+| `Deny { message }` | a permission offering `DenyOnce` | denies once and tells the agent why ([which agents carry the message](/agents#answers-by-agent)) |
+| `Cancel` | any open request | withdraws it; the agent stops waiting for it ([what each agent does next](/agents#answers-by-agent)) |
+
 ### Session state and usage
 
 Everything about the session that isn't part of the conversation: its
@@ -236,7 +282,7 @@ the account's quota is used.
 | `ContextUsage` | `used_tokens`, `window_tokens`, `cost_usd` | How full this session's window is |
 | `ContextCompacted` | | The agent compacted; the next `ContextUsage` drops |
 | `PlanUsageUpdated` | `PlanUsage` | Account quota, pushed without asking |
-| `Diagnostic` | `Diagnostic` | Non-fatal but worth surfacing: a rejected rollback, a stall, a wire oddity. Log these |
+| `Diagnostic` | `Diagnostic` | Non-fatal but worth surfacing: a stall, a wire oddity. Log these |
 
 ## AgentDetails and capabilities
 
@@ -252,9 +298,22 @@ pub struct AgentDetails {
     pub auth: AuthStatus,               // Authenticated { kind, account } | Unauthenticated { login } | Unknown
     pub capabilities: Capabilities,     // .supports(Capability::Fork)
     pub config_options: Vec<ConfigOption>,  // id, name, kind (Select | Boolean), current, live
-    pub commands: Vec<SlashCommand>,
+    pub commands: Vec<SlashCommand>,    // name, description, input_hint, source
+}
+
+pub enum CommandSource {
+    Builtin,                                                // part of the agent
+    Skill { path: Option<PathBuf>, scope: Option<String> }, // a skill on disk
 }
 ```
+
+`source` lets a skill picker list skills apart from built-in commands:
+
+| Agent | A command is a `Skill` when | `path` | `scope` |
+|---|---|---|---|
+| codex | it comes from `skills/list` (disabled skills are left out) | its `SKILL.md` | `user`, `repo`, `system`, `admin` |
+| claude | the CLI's `/skills` menu lists it | none: the CLI does not say | `user`, `project`, `plugin`, `claude.ai sync`, `built-in` |
+| others | never: every command is `Builtin` | | |
 
 A `Capability` is one optional thing this agent can do on this connection.
 Check `capabilities.supports(..)` before offering a feature, and never
@@ -278,6 +337,7 @@ capabilities over different wires. The full matrix is on the
 | `Subagents` | Nested `Subagent` tools with `parent_tool_id` on their events |
 | `ContextUsage` | `ContextUsage` events |
 | `PlanUsage` | `runtime.plan_usage` returns real numbers |
+| `OutputSchema` | `SessionOptions::output_schema` |
 
 ## Errors
 
@@ -295,9 +355,9 @@ enum is `#[non_exhaustive]`.
 | `HandshakeTimeout` | Launch plus handshake exceeded 30 s |
 | `UnsupportedFeature` | You called something the capability set does not include |
 | `InvalidConfiguration` | Bad option id or value, or an isolation request the agent cannot honour |
-| `InvalidRequest` | Answering a closed request, dequeueing a started prompt |
-| `ResumeFailed` | The token did not resolve |
-| `SessionBusy` | `rollback` or `compact` while a turn is running |
+| `InvalidRequest` | Answering a closed request, an answer the request does not offer (a `Deny` without `DenyOnce`; the request stays open), dequeueing a started prompt, a rollback the agent refused (its reason) |
+| `ResumeFailed` | The agent has no conversation for the token. Other resume failures keep their own variant |
+| `SessionBusy` | `rollback` or `compact` while a turn is running, or `rollback` while another is pending |
 | `ProtocolFailed` | The wire misbehaved |
 | `ProcessExited { status, stderr }` | The agent died |
 | `SessionClosed` | A call after `close` |

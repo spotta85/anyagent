@@ -25,15 +25,15 @@ use crate::adapter::{
     cap, level_choices, login_methods, selected, set_effort_option, with_stderr,
 };
 use crate::agent::{
-    AgentDetails, AuthKind, AuthStatus, Capabilities, Capability, ConfigChoice, ConfigId,
-    ConfigKind, ConfigOption, ConfigValue, Input, ResumeToken, SessionConfiguration,
+    AgentDetails, AuthKind, AuthStatus, Capabilities, Capability, CommandSource, ConfigChoice,
+    ConfigId, ConfigKind, ConfigOption, ConfigValue, Input, ResumeToken, SessionConfiguration,
     SessionOptions, SessionStart, SlashCommand,
 };
 use crate::error::AgentError;
 use crate::event::{
     Answer, Choice, ChoiceId, CompletionSource, Diagnostic, DiagnosticLevel, EventKind, Extensions,
     MessageId, Question, QuestionAnswer, QuestionId, QuestionRequest, RawTool, Request, RequestId,
-    StopReason, ToolId, ToolInput, ToolKind, ToolStatus, ToolUpdate,
+    StopReason, ToolId, ToolInput, ToolKind, ToolStatus, ToolUpdate, TurnUsage,
 };
 use crate::process::{self, Spawn};
 
@@ -76,6 +76,7 @@ impl Adapter for PiAdapter {
                 stop: None,
                 aborting: false,
                 cost: 0.0,
+                turn_usage: TurnUsage::default(),
                 next_message: 0,
                 next_request: 0,
             }
@@ -101,7 +102,8 @@ async fn launch(
 ) -> Result<(process::Child, Wire, DriverInfo, Option<u64>), AgentError> {
     let mut args = vec!["--mode".to_owned(), "rpc".to_owned()];
     args.extend(launch_args(&request.options)?);
-    let env = crate::adapter::config_home_env(&request.installation, &request.options)?;
+    args.extend(request.options.args.iter().cloned());
+    let env = crate::adapter::launch_env(&request.installation, &request.options)?;
     let mut child = process::spawn(Spawn {
         exec_path: request.installation.executable_path.clone(),
         args,
@@ -124,8 +126,8 @@ async fn launch(
     }
 }
 
-/// Session start and creation-time config as launch flags. Anything the CLI
-/// cannot take is refused here rather than silently dropped.
+/// Session start, instructions and creation-time config as launch flags.
+/// Anything the CLI cannot take is refused here rather than silently dropped.
 fn launch_args(options: &SessionOptions) -> Result<Vec<String>, AgentError> {
     if !options.mcp_servers.is_empty() {
         return Err(AgentError::UnsupportedFeature(
@@ -135,6 +137,10 @@ fn launch_args(options: &SessionOptions) -> Result<Vec<String>, AgentError> {
     let mut args = Vec::new();
     if options.no_tools {
         args.push("--no-tools".into());
+    }
+    if let Some(text) = &options.instructions {
+        args.push("--append-system-prompt".into());
+        args.push(text.clone());
     }
     if options.throwaway {
         args.push("--no-session".into());
@@ -343,11 +349,8 @@ fn model_choices(models: &Value) -> Vec<ConfigChoice> {
         .flatten()
         .filter_map(|model| {
             let value = model_value(model)?;
-            Some(ConfigChoice {
-                label: model["name"].as_str().unwrap_or(&value).to_owned(),
-                value,
-                description: None,
-            })
+            let label = model["name"].as_str().unwrap_or(&value).to_owned();
+            Some(ConfigChoice::new(value, label, None))
         })
         .collect()
 }
@@ -403,6 +406,7 @@ fn slash_commands(commands: &Value) -> Vec<SlashCommand> {
                     .unwrap_or_default()
                     .to_owned(),
                 input_hint: None,
+                source: CommandSource::Builtin,
             })
         })
         .collect()
@@ -447,6 +451,8 @@ struct Drive {
     aborting: bool,
     /// Session cost so far, summed over assistant messages.
     cost: f64,
+    /// What the current run has spent, summed over its assistant messages.
+    turn_usage: TurnUsage,
     next_message: u64,
     next_request: u64,
 }
@@ -522,7 +528,7 @@ impl Drive {
             DriverCommand::Rollback(..) => {
                 // Not advertised: pi forks a new session instead of rewinding.
                 self.events
-                    .diagnostic(DiagnosticLevel::Warning, "rollback is not supported on pi")
+                    .rollback_refused("rollback is not supported on pi")
                     .await?;
             }
             DriverCommand::Close => unreachable!("handled in run"),
@@ -719,6 +725,7 @@ impl Drive {
         }
         let usage = &message["usage"];
         self.cost += usage["cost"]["total"].as_f64().unwrap_or_default();
+        self.add_turn_usage(usage).await?;
         let Some(used_tokens) = usage["totalTokens"].as_u64().filter(|t| *t > 0) else {
             return Ok(());
         };
@@ -728,6 +735,19 @@ impl Drive {
                 window_tokens: self.window,
                 cost_usd: (self.cost > 0.0).then_some(self.cost),
             })
+            .await
+    }
+
+    /// Adds one assistant message's tokens to the turn and reports the sum.
+    /// pi's `input` leaves the cache out; its `output` already holds reasoning.
+    async fn add_turn_usage(&mut self, usage: &Value) -> Result<(), Gone> {
+        let count = |key: &str| usage[key].as_u64().unwrap_or(0);
+        let cached = count("cacheRead");
+        self.turn_usage.input_tokens += count("input") + cached + count("cacheWrite");
+        self.turn_usage.cached_input_tokens += cached;
+        self.turn_usage.output_tokens += count("output");
+        self.events
+            .send(DriverEvent::TurnUsage(self.turn_usage))
             .await
     }
 
@@ -853,6 +873,8 @@ impl Drive {
         // a settled run is still coming, so its bookkeeping goes with it.
         self.tools.clear();
         self.streamed.clear();
+        // Reset here, not at `StartTurn`: a run pi starts itself has none.
+        self.turn_usage = TurnUsage::default();
         self.events.send(DriverEvent::TurnEnded(stop)).await
     }
 
@@ -965,6 +987,7 @@ fn fresh_tool(id: &str, name: &str) -> ToolUpdate {
         diffs: Vec::new(),
         locations: Vec::new(),
         raw: None,
+        subagent: None,
     }
 }
 

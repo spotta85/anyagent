@@ -11,7 +11,7 @@ use anyagent::{
     AgentError, AgentInstallation, Answer, AuthKind, AuthStatus, Capability, ChoiceId, ConfigId,
     ConfigValue, DeliveryKind, Event, EventKind, Events, Input, LoginMethod, McpServer,
     McpTransport, PermissionChoice, QuestionAnswer, Request, ResumeToken, Runtime, Session,
-    SessionOptions, StopReason,
+    SessionOptions, StopReason, ToolKind,
 };
 
 mod common;
@@ -127,7 +127,7 @@ async fn a_full_turn_maps_every_update_kind() {
             _ => {}
         }
     }
-    assert_eq!(text, "Hello perm=selected ");
+    assert_eq!(text, "Hello perm=allow ");
     assert_eq!(thoughts, "thinking…");
     assert_eq!(plan_steps, vec!["step 1"]);
     assert_eq!(usage, Some((1200, Some(200_000), Some(0.01))));
@@ -417,6 +417,22 @@ async fn an_api_key_in_the_env_is_reported_as_one() {
     );
 }
 
+/// A documented API key given through the session's `env` counts like one
+/// in the process env.
+#[tokio::test]
+async fn an_api_key_in_the_session_env_is_reported_as_one() {
+    let agent = catalog_wrapper("qwen", "session-key", "");
+    let options = SessionOptions::in_dir(std::env::temp_dir()).env("OPENAI_API_KEY", "sk-test");
+    let details = Runtime::new().probe_with(&agent, options).await.unwrap();
+    assert_eq!(
+        details.auth,
+        AuthStatus::Authenticated {
+            kind: AuthKind::ApiKey,
+            account: None
+        }
+    );
+}
+
 /// Pre-protocol exit (kiro not logged in) mapped to Unauthenticated with terminal login method.
 #[tokio::test]
 async fn probe_maps_a_pre_protocol_exit_to_logged_out() {
@@ -583,6 +599,31 @@ async fn mcp_servers_forward_when_the_transport_is_supported() {
     }
     assert!(text.contains("http:voice"), "declaration lost: {text:?}");
     assert!(text.contains("stdio:tool"), "declaration lost: {text:?}");
+    session.close().await.unwrap();
+}
+
+/// `session/new` carries the real MCP header and env values; the wire
+/// recording keeps their names with `<redacted>` values.
+#[tokio::test]
+async fn mcp_secrets_are_redacted_in_the_recording() {
+    let dir = tempfile::tempdir().unwrap();
+    let wire = dir.path().join("wire.jsonl");
+    let received = dir.path().join("mcp.jsonl");
+    let options = SessionOptions::in_dir(dir.path())
+        .mcp_server(
+            McpServer::http("voice", "http://127.0.0.1:1/mcp")
+                .with("Authorization", "Bearer HTTP-SECRET"),
+        )
+        .mcp_server(McpServer::stdio("tool", "/bin/echo", ["hi"]).with("TOKEN", "ENV-SECRET"))
+        .record_wire(&wire)
+        .env("FIXTURE_MCP_LOG", received.to_string_lossy());
+    let (session, _events) = Runtime::new().open(&fixture(&[]), options).await.unwrap();
+    common::sent_frames(&wire, 1, |f| f["method"] == "session/new").await;
+    let secrets = [
+        ("Authorization", "Bearer HTTP-SECRET"),
+        ("TOKEN", "ENV-SECRET"),
+    ];
+    common::assert_mcp_redacted(&wire, &received, &secrets);
     session.close().await.unwrap();
 }
 
@@ -1020,6 +1061,62 @@ async fn config_home_on_an_agent_without_a_known_var_is_refused() {
     );
 }
 
+/// `instructions` lead a new session's first prompt only, after a blank
+/// line; a resumed session's prompts carry none; a first slash command goes
+/// untouched and the next prompt carries them.
+#[tokio::test]
+async fn instructions_lead_the_first_prompt_of_a_new_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let text = |frame: &serde_json::Value| frame["params"]["prompt"][0]["text"].clone();
+    let cases = [
+        (false, ["one", "two"], ["Be brief.\n\none", "two"]),
+        (true, ["one", "two"], ["one", "two"]),
+        (false, ["/help", "one"], ["/help", "Be brief.\n\none"]),
+    ];
+    for (i, (resume, sent, want)) in cases.into_iter().enumerate() {
+        let log = dir.path().join(format!("wire-{i}.jsonl"));
+        let mut options = SessionOptions::in_dir(dir.path())
+            .instructions("Be brief.")
+            .record_wire(&log);
+        if resume {
+            options = options.resume(ResumeToken::new("sess-1"));
+        }
+        let (session, mut events) = Runtime::new().open(&fixture(&[]), options).await.unwrap();
+        for prompt in sent {
+            session.prompt(prompt).await.unwrap();
+            loop {
+                match next(&mut events).await.kind {
+                    EventKind::RequestOpened(Request::Permission(request)) => {
+                        session.answer(request.id, allow()).await.unwrap();
+                    }
+                    EventKind::TurnEnded { .. } => break,
+                    _ => {}
+                }
+            }
+        }
+        let prompts = common::sent_frames(&log, 2, |f| f["method"] == "session/prompt").await;
+        assert_eq!([text(&prompts[0]), text(&prompts[1])], want, "case {i}");
+        session.close().await.unwrap();
+    }
+}
+
+/// `env` reaches the agent; `arg` lands after the protocol args.
+#[tokio::test]
+async fn env_and_args_reach_the_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.jsonl");
+    let options = SessionOptions::in_dir(dir.path())
+        .env("FIXTURE_ARGV_LOG", log.to_string_lossy())
+        .arg("--extra-flag");
+    let (session, _events) = Runtime::new()
+        .open(&fixture(&["--commands-on-open"]), options)
+        .await
+        .unwrap();
+    let argv = common::logged_args(&log);
+    assert_eq!(argv[0], ["--commands-on-open", "--extra-flag"], "{argv:?}");
+    session.close().await.unwrap();
+}
+
 /// `record_wire` tees the ACP JSON-RPC wire too, both directions and including
 /// the handshake, as one valid JSON object per line.
 /// Record_wire tees both directions including initialize handshake as JSONL per direction.
@@ -1406,6 +1503,25 @@ async fn cursor_logged_out_is_reported_before_the_browser_login() {
     );
 }
 
+/// Cursor's `about` side process runs with the session's `env`, like the agent.
+#[tokio::test]
+async fn cursor_about_gets_the_session_env() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.jsonl");
+    let options = SessionOptions::in_dir(dir.path()).env("FIXTURE_ARGV_LOG", log.to_string_lossy());
+    let (session, _events) = Runtime::new()
+        .open(&cursor("about-env", ""), options)
+        .await
+        .unwrap();
+    let argv = common::logged_args(&log);
+    assert!(
+        argv.iter()
+            .any(|a| a.ends_with(&["about", "--format", "json"].map(String::from))),
+        "{argv:?}"
+    );
+    session.close().await.unwrap();
+}
+
 /// A model switch adopts the model's own options from the config response (fast for composer, thinking/context/effort for opus), and they leave with the model; creation-time config does the same.
 #[tokio::test]
 async fn cursor_model_switch_reveals_the_models_own_options() {
@@ -1462,6 +1578,34 @@ async fn cursor_model_switch_reveals_the_models_own_options() {
         Some(ConfigValue::Text("true".into()))
     );
     session.close().await.unwrap();
+}
+
+/// An MCP call named in `_meta` (antigravity, kiro, qwen) is `ToolKind::Mcp`
+/// on every snapshot and its permission, despite a later bare `kind: other`.
+#[tokio::test]
+async fn meta_mcp_makes_the_tool_kind_mcp() {
+    let mcp = ToolKind::Mcp {
+        server: "probe".into(),
+        tool: "secret_word".into(),
+    };
+    for (prompt, frames) in [("mcp-call", 4), ("mcp-call kiro", 3), ("mcp-call qwen", 3)] {
+        let (session, mut events) = open(&[]).await;
+        session.prompt(prompt).await.unwrap();
+        let mut kinds = Vec::new();
+        loop {
+            match next(&mut events).await.kind {
+                EventKind::RequestOpened(Request::Permission(request)) => {
+                    kinds.push(request.tool.kind);
+                    session.answer(request.id, allow()).await.unwrap();
+                }
+                EventKind::ToolUpdated(tool) => kinds.push(tool.kind),
+                EventKind::TurnEnded { .. } => break,
+                _ => {}
+            }
+        }
+        assert_eq!(kinds, vec![mcp.clone(); frames], "{prompt}");
+        session.close().await.unwrap();
+    }
 }
 
 /// `cursor/ask_question` surfaces typed (prompt/allowMultiple read), and the answer goes back as `answered` with the option ids.
@@ -1531,6 +1675,42 @@ async fn interaction_permissions_are_questions() {
             .supports(Capability::Questions)
     );
     session.close().await.unwrap();
+}
+
+/// `Deny` picks the reject option (the wire takes no message); `Cancel` sends
+/// the `cancelled` outcome, for a permission and a question alike.
+#[tokio::test]
+async fn deny_rejects_and_cancel_sends_cancelled() {
+    let deny = Answer::Deny {
+        message: "not now".into(),
+    };
+    let cancelled = r#"q={"outcome":"cancelled"} "#;
+    for (flags, prompt, answer, expected) in [
+        (&[][..], "hi", deny, "perm=reject "),
+        (&[], "hi", Answer::Cancel, "perm=cancelled "),
+        (
+            &["--antigravity"],
+            "interaction-question",
+            Answer::Cancel,
+            cancelled,
+        ),
+    ] {
+        let (session, mut events) = open(flags).await;
+        session.prompt(prompt).await.unwrap();
+        let mut text = String::new();
+        loop {
+            match next(&mut events).await.kind {
+                EventKind::RequestOpened(request) => {
+                    session.answer(request.id(), answer.clone()).await.unwrap()
+                }
+                EventKind::TextDelta { text: t, .. } => text.push_str(&t),
+                EventKind::TurnEnded { .. } => break,
+                _ => {}
+            }
+        }
+        assert!(text.contains(expected), "{prompt}: {text}");
+        session.close().await.unwrap();
+    }
 }
 
 #[tokio::test]

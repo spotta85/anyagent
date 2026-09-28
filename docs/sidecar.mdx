@@ -56,28 +56,36 @@ What the sidecar guarantees:
 ## Commands
 
 One command per public call. `agent` is a catalog id such as `"claude"`;
+a catalog agent at an exact path is `{"id": "claude", "path": "/opt/claude"}`;
 a custom ACP agent is `{"acp": {"name": "..", "path": "..", "args": [..]}}`.
 
 | cmd | fields | ok |
 |---|---|---|
 | `discover` | | `DiscoveryReport` |
-| `probe`, `plan_usage` | agent | `AgentDetails`, `PlanUsage` |
-| `open` | agent, dir, resume?, fork?, fork_at?, permission_mode?, mcp_servers?, configure? | `SessionInfo` |
-| `generate` | prompt, plus everything `open` takes | string |
+| `probe` | agent, dir? (default: temp dir), env?, args?, config_home? | `AgentDetails` |
+| `plan_usage` | agent, env?, args?, config_home? | `PlanUsage` |
+| `open` | agent, dir, resume?, fork?, fork_at?, permission_mode?, mcp_servers?, configure?, instructions?, output_schema? (JSON schema), env? (object), args? (array), config_home?, record_wire? | `SessionInfo` |
+| `generate` | prompt, attachments?, plus everything `open` takes | string |
 | `prompt` | session, text, attachments? | `Delivery` |
 | `answer` | session, request, answer | null |
 | `configure` | session, option, value | null |
-| `cancel` | session, clear_queue? | null |
+| `cancel` | session, clear_queue?, turn? (cancels only if it is the running turn) | null |
 | `rollback` | session, turns, scope | null |
 | `dequeue` | session, prompt | null |
 | `compact`, `close` | session | null |
 | `info` | session | `SessionInfo` |
 
+`answer` is one of `{"Permission": "AllowOnce"}`, `{"Question": [..]}`,
+`{"Deny": {"message": ".."}}` (deny once with a reason), or `"Cancel"`
+(withdraw the request).
+
 An error body is `kind`, `message`, and the variant's own fields: `agent`
 for `NotInstalled`, `login` for `AuthRequired`, `status` and `stderr` for
 `ProcessExited`, `detail` for the rest. Two kinds are the sidecar's own:
 `BadFrame` and `UnknownSession` (with `session`). A command on a closed
-session gets the crate's `SessionClosed`.
+session gets the crate's `SessionClosed`. `probe` and `plan_usage` take
+`open`'s option fields too; `resume` or `fork` on them is `InvalidConfiguration`.
+`plan_usage` uses only `env`, `args` and `config_home` of them.
 
 ## Types for other languages
 
@@ -201,7 +209,9 @@ rt.Close()
 `session.info` and `session.status` stay current; a session error throws
 from the `for await` (raises from the `async for` in Python, throws from
 the `for try await` in Swift, is yielded once by `Events` in Go);
-`rt.generate(agent, { dir }, prompt)` is one-shot text.
+`rt.generate(agent, { dir }, prompt)` is one-shot text;
+`rt.probe(agent, { dir, env })` and `rt.planUsage(agent, { config_home })`
+take the launch options.
 `Runtime.start({ bin, mock })` runs the package over a mock script.
 Every package passes the same eleven tests over the mock scripts on macOS,
 Linux, and Windows in CI (Swift: macOS and Linux); the TypeScript package

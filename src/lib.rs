@@ -100,8 +100,9 @@
 //! your app to surface.
 //!
 //! **Plan usage.** [`Runtime::plan_usage`] reads the logged-in account's
-//! quota windows (session/week, plan name) from the agent itself — no HTTP
-//! endpoints, no token handling.
+//! quota windows (session/week, plan name) and banked limit resets
+//! ([`ResetCredits`]) from the agent itself — no HTTP endpoints, no token
+//! handling.
 //!
 //! **MCP forwarding.** Hand the agent your app's MCP servers at open with
 //! [`SessionOptions::mcp_server`] (stdio, HTTP, or SSE, checked against the

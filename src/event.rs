@@ -88,9 +88,29 @@ pub enum EventKind {
         tool_id: ToolId,
         text: String,
     },
+    /// A running tool reports what it is doing, or for how long it has run.
+    ToolProgress {
+        tool_id: ToolId,
+        message: Option<String>,
+        elapsed_ms: Option<u64>,
+    },
+    /// The whole turn's changes so far as one unified diff; replaces the previous one.
+    TurnDiff {
+        unified: String,
+    },
+    /// The agent answered with another model than the selected one.
+    ModelRerouted {
+        from: String,
+        to: String,
+        reason: Option<String>,
+    },
     /// The agent's full current task list; replaces the previous one.
     PlanUpdated {
         entries: Vec<PlanEntry>,
+    },
+    /// The agent proposes this plan and waits for a go-ahead.
+    PlanProposed {
+        markdown: String,
     },
     RequestOpened(Request),
     RequestClosed {
@@ -114,6 +134,9 @@ pub enum EventKind {
     TurnEnded {
         stop: StopReason,
         background: Vec<ToolId>, // still running after the turn ended
+        /// Tokens this turn spent, when the agent reports them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<TurnUsage>,
     },
 }
 
@@ -163,6 +186,26 @@ pub struct ToolUpdate {
     pub locations: Vec<PathBuf>,
     /// Agent's own tool name and raw input, for unknown or MCP tools.
     pub raw: Option<RawTool>,
+    /// For a `Subagent` tool: who runs and what it reports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent: Option<SubagentInfo>,
+}
+
+/// What a subagent tool reports about the agent it spawned.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct SubagentInfo {
+    /// The kind of agent, as the parent named it ("general-purpose").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Its latest progress line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// Tokens as the agent reports them: claude the latest call's size, codex the child thread's total.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,6 +229,7 @@ pub enum ToolKind {
     Other,
 }
 
+/// `Denied`: refused by the agent's permission rules or mode without asking the caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -195,6 +239,7 @@ pub enum ToolStatus {
     Completed,
     Failed,
     Cancelled,
+    Denied,
 }
 
 impl ToolStatus {
@@ -333,6 +378,12 @@ pub enum Answer {
     Permission(PermissionChoice),
     /// One entry per question, in order.
     Question(Vec<QuestionAnswer>),
+    /// Deny a permission once and tell the agent why.
+    Deny {
+        message: String,
+    },
+    /// Take the request back without choosing. The agent stops waiting for it.
+    Cancel,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -346,6 +397,18 @@ pub enum QuestionAnswer {
 // Usage and diagnostics
 // ---------------------------------------------------------------------------
 
+/// Tokens one turn spent, summed over its model calls.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct TurnUsage {
+    /// Input tokens, cached ones included.
+    pub input_tokens: u64,
+    /// The part of `input_tokens` read from cache.
+    pub cached_input_tokens: u64,
+    /// Output tokens, reasoning included.
+    pub output_tokens: u64,
+}
+
 /// Plan quota windows for the logged-in account.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -353,6 +416,9 @@ pub struct PlanUsage {
     /// The plan the quota belongs to ("max", "edu"), when the agent names it.
     pub plan: Option<String>,
     pub windows: Vec<UsageWindow>,
+    /// Banked limit resets on the account. `None` when this report does not carry them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_credits: Option<ResetCredits>,
     pub fetched_at: SystemTime,
 }
 
@@ -363,6 +429,15 @@ pub struct UsageWindow {
     pub label: String,
     pub used_percent: u8,
     pub resets_at: Option<SystemTime>,
+}
+
+/// Limit resets the account can use now.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ResetCredits {
+    pub available: u32,
+    /// When the next one to be used expires.
+    pub next_expires_at: Option<SystemTime>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

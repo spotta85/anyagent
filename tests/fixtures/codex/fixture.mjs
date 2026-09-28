@@ -4,13 +4,31 @@
 // login), --question (a requestUserInput mid-turn), --echo-config-home
 // (echo the CODEX_HOME the child received). Prompt words steer scenarios:
 // "write-file" (a fileChange escalates past the sandbox -> approval),
-// "sleep" (a command that only an interrupt ends), "die" (exit mid-turn),
-// "subagent" (a child thread runs a whole turn before the parent's ends,
-// "subagent-fails" for a child turn that fails), "end-failed"/"end-aborted"
-// (the turn ends via turn/failed / turn/aborted instead of turn/completed).
+// "mcp-tool"/"mcp-two"/"mcp-always" (MCP tool calls ask through an
+// elicitation), "sleep" (a command that only an interrupt ends), "die"
+// (exit mid-turn), "subagent" (a child thread runs a whole turn before the
+// parent's ends, "subagent-fails" for a child turn that fails), "spawn-live"
+// (a subagent in the live 0.154.0 order of recording 13), "spawn-collab"
+// (recording 14's `spawnAgent` subagent, replayed),
+// "end-failed"/"end-aborted" (the turn ends via turn/failed / turn/aborted
+// instead of turn/completed), "refuse-start" (turn/start is refused).
 // --rename: the server renames the thread after the first turn.
+// --host-feature: the host config enables an under-development feature too.
+// "hook-blocked": the user's prompt hook completes as `blocked`.
+// "rerouted": the server reroutes the turn to another model; "late-events":
+// a diff and a reroute arrive after the turn ended.
+// A turn/start in the `plan` collaboration mode also yields a `plan` item
+// ("no-plan": one with empty text).
 import { createInterface } from 'node:readline';
+import { appendFileSync, readFileSync } from 'node:fs';
 
+// FIXTURE_ARGV_LOG, set through the session's env: log the launch args there.
+if (process.env.FIXTURE_ARGV_LOG) appendFileSync(process.env.FIXTURE_ARGV_LOG, JSON.stringify(process.argv.slice(2)) + '\n');
+// FIXTURE_MCP_LOG: log each env var an `mcp_servers.…` override names, with the value received.
+if (process.env.FIXTURE_MCP_LOG) {
+  const named = process.argv.filter((a) => a.startsWith('mcp_servers.')).flatMap((a) => [...a.matchAll(/"(\w+)"/g)].map((m) => m[1]));
+  appendFileSync(process.env.FIXTURE_MCP_LOG, JSON.stringify(Object.fromEntries(named.filter((n) => n in process.env).map((n) => [n, process.env[n]]))) + '\n');
+}
 const flag = (name) => process.argv.includes(name);
 const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\n');
 const notify = (method, params) => send({ method, params });
@@ -23,9 +41,33 @@ const MCP_NAMES = [...new Set(process.argv
   .flatMap((a, i) => (a === '-c' ? [process.argv[i + 1] ?? ''] : []))
   .map((kv) => kv.match(/^mcp_servers\.([^.]+)\./)?.[1])
   .filter(Boolean))];
+// `-c features.<name>=true` overrides plus --host-feature; the server warns about them.
+const FEATURES = [...process.argv
+  .flatMap((a, i) => (a === '-c' ? [process.argv[i + 1] ?? ''] : []))
+  .map((kv) => kv.match(/^features\.([^=]+)=true$/)?.[1])
+  .filter(Boolean), ...(flag('--host-feature') ? ['current_time_reminder'] : [])].sort();
 let turn = null; // { id, started, interrupted, steered: [] }
 const turnIds = []; // completed turns, oldest first
+let lastModel = null; // the model the thread last ran a turn with
 const waiters = {}; // server request id -> resolver
+
+// A user hook's run (0.154.0 app-server schema, params trimmed).
+function hookRun(status, entries = []) {
+  const run = { id: 'hook-1', eventName: 'userPromptSubmit', executionMode: 'sync', handlerType: 'command', scope: 'turn', status, entries, statusMessage: null };
+  notify(status === 'running' ? 'hook/started' : 'hook/completed', { threadId: THREAD.id, turnId: turn.id, run });
+}
+
+// Recorded (05-resume-and-fork): right after a resume or fork reply, the
+// restored thread's last model call, while no turn runs.
+function restoredUsage(last) {
+  notify('thread/tokenUsage/updated', { threadId: THREAD.id, turnId: 'turn-prev', tokenUsage: { total: last, last, modelContextWindow: 258400 } });
+}
+
+// Recorded 2026-09-26 (0.154.0): after thread/start, and again on a revert.
+function featureWarning() {
+  if (!FEATURES.length) return;
+  notify('warning', { threadId: THREAD.id, message: `Under-development features enabled: ${FEATURES.join(', ')}. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set \`suppress_unstable_features_warning = true\` in /Users/user/.codex/config.toml.` });
+}
 
 const MODELS = [
   { id: 'gpt-6', model: 'gpt-6', displayName: 'GPT-6', description: 'Frontier model.', serviceTiers: [{ id: 'priority', name: 'Fast', description: '1.5x speed' }], defaultServiceTier: 'priority', hidden: false, isDefault: true, defaultReasoningEffort: 'medium', supportedReasoningEfforts: [{ reasoningEffort: 'low', description: 'Fast' }, { reasoningEffort: 'medium', description: 'Balanced' }, { reasoningEffort: 'high', description: 'Deep' }] },
@@ -37,6 +79,9 @@ const RATE_LIMITS = {
   primary: { usedPercent: 5, windowDurationMins: 300, resetsAt: 1787903985 },
   secondary: { usedPercent: 4, windowDurationMins: 10080, resetsAt: 1788329085 },
 };
+
+// Recorded (02-approvals-and-tools): the turn diff once fruit.txt is written.
+const FRUIT_DIFF = 'diff --git a/fruit.txt b/fruit.txt\nnew file mode 100644\nindex 0000000000000000000000000000000000000000..4b2f803f4959b8744deaf53200f810c668409c8e\n--- /dev/null\n+++ b/fruit.txt\n@@ -0,0 +1 @@\n+PEAR\n';
 
 const item = (fields) => ({ id: `it-${itemN++}`, ...fields });
 const itemStarted = (it) => notify('item/started', { item: it, threadId: THREAD.id, turnId: turn.id });
@@ -67,7 +112,8 @@ function threadResult(params) {
   return {
     thread: THREAD,
     model: 'gpt-6', // the config-file default; per-turn model rides turn/start
-    reasoningEffort: null,
+    // --xhigh-effort: a config-file effort the default model does not list.
+    reasoningEffort: flag('--xhigh-effort') ? 'xhigh' : null,
     serviceTier: flag('--default-fast') ? 'priority' : null,
     approvalPolicy: params.approvalPolicy ?? 'on-request',
     sandbox: { type: sandboxType, networkAccess: false },
@@ -91,33 +137,47 @@ async function onRequest(m) {
         : { account: { type: 'chatgpt', email: 'user@example.com', planType: 'edu' }, requiresOpenaiAuth: true });
     case 'model/list':
       return reply({ data: MODELS, nextCursor: null });
+    // The effective config (probed 2026-09-27, 0.154.0, trimmed): unset keys are null.
+    case 'config/read':
+      if (flag('--config-read-dies')) { process.stderr.write('boom: fixture died\n'); process.exit(3); }
+      return reply({ config: { model: 'gpt-6-mini', model_reasoning_effort: null, service_tier: null, approval_policy: null, sandbox_mode: 'workspace-write' }, origins: {} });
     case 'skills/list':
       // Grouped by root; the same skill appears under every root (dedupe by
       // name), a nameless entry is junk, and only `review` has an interface.
+      // A disabled skill still comes back, `enabled: false` (probed 2026-09-27, 0.154.0).
       return reply({ data: [
         { cwd: process.cwd(), skills: [
-          { name: 'review', description: 'A long model-facing paragraph.', interface: { shortDescription: 'Review a diff.' }, enabled: true, scope: 'repo', path: '/skills/review' },
-          { name: 'release', description: 'Cut a release.', enabled: true, scope: 'user', path: '/skills/release' },
-          { name: '', description: 'no name', enabled: true, scope: 'user', path: '/skills/junk' },
+          { name: 'review', description: 'A long model-facing paragraph.', interface: { shortDescription: 'Review a diff.' }, enabled: true, scope: 'repo', path: '/repo/.codex/skills/review/SKILL.md' },
+          { name: 'off', description: 'Disabled.', enabled: false, scope: 'user', path: '/home/skills/off/SKILL.md' },
+          { name: 'release', description: 'Cut a release.', enabled: true, scope: 'user', path: '/home/skills/release/SKILL.md' },
+          { name: '', description: 'no name', enabled: true, scope: 'user', path: '/home/skills/junk/SKILL.md' },
         ] },
-        { cwd: '/other', skills: [{ name: 'review', description: 'dup', enabled: true, scope: 'user', path: '/skills/review' }] },
+        { cwd: '/other', skills: [{ name: 'review', description: 'dup', enabled: true, scope: 'user', path: '/home/skills/review/SKILL.md' }] },
       ] });
     case 'account/rateLimits/read':
       if (flag('--logged-out')) return refuse('codex account authentication required to read rate limits');
       return reply({ rateLimits: RATE_LIMITS });
     case 'thread/start':
-      return reply(threadResult(m.params));
+      reply(threadResult(m.params));
+      return featureWarning();
     case 'thread/resume':
+      // Recorded 2026-09-26 (0.154.0): a well-formed id with no thread, and a malformed one.
+      if (m.params.threadId === 'th-gone') return refuse('no rollout found for thread id th-gone');
+      if (m.params.threadId === 'not-a-uuid') return refuse('invalid session id: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-fA-F-], found `n` at 1');
       THREAD.id = m.params.threadId;
       turnIds.push('turn-prev'); // the thread's history rides the bind
-      return reply({ ...threadResult(m.params), thread: { ...THREAD, turns: [{ id: 'turn-prev' }] } });
+      reply({ ...threadResult(m.params), thread: { ...THREAD, turns: [{ id: 'turn-prev' }] } });
+      return restoredUsage({ totalTokens: 10259, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 });
     case 'thread/fork':
       THREAD.id = 'th-fork-1';
       THREAD.forkPoint = m.params.lastTurnId ?? null;
-      return reply({ ...threadResult(m.params), thread: { ...THREAD, forkedFromId: m.params.threadId } });
+      reply({ ...threadResult(m.params), thread: { ...THREAD, forkedFromId: m.params.threadId } });
+      return restoredUsage({ totalTokens: 14382, inputTokens: 14377, cachedInputTokens: 11008, outputTokens: 5 });
     case 'turn/start': {
       if (turn) return refuse('phantom: turn/start while a turn is running'); // adapters must steer instead
+      if (m.params.input[0].text.includes('refuse-start')) return refuse('turn refused');
       turn = { id: `turn-${turnN++}`, started: false, interrupted: false };
+      lastModel = m.params.model ?? 'gpt-6';
       reply({ turn: { id: turn.id, status: 'inProgress' } });
       runTurn(m.params).catch(() => process.exit(1));
       return;
@@ -130,6 +190,7 @@ async function onRequest(m) {
       const id = `turn-${turnN++}`;
       send({ method: 'turn/started', params: { threadId: THREAD.id, turn: { id, status: 'inProgress' } } });
       send({ method: 'item/started', params: { threadId: THREAD.id, turnId: id, item: { type: 'contextCompaction', id: 'cc-1' } } });
+      send({ method: 'thread/tokenUsage/updated', params: { threadId: THREAD.id, turnId: id, tokenUsage: { total: { totalTokens: 3765 }, last: { totalTokens: 3765, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 }, modelContextWindow: 258400 } } });
       send({ method: 'item/completed', params: { threadId: THREAD.id, turnId: id, item: { type: 'contextCompaction', id: 'cc-1' } } });
       send({ method: 'turn/completed', params: { threadId: THREAD.id, turn: { id, status: 'completed', error: null } } });
       return;
@@ -152,6 +213,10 @@ async function onRequest(m) {
       const at = turnIds.indexOf(m.params.beforeTurnId);
       if (at < 0) return refuse(`unknown turn \`${m.params.beforeTurnId}\``);
       rolled += turnIds.splice(at).length;
+      // The reloaded thread warns before the reply, naming the last turn's model (0.154.0).
+      featureWarning();
+      if (lastModel && lastModel !== 'gpt-6') notify('warning', { threadId: THREAD.id, message: `This session was recorded with model \`${lastModel}\` but is resuming with \`gpt-6\`. Consider switching back to \`${lastModel}\` as it may affect Codex performance.` });
+      notify('thread/reverted', { threadId: THREAD.id });
       return reply({ thread: THREAD, turnsBackwardsCursor: null, itemsBackwardsCursor: null });
     }
     default:
@@ -168,9 +233,15 @@ async function runTurn(params) {
   if (turn.interrupted) return endTurn('interrupted');
   notify('turn/started', { threadId: THREAD.id, turn: { id: turn.id, status: 'inProgress' } });
   turn.started = true;
+  notify('thread/settings/updated', { threadId: THREAD.id, threadSettings: { model: params.model ?? 'gpt-6', cwd: process.cwd() } });
+  hookRun('running');
+  if (prompt.includes('hook-blocked')) hookRun('blocked', [{ kind: 'stop', text: 'no secrets in prompts' }]);
+  else hookRun('completed');
   const user = item({ type: 'userMessage', clientId: params.clientUserMessageId, content: [{ type: 'text', text: prompt }] });
   itemStarted(user);
   itemCompleted(user);
+  // A server-side reroute, shaped by the 0.154.0 schema (never seen live).
+  if (prompt.includes('rerouted')) notify('model/rerouted', { threadId: THREAD.id, turnId: turn.id, fromModel: params.model ?? 'gpt-6', toModel: 'gpt-6-mini', reason: 'highRiskCyberActivity' });
 
   if (flag('--logged-out')) {
     // The 401 retries, then the turn still ends deterministically (recording 08).
@@ -193,6 +264,7 @@ async function runTurn(params) {
 
   const reasoning = item({ type: 'reasoning', summary: [], content: [] });
   itemStarted(reasoning);
+  notify('item/reasoning/summaryPartAdded', { threadId: THREAD.id, turnId: turn.id, itemId: reasoning.id, summaryIndex: 0 });
   notify('item/reasoning/summaryTextDelta', { threadId: THREAD.id, turnId: turn.id, itemId: reasoning.id, delta: 'thinking…' });
   itemCompleted(reasoning);
 
@@ -206,7 +278,15 @@ async function runTurn(params) {
   // Per-turn policy, sandbox, images, launch MCP servers, and rollbacks so
   // far, each visible to the tests.
   const images = (params.input ?? []).filter((i) => i.type === 'localImage').length;
-  delta(msg.id, `policy=${params.approvalPolicy ?? 'unset'} sandbox=${params.sandboxPolicy?.type ?? 'unset'} images=${images} mcp=${MCP_NAMES.join(',') || 'none'} rolled=${rolled} `);
+  delta(msg.id, `policy=${params.approvalPolicy ?? 'unset'} sandbox=${params.sandboxPolicy?.type ?? 'unset'} images=${images} mcp=${MCP_NAMES.join(',') || 'none'} rolled=${rolled} collab=${JSON.stringify(params.collaborationMode ?? null)} `);
+  // Plan mode (probed 2026-09-27, 0.154.0): the proposal is a `plan` item;
+  // its deltas repeat what the completed item carries.
+  if (params.collaborationMode?.mode === 'plan') {
+    const plan = item({ type: 'plan', text: '' });
+    itemStarted(plan);
+    notify('item/plan/delta', { threadId: THREAD.id, turnId: turn.id, itemId: plan.id, delta: '# Plan' });
+    itemCompleted({ ...plan, text: prompt.includes('no-plan') ? '' : '# Plan\n\n1. Add README.md' });
+  }
 
   if (flag('--question')) {
     if (!experimental) {
@@ -232,20 +312,58 @@ async function runTurn(params) {
     notify('serverRequest/resolved', { threadId: THREAD.id, requestId: serverReqN - 1 });
     const accepted = resp?.decision === 'accept' || resp?.decision === 'acceptForSession';
     itemCompleted({ ...change, status: accepted ? 'completed' : 'declined' });
+    if (accepted) notify('turn/diff/updated', { threadId: THREAD.id, turnId: turn.id, diff: FRUIT_DIFF });
     delta(msg.id, `write=${resp?.decision} `);
+    // `cancel` also interrupts the turn (generated schema, 0.154.0).
+    if (resp?.decision === 'cancel') return endTurn('interrupted');
+  }
+
+  if (prompt.includes('mcp-')) {
+    // Recorded 2026-09-27 (codex 0.154.0): names the server, not the item; decline fails it.
+    // "mcp-two" runs two calls of one tool; each is asked about while both are in flight.
+    // "mcp-always" offers only the persistent remember form, as a string.
+    const args = prompt.includes('mcp-two') ? [{ word: 'a' }, { word: 'b' }] : [{}];
+    const persist = prompt.includes('mcp-always') ? 'always' : ['session', 'always'];
+    const calls = args.map((a) => item({ type: 'mcpToolCall', server: 'probe', tool: 'secret_word', status: 'inProgress', arguments: a, result: null, error: null }));
+    calls.forEach(itemStarted);
+    const resps = [];
+    for (const call of calls) {
+      const resp = await ask('mcpServer/elicitation/request', { serverName: 'probe', mode: 'form', _meta: { codex_approval_kind: 'mcp_tool_call', persist, tool_description: 'Returns the secret word.', tool_params: call.arguments, tool_params_display: [] }, message: 'Allow the probe MCP server to run tool "secret_word"?', requestedSchema: { type: 'object', properties: {} } });
+      // A session cancel's reply comes just before the interrupt: record the action it carried.
+      // An answered cancel has no interrupt; it fails the call like a decline (not recorded).
+      for (let i = 0; resp?.action === 'cancel' && !turn.interrupted && i < 20; i++) await sleep(10);
+      if (turn.interrupted) { delta(msg.id, `mcpcall=${resp?.action} `); return endTurn('interrupted'); }
+      resps.push(resp);
+      notify('serverRequest/resolved', { threadId: THREAD.id, requestId: serverReqN - 1 });
+    }
+    // MCP progress, shaped by the 0.154.0 schema (codex did not forward it live): the first call's, and an unknown item's.
+    for (const itemId of [calls[0].id, 'it-gone']) notify('item/mcpToolCall/progress', { threadId: THREAD.id, turnId: turn.id, itemId, message: 'halfway there' });
+    calls.forEach((call, i) => {
+      const accepted = resps[i]?.action === 'accept';
+      itemCompleted({ ...call, status: accepted ? 'completed' : 'failed', error: accepted ? null : { message: 'user rejected MCP tool call' } });
+      delta(msg.id, `mcpcall=${[resps[i]?.action, resps[i]?._meta?.persist].filter(Boolean).join('/')} `);
+    });
   }
 
   if (prompt.includes('subagent')) await runSubagent(prompt.includes('subagent-fails'));
+  if (prompt.includes('spawn-live')) await runLiveSubagent();
+  if (prompt.includes('spawn-collab')) await replayCollabSubagent();
 
   await sleep(20); // yield so a mid-turn steer on stdin gets read, like the real server
   for (const steer of turn.steered) delta(msg.id, `steered=${steer} `);
   notify('turn/plan/updated', { threadId: THREAD.id, turnId: turn.id, plan: [{ step: 'step 1', status: 'inProgress' }] });
   delta(msg.id, 'done');
   itemCompleted({ ...msg, text: 'done' });
-  notify('thread/tokenUsage/updated', { threadId: THREAD.id, turnId: turn.id, tokenUsage: { total: { totalTokens: 2400 }, last: { totalTokens: 1200 }, modelContextWindow: 258400 } });
+  notify('thread/tokenUsage/updated', { threadId: THREAD.id, turnId: turn.id, tokenUsage: { total: { totalTokens: 2400 }, last: { totalTokens: 1200, inputTokens: 1100, cachedInputTokens: 600, outputTokens: 100 }, modelContextWindow: 258400 } });
   notify('account/rateLimits/updated', { rateLimits: RATE_LIMITS });
   if (turn.interrupted) return endTurn('interrupted');
+  const ended = turn.id;
   endTurn('completed');
+  // "late-events": a diff and a reroute trailing turn/completed, as a replay would.
+  if (prompt.includes('late-events')) {
+    notify('turn/diff/updated', { threadId: THREAD.id, turnId: ended, diff: FRUIT_DIFF });
+    notify('model/rerouted', { threadId: THREAD.id, turnId: ended, fromModel: 'gpt-6', toModel: 'gpt-6-mini', reason: 'highRiskCyberActivity' });
+  }
   if (flag('--rename') && THREAD.name === null) {
     THREAD.name = 'Pear talk';
     notify('thread/name/updated', { threadId: THREAD.id, name: THREAD.name });
@@ -264,7 +382,8 @@ function endTurn(status, error = null, method = 'turn/completed') {
 async function runSubagent(fails) {
   const CHILD = 'th-child-1', CHILD_TURN = 'turn-child-1';
   const child = (method, params) => notify(method, { threadId: CHILD, turnId: CHILD_TURN, ...params });
-  const collab = item({ type: 'collabAgentToolCall', tool: 'spawnAgent', senderThreadId: THREAD.id, receiverThreadIds: [CHILD], agentsStates: {}, status: 'inProgress', prompt: 'review the diff' });
+  // The spawn call names its child only once completed (recording 14).
+  const collab = item({ type: 'collabAgentToolCall', tool: 'spawnAgent', senderThreadId: THREAD.id, receiverThreadIds: [], agentsStates: {}, status: 'inProgress', prompt: 'review the diff' });
   itemStarted(collab);
   const activity = item({ type: 'subAgentActivity', agentThreadId: CHILD, agentPath: '.codex/agents/reviewer.md', kind: 'started' });
   itemStarted(activity);
@@ -279,6 +398,44 @@ async function runSubagent(fails) {
   child('turn/plan/updated', { plan: [{ step: 'child step', status: 'inProgress' }] });
   notify('turn/completed', { threadId: CHILD, turn: { id: CHILD_TURN, status: fails ? 'failed' : 'completed', error: fails ? { message: 'child blew up' } : null, items: [] } });
 
-  itemCompleted({ ...collab, status: 'completed', agentsStates: { [CHILD]: { status: fails ? 'errored' : 'completed' } } });
+  itemCompleted({ ...collab, status: 'completed', receiverThreadIds: [CHILD], agentsStates: { [CHILD]: { status: fails ? 'errored' : 'completed' } } });
+  await sleep(10);
+}
+
+// A subagent in the live 0.154.0 order (recording 13): a spawn activity item, a `wait`
+// collab call, and the child's finish as a second activity item under a new id.
+async function runLiveSubagent() {
+  const CHILD = 'th-child-2', CHILD_TURN = 'turn-child-2';
+  const child = (method, params) => notify(method, { threadId: CHILD, turnId: CHILD_TURN, ...params });
+  const activity = (id, kind) => ({ type: 'subAgentActivity', id, kind, agentThreadId: CHILD, agentPath: '/root/pong' });
+  notify('thread/status/changed', { threadId: CHILD, status: { type: 'idle' } });
+  itemStarted(activity('call_spawn', 'started'));
+  itemCompleted(activity('call_spawn', 'started'));
+  child('turn/started', { turn: { id: CHILD_TURN, status: 'inProgress' } });
+  const wait = { type: 'collabAgentToolCall', id: 'call_wait', tool: 'wait', status: 'inProgress', senderThreadId: THREAD.id, receiverThreadIds: [], prompt: null, model: null, reasoningEffort: null, agentsStates: {} };
+  itemStarted(wait);
+  const said = { id: 'it-child-msg-2', type: 'agentMessage', text: '', phase: 'final_answer' };
+  child('item/started', { item: said });
+  child('item/agentMessage/delta', { itemId: said.id, delta: 'PONG' });
+  child('item/completed', { item: { ...said, text: 'PONG' } });
+  const used = { totalTokens: 22059, inputTokens: 22053, cachedInputTokens: 15872, cacheWriteInputTokens: 0, outputTokens: 6, reasoningOutputTokens: 0 };
+  child('thread/tokenUsage/updated', { tokenUsage: { total: used, last: used, modelContextWindow: 258400 } });
+  const finish = activity(`subagent-completed-${CHILD_TURN}`, 'completed');
+  itemStarted(finish);
+  notify('thread/status/changed', { threadId: CHILD, status: { type: 'idle' } });
+  notify('turn/completed', { threadId: CHILD, turn: { id: CHILD_TURN, status: 'completed', error: null, items: [] } });
+  itemCompleted(finish);
+  itemCompleted({ ...wait, status: 'completed' });
+  await sleep(10);
+}
+
+// Recording 14 replayed verbatim from the `spawnAgent` call through the `wait` call's end,
+// its parent thread and turn swapped for this one's.
+async function replayCollabSubagent() {
+  const frames = readFileSync(new URL('14-collab-subagent.jsonl', import.meta.url), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((f) => f.method);
+  const from = frames.findIndex((f) => f.params.item?.tool === 'spawnAgent');
+  const to = frames.findLastIndex((f) => f.params.item?.tool === 'wait');
+  const { threadId, turnId } = frames[from].params;
+  for (const f of frames.slice(from, to + 1)) send(JSON.parse(JSON.stringify(f).replaceAll(threadId, THREAD.id).replaceAll(turnId, turn.id)));
   await sleep(10);
 }

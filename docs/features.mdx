@@ -73,7 +73,13 @@ match &details.auth {
 
 **Confirms:** `AgentDetails`. The same struct is available later as
 `session.info().details`.
-**Gates:** none.
+**Gates:** none. `probe_with(&agent, options)` probes with your dir, env,
+args and config home; in a workspace's dir it returns that workspace's
+commands, and each command's `source` tells a skill (`Skill { path, scope }`)
+from a built-in. On claude a probe skips the user's configured hooks
+and MCP servers (servers the app declares still load), so the user's
+MCP-provided prompts are not in `commands`. On codex a probe opens no
+thread, so nothing of the user's starts at all.
 
 anyagent never reads or holds credentials and never drives a login flow. It
 tells you the exact command or env var to show the user. Keep several
@@ -94,7 +100,8 @@ let (session, events) = runtime
 **Confirms:** `open` returns. `session.info()` has the resume token,
 capabilities, and config options.
 **Gates:** none. Fails typed: `AuthRequired { login }` when logged out,
-`HandshakeTimeout` after 30 s, `ResumeFailed` for a bad token.
+`HandshakeTimeout` after 30 s, `ResumeFailed` when the agent has no
+conversation for the token.
 
 Drain `Events` continuously. It buffers 1024 events; a consumer that falls a
 full buffer behind is treated as gone and the session closes. `close()` ends
@@ -150,6 +157,10 @@ EventKind::RequestOpened(Request::Question(r)) => {
 EventKind::RequestClosed { request_id } => ui.clear(request_id),
 ```
 
+To say no with a reason, answer `Answer::Deny { message }`; to take a
+request back without choosing, `Answer::Cancel`. What each agent does with
+them: [answers by agent](/agents#answers-by-agent).
+
 **Confirms:** `RequestClosed`. It also arrives when a cancelled turn
 withdraws the request, so clear your UI on that event, not on your own
 answer. While a request is open, `session.status()` is `NeedsInput`.
@@ -158,7 +169,10 @@ runs tools without asking.
 
 For unattended runs, open with
 `SessionOptions::permission_mode(PermissionMode::AutoApprove)`: anyagent
-allows each request once without forwarding it.
+allows each request once without forwarding it. `PermissionMode::AcceptEdits`
+does the same only for file edits (`Edit`, `Delete`, `Move`); every other
+request is forwarded. In every mode, the request right after a
+`PlanProposed` (the plan's approval) is forwarded.
 
 ## Cancel
 
@@ -167,10 +181,11 @@ allows each request once without forwarding it.
 ```rust
 session.cancel(false).await?;   // stop the turn, keep queued prompts
 session.cancel(true).await?;    // stop the turn, drop the queue too
+session.cancel_turn(turn_id, false).await?;  // only if that turn is still running
 ```
 
-**Confirms:** `TurnEnded { stop: Cancelled }`, then `RequestClosed` for any
-request the turn had open.
+**Confirms:** `RequestClosed` for any request the turn had open, then
+`TurnEnded { stop: Cancelled }`.
 **Gates:** none.
 
 ## Configuration
@@ -189,10 +204,10 @@ session.configure("fast", true).await?;
 
 | id | Kind | Notes |
 |---|---|---|
-| `model` | select | Switching it rebuilds the other options' choices |
+| `model` | select | Switching it rebuilds the other options' choices. Each choice's `options` lists that model's own `effort` and `fast`, for a picker to show before switching |
 | `effort` | select | Choices follow the model; a model without levels drops the option |
 | `fast` | boolean | Only when the selected model supports it. Lower latency, higher usage |
-| `mode` | select | Agent-specific: `plan`, `accept-edits`, `ask`, … |
+| `mode` | select | Agent-specific: `plan`, `accept-edits`, `ask`, … `plan` is plan mode wherever it exists; on claude and codex the plan arrives as `PlanProposed` |
 | `sandbox` | select | Codex |
 
 **Confirms:** `SessionUpdated`, carrying the new `configuration` and the
@@ -227,7 +242,11 @@ let title = runtime
 
 It opens a throwaway session, disables tools where the wire allows (claude,
 pi) and declines every permission elsewhere, collects the text until the
-turn ends, and closes.
+turn ends, and closes. The session is never persisted (claude, codex, pi)
+or is deleted at close (opencode), so it stays out of the user's history.
+With `SessionOptions::output_schema(schema)` the
+string is the turn's final message, JSON matching the schema (claude, codex;
+`OutputSchema` gates it).
 
 **Confirms:** the returned `String`.
 **Gates:** `Permissions`, or a wire that can launch without tools. Requires
@@ -280,9 +299,10 @@ session.rollback(NonZeroU32::new(1).unwrap(), RollbackScope::ConversationAndFile
 | `Conversation` | The agent's context only | `Rollback` |
 | `ConversationAndFiles` | Context and the files those turns changed | `RollbackFiles` |
 
-**Confirms:** `SessionUpdated`. A refusal comes back as a `Diagnostic`, not
-an error from the call.
-**Gates:** above, plus an idle session (`SessionBusy` otherwise).
+**Confirms:** the call returns once the agent answers; `SessionUpdated`
+carries the new snapshot. A refusal is `InvalidRequest` with the agent's reason.
+**Gates:** above, plus an idle session and no other rollback pending
+(`SessionBusy` otherwise).
 
 <Warning>
 `ConversationAndFiles` writes to the working tree. Check `RollbackFiles`
@@ -315,6 +335,8 @@ let parent = event.turn_info.as_ref().and_then(|t| t.parent_tool_id.clone());
 
 **Confirms:** `parent_tool_id` on the child's events. A child can never end
 the parent's turn; anyagent consumes the child's turn bookkeeping.
+`tool.subagent` names its role and model and carries its latest progress line
+and token count (claude all four, codex tokens only).
 **Gates:** `Subagents`.
 
 ## Context and plan usage
@@ -325,9 +347,11 @@ the parent's turn; anyagent consumes the child's turn bookkeeping.
 |---|---|---|
 | Context usage | `EventKind::ContextUsage { used_tokens, window_tokens, cost_usd }` | How full this session's window is |
 | Plan usage | `runtime.plan_usage(&agent)`, `EventKind::PlanUsageUpdated` | How much of the account's subscription is used, per window |
+| Banked resets | `PlanUsage::reset_credits` | Limit resets the account can use now, and when the next one expires |
 
 ```rust
-let usage = runtime.plan_usage(&agent).await?;        // plan name, 5-hour and weekly windows
+let usage = runtime.plan_usage(&agent).await?;        // plan name, 5-hour and weekly windows, banked resets
+let work = runtime.plan_usage_with(&agent, SessionOptions::in_dir(".").config_home("/logins/work")).await?;
 for entry in runtime.plan_usage_all().await {          // every installed agent, for a dashboard
     ui.card(&entry.agent.name, entry.usage);
 }
@@ -337,6 +361,11 @@ for entry in runtime.plan_usage_all().await {          // every installed agent,
 agent itself: no HTTP endpoints, no token handling.
 **Gates:** `ContextUsage` and `PlanUsage`. Plan usage also needs a
 subscription login (`AuthKind::Subscription`).
+
+| Agent | `reset_credits` |
+|---|---|
+| codex | From `plan_usage`. `None` on pushed updates: the notification carries no credits |
+| claude | Known limit: CLI 2.1.283 returns `cedar_ember: null` on `get_usage`, so claude reports `None` until the CLI passes the block through |
 
 ## MCP servers
 
@@ -350,7 +379,9 @@ let options = SessionOptions::in_dir(".")
 ```
 
 **Confirms:** calls into your servers arrive as `ToolUpdated` with
-`ToolKind::Mcp { server, tool }`.
+`ToolKind::Mcp { server, tool }`. Over ACP the agent must name them in the
+call's `_meta` (antigravity's server, kiro and qwen do); hermes calls stay
+`Other`.
 **Gates:** the agent's supported transports. An unsupported transport fails
 `open` typed rather than dropping the server.
 
@@ -368,6 +399,7 @@ SessionOptions::in_dir(".").record_wire("/tmp/claude.jsonl")
 
 <Warning>
 The recording is unredacted: prompts, file contents, command output, paths.
+Only the header and env values of declared MCP servers read `<redacted>`.
 Treat it as sensitive and delete it after debugging.
 </Warning>
 

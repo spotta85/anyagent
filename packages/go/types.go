@@ -7,10 +7,11 @@ import (
 	"fmt"
 )
 
-// AgentRef: exactly one field is set. A catalog id like `"claude"`, or an ACP agent the catalog does not know.
+// AgentRef: exactly one field is set. A catalog id like `"claude"`, a catalog agent at an exact path, or an unknown ACP agent.
 type AgentRef struct {
 	String       *string  `json:"-"`
 	Acp          *AcpSpec `json:"acp"`
+	AgentAt      *AgentAt `json:"-"`
 	Unrecognized string   `json:"-"` // a variant this package does not know (a newer binary): its wire name
 }
 
@@ -21,6 +22,8 @@ func (v AgentRef) Name() string {
 		return "string"
 	case v.Acp != nil:
 		return "acp"
+	case v.AgentAt != nil:
+		return "AgentAt"
 	}
 	return v.Unrecognized
 }
@@ -31,6 +34,8 @@ func (v AgentRef) MarshalJSON() ([]byte, error) {
 		return json.Marshal(v.String)
 	case v.Acp != nil:
 		return json.Marshal(map[string]any{"acp": v.Acp})
+	case v.AgentAt != nil:
+		return json.Marshal(v.AgentAt)
 	case v.Unrecognized != "":
 		return json.Marshal(v.Unrecognized)
 	}
@@ -41,6 +46,13 @@ func (v *AgentRef) UnmarshalJSON(b []byte) error {
 	var s string
 	if json.Unmarshal(b, &s) == nil {
 		v.String = &s
+		return nil
+	}
+	var keys map[string]json.RawMessage
+	json.Unmarshal(b, &keys)
+	var raw AgentAt
+	if json.Unmarshal(b, &raw) == nil && keys["id"] != nil && keys["path"] != nil {
+		v.AgentAt = &raw
 		return nil
 	}
 	type plain AgentRef
@@ -62,11 +74,18 @@ type AcpSpec struct {
 	Args []string `json:"args,omitempty"`
 }
 
+// AgentAt: A catalog agent run from one executable: `{"id": "claude", "path": "/opt/claude"}`.
+type AgentAt struct {
+	ID   string `json:"id"`
+	Path string `json:"path"`
+}
+
 // PermissionMode: How anyagent handles tool permission requests.
 type PermissionMode string
 
 const (
 	PermissionModeAsk         PermissionMode = "Ask"
+	PermissionModeAcceptEdits PermissionMode = "AcceptEdits"
 	PermissionModeAutoApprove PermissionMode = "AutoApprove"
 )
 
@@ -193,10 +212,17 @@ func (v *ConfigValue) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// Deny is a wire type.
+type Deny struct {
+	Message string `json:"message"`
+}
+
 // Answer: exactly one field is set.
 type Answer struct {
 	Permission   *PermissionChoice `json:"Permission"`
 	Question     []QuestionAnswer  `json:"Question"`
+	Deny         *Deny             `json:"Deny"`
+	Cancel       bool              `json:"-"`
 	Unrecognized string            `json:"-"` // a variant this package does not know (a newer binary): its wire name
 }
 
@@ -207,6 +233,10 @@ func (v Answer) Name() string {
 		return "Permission"
 	case v.Question != nil:
 		return "Question"
+	case v.Deny != nil:
+		return "Deny"
+	case v.Cancel:
+		return "Cancel"
 	}
 	return v.Unrecognized
 }
@@ -217,6 +247,10 @@ func (v Answer) MarshalJSON() ([]byte, error) {
 		return json.Marshal(map[string]any{"Permission": v.Permission})
 	case v.Question != nil:
 		return json.Marshal(map[string]any{"Question": v.Question})
+	case v.Deny != nil:
+		return json.Marshal(map[string]any{"Deny": v.Deny})
+	case v.Cancel:
+		return json.Marshal("Cancel")
 	case v.Unrecognized != "":
 		return json.Marshal(v.Unrecognized)
 	}
@@ -226,6 +260,11 @@ func (v Answer) MarshalJSON() ([]byte, error) {
 func (v *Answer) UnmarshalJSON(b []byte) error {
 	var s string
 	if json.Unmarshal(b, &s) == nil {
+		switch s {
+		case "Cancel":
+			v.Cancel = true
+			return nil
+		}
 		v.Unrecognized = s
 		return nil
 	}
@@ -363,9 +402,33 @@ type ToolOutputDelta struct {
 	Text   string `json:"text"`
 }
 
+// ToolProgress is a wire type.
+type ToolProgress struct {
+	ToolID    string  `json:"tool_id"`
+	Message   *string `json:"message,omitempty"`
+	ElapsedMs *uint64 `json:"elapsed_ms,omitempty"`
+}
+
+// TurnDiff is a wire type.
+type TurnDiff struct {
+	Unified string `json:"unified"`
+}
+
+// ModelRerouted is a wire type.
+type ModelRerouted struct {
+	From   string  `json:"from"`
+	To     string  `json:"to"`
+	Reason *string `json:"reason,omitempty"`
+}
+
 // PlanUpdated is a wire type.
 type PlanUpdated struct {
 	Entries []PlanEntry `json:"entries"`
+}
+
+// PlanProposed is a wire type.
+type PlanProposed struct {
+	Markdown string `json:"markdown"`
 }
 
 // RequestClosed is a wire type.
@@ -384,6 +447,7 @@ type ContextUsage struct {
 type TurnEnded struct {
 	Stop       StopReason `json:"stop"`
 	Background []string   `json:"background"`
+	Usage      *TurnUsage `json:"usage,omitempty"`
 }
 
 // EventKind: exactly one field is set.
@@ -395,7 +459,11 @@ type EventKind struct {
 	MessageEnded     *MessageEnded    `json:"MessageEnded"`
 	ToolUpdated      *ToolUpdate      `json:"ToolUpdated"`
 	ToolOutputDelta  *ToolOutputDelta `json:"ToolOutputDelta"`
+	ToolProgress     *ToolProgress    `json:"ToolProgress"`
+	TurnDiff         *TurnDiff        `json:"TurnDiff"`
+	ModelRerouted    *ModelRerouted   `json:"ModelRerouted"`
 	PlanUpdated      *PlanUpdated     `json:"PlanUpdated"`
+	PlanProposed     *PlanProposed    `json:"PlanProposed"`
 	RequestOpened    *Request         `json:"RequestOpened"`
 	RequestClosed    *RequestClosed   `json:"RequestClosed"`
 	SessionUpdated   *SessionInfo     `json:"SessionUpdated"`
@@ -425,8 +493,16 @@ func (v EventKind) Name() string {
 		return "ToolUpdated"
 	case v.ToolOutputDelta != nil:
 		return "ToolOutputDelta"
+	case v.ToolProgress != nil:
+		return "ToolProgress"
+	case v.TurnDiff != nil:
+		return "TurnDiff"
+	case v.ModelRerouted != nil:
+		return "ModelRerouted"
 	case v.PlanUpdated != nil:
 		return "PlanUpdated"
+	case v.PlanProposed != nil:
+		return "PlanProposed"
 	case v.RequestOpened != nil:
 		return "RequestOpened"
 	case v.RequestClosed != nil:
@@ -465,8 +541,16 @@ func (v EventKind) MarshalJSON() ([]byte, error) {
 		return json.Marshal(map[string]any{"ToolUpdated": v.ToolUpdated})
 	case v.ToolOutputDelta != nil:
 		return json.Marshal(map[string]any{"ToolOutputDelta": v.ToolOutputDelta})
+	case v.ToolProgress != nil:
+		return json.Marshal(map[string]any{"ToolProgress": v.ToolProgress})
+	case v.TurnDiff != nil:
+		return json.Marshal(map[string]any{"TurnDiff": v.TurnDiff})
+	case v.ModelRerouted != nil:
+		return json.Marshal(map[string]any{"ModelRerouted": v.ModelRerouted})
 	case v.PlanUpdated != nil:
 		return json.Marshal(map[string]any{"PlanUpdated": v.PlanUpdated})
+	case v.PlanProposed != nil:
+		return json.Marshal(map[string]any{"PlanProposed": v.PlanProposed})
 	case v.RequestOpened != nil:
 		return json.Marshal(map[string]any{"RequestOpened": v.RequestOpened})
 	case v.RequestClosed != nil:
@@ -569,15 +653,16 @@ func (v *TurnOrigin) UnmarshalJSON(b []byte) error {
 
 // ToolUpdate: Cumulative snapshot of one tool call.
 type ToolUpdate struct {
-	ID        string     `json:"id"`
-	Kind      ToolKind   `json:"kind"`
-	Title     string     `json:"title"`
-	Status    ToolStatus `json:"status"`
-	Input     ToolInput  `json:"input"`
-	Output    *string    `json:"output,omitempty"`
-	Diffs     []FileDiff `json:"diffs"`
-	Locations []string   `json:"locations"`
-	Raw       *RawTool   `json:"raw,omitempty"`
+	ID        string        `json:"id"`
+	Kind      ToolKind      `json:"kind"`
+	Title     string        `json:"title"`
+	Status    ToolStatus    `json:"status"`
+	Input     ToolInput     `json:"input"`
+	Output    *string       `json:"output,omitempty"`
+	Diffs     []FileDiff    `json:"diffs"`
+	Locations []string      `json:"locations"`
+	Raw       *RawTool      `json:"raw,omitempty"`
+	Subagent  *SubagentInfo `json:"subagent,omitempty"`
 }
 
 // Mcp is a wire type.
@@ -711,7 +796,7 @@ func (v *ToolKind) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// ToolStatus is a wire type.
+// ToolStatus: `Denied`: refused by the agent's permission rules or mode without asking the caller.
 type ToolStatus string
 
 const (
@@ -720,6 +805,7 @@ const (
 	ToolStatusCompleted ToolStatus = "Completed"
 	ToolStatusFailed    ToolStatus = "Failed"
 	ToolStatusCancelled ToolStatus = "Cancelled"
+	ToolStatusDenied    ToolStatus = "Denied"
 )
 
 // Command is a wire type.
@@ -817,6 +903,14 @@ type FileDiff struct {
 type RawTool struct {
 	Name  string `json:"name"`
 	Input any    `json:"input"`
+}
+
+// SubagentInfo: What a subagent tool reports about the agent it spawned.
+type SubagentInfo struct {
+	Role    *string `json:"role,omitempty"`
+	Model   *string `json:"model,omitempty"`
+	Summary *string `json:"summary,omitempty"`
+	Tokens  *uint64 `json:"tokens,omitempty"`
 }
 
 // PlanEntry is a wire type.
@@ -1191,6 +1285,7 @@ const (
 	CapabilityPlanUsage     Capability = "PlanUsage"
 	CapabilityRollbackFiles Capability = "RollbackFiles"
 	CapabilityCompact       Capability = "Compact"
+	CapabilityOutputSchema  Capability = "OutputSchema"
 )
 
 // McpTransport is a wire type.
@@ -1272,16 +1367,77 @@ func (v *ConfigKind) UnmarshalJSON(b []byte) error {
 
 // ConfigChoice is a wire type.
 type ConfigChoice struct {
-	Value       string  `json:"value"`
-	Label       string  `json:"label"`
-	Description *string `json:"description,omitempty"`
+	Value       string         `json:"value"`
+	Label       string         `json:"label"`
+	Description *string        `json:"description,omitempty"`
+	Options     []ConfigOption `json:"options,omitempty"`
 }
 
 // SlashCommand is a wire type.
 type SlashCommand struct {
-	Name        string  `json:"name"`
-	Description string  `json:"description"`
-	InputHint   *string `json:"input_hint,omitempty"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	InputHint   *string        `json:"input_hint,omitempty"`
+	Source      *CommandSource `json:"source,omitempty"`
+}
+
+// Skill is a wire type.
+type Skill struct {
+	Path  *string `json:"path,omitempty"`
+	Scope *string `json:"scope,omitempty"`
+}
+
+// CommandSource: exactly one field is set. Where a slash command comes from.
+type CommandSource struct {
+	Builtin      bool   `json:"-"`
+	Skill        *Skill `json:"Skill"`
+	Unrecognized string `json:"-"` // a variant this package does not know (a newer binary): its wire name
+}
+
+// Name is the variant's wire name: "Builtin", …
+func (v CommandSource) Name() string {
+	switch {
+	case v.Builtin:
+		return "Builtin"
+	case v.Skill != nil:
+		return "Skill"
+	}
+	return v.Unrecognized
+}
+
+func (v CommandSource) MarshalJSON() ([]byte, error) {
+	switch {
+	case v.Builtin:
+		return json.Marshal("Builtin")
+	case v.Skill != nil:
+		return json.Marshal(map[string]any{"Skill": v.Skill})
+	case v.Unrecognized != "":
+		return json.Marshal(v.Unrecognized)
+	}
+	return nil, fmt.Errorf("CommandSource: no variant set")
+}
+
+func (v *CommandSource) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) == nil {
+		switch s {
+		case "Builtin":
+			v.Builtin = true
+			return nil
+		}
+		v.Unrecognized = s
+		return nil
+	}
+	type plain CommandSource
+	if err := json.Unmarshal(b, (*plain)(v)); err != nil || v.Name() != "" {
+		return err
+	}
+	var m map[string]json.RawMessage
+	json.Unmarshal(b, &m)
+	for tag := range m {
+		v.Unrecognized = tag
+	}
+	return nil
 }
 
 // SessionConfiguration is a wire type.
@@ -1300,9 +1456,10 @@ const (
 
 // PlanUsage: Plan quota windows for the logged-in account.
 type PlanUsage struct {
-	Plan      *string       `json:"plan,omitempty"`
-	Windows   []UsageWindow `json:"windows"`
-	FetchedAt SystemTime    `json:"fetched_at"`
+	Plan         *string       `json:"plan,omitempty"`
+	Windows      []UsageWindow `json:"windows"`
+	ResetCredits *ResetCredits `json:"reset_credits,omitempty"`
+	FetchedAt    SystemTime    `json:"fetched_at"`
 }
 
 // UsageWindow is a wire type.
@@ -1310,6 +1467,12 @@ type UsageWindow struct {
 	Label       string      `json:"label"`
 	UsedPercent uint8       `json:"used_percent"`
 	ResetsAt    *SystemTime `json:"resets_at,omitempty"`
+}
+
+// ResetCredits: Limit resets the account can use now.
+type ResetCredits struct {
+	Available     uint32      `json:"available"`
+	NextExpiresAt *SystemTime `json:"next_expires_at,omitempty"`
 }
 
 // Diagnostic is a wire type.
@@ -1410,6 +1573,13 @@ const (
 	CompletionSourceProtocol CompletionSource = "Protocol"
 	CompletionSourceInferred CompletionSource = "Inferred"
 )
+
+// TurnUsage: Tokens one turn spent, summed over its model calls.
+type TurnUsage struct {
+	InputTokens       uint64 `json:"input_tokens"`
+	CachedInputTokens uint64 `json:"cached_input_tokens"`
+	OutputTokens      uint64 `json:"output_tokens"`
+}
 
 // DiscoveryReport: What `discover` found and what it could not read.
 type DiscoveryReport struct {

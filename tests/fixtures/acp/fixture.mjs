@@ -9,7 +9,10 @@
 //        extension requests, no usage frames), --logged-out (with --cursor:
 //        `about` reports no email and `authenticate` hangs in a browser flow).
 import { createInterface } from 'node:readline';
+import { appendFileSync } from 'node:fs';
 
+// FIXTURE_ARGV_LOG, set through the session's env: log the launch args there.
+if (process.env.FIXTURE_ARGV_LOG) appendFileSync(process.env.FIXTURE_ARGV_LOG, JSON.stringify(process.argv.slice(2)) + '\n');
 const flag = (name) => process.argv.includes(name);
 const num = (name, dflt) => +(process.argv.find(a => a.startsWith(name + '='))?.split('=')[1] ?? dflt);
 const send = (m) => process.stdout.write(JSON.stringify(m) + '\n');
@@ -110,6 +113,8 @@ async function onRequest(m) {
       // The hermes shape: a plain internal error whose data carries the words.
       if (flag('--auth-hint-error')) return send({ jsonrpc: '2.0', id: m.id, error: { code: -32603, message: 'Internal error', data: { details: 'No LLM provider configured. Run `fixture login` first.' } } });
       mcpDecl = m.params.mcpServers ?? [];
+      // FIXTURE_MCP_LOG: log the servers as received, secrets included.
+      if (process.env.FIXTURE_MCP_LOG) appendFileSync(process.env.FIXTURE_MCP_LOG, JSON.stringify(mcpDecl) + '\n');
       // --grok-models: the first-class models state (no model configOption);
       // switching must ride session/set_model.
       if (flag('--grok-models')) return reply({ sessionId: 'sess-1', models: grokModels() });
@@ -197,6 +202,24 @@ async function runTurn(m) {
     done('end_turn');
     return;
   }
+  // `mcp-call [kiro|qwen]`: one MCP call as antigravity's server, kiro or qwen
+  // sends it (recorded 2026-09-27), as [call, permission toolCall, ...updates].
+  if (ptext.includes('mcp-call')) {
+    const out = { status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'PLUM-4417' } }], rawOutput: 'PLUM-4417' };
+    const ag = { title: 'probe_secret_word', kind: 'other', status: 'pending', content: [], rawInput: { arguments: {} }, _meta: { mcp: { tool: 'secret_word', server: 'probe' }, is_mcp_tool_call: true } };
+    const kiro = { title: 'Running: @probe/secret_word', rawInput: { __tool_use_purpose: 'Retrieve the secret word.' } };
+    const qwen = { status: 'pending', content: [], locations: [], kind: 'other', rawInput: {} };
+    const [call, permission, ...updates] = {
+      antigravity: [ag, ag, { ...ag, status: 'in_progress' }, out],
+      kiro: [{ ...kiro, _meta: { kiro: { toolName: 'secret_word', mcpServerName: 'probe' } } }, kiro, { ...kiro, ...out, kind: 'other' }],
+      qwen: [{ ...qwen, title: 'secret_word (probe MCP Server): {}', _meta: { toolName: 'mcp__probe__secret_word', provenance: 'mcp', serverId: 'probe', phase: 'preparing' } }, { ...qwen, title: '{}', _meta: { toolName: 'mcp__probe__secret_word' } }, { ...out, _meta: { toolName: 'mcp__probe__secret_word', provenance: 'mcp', serverId: 'probe' } }],
+    }[ptext.split(' ')[1] ?? 'antigravity'];
+    notify(sid, { sessionUpdate: 'tool_call', toolCallId: 'call_m', ...call });
+    await request('session/request_permission', { sessionId: sid, toolCall: { toolCallId: 'call_m', ...permission }, options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }] });
+    for (const update of updates) notify(sid, { sessionUpdate: 'tool_call_update', toolCallId: 'call_m', ...update });
+    done('end_turn');
+    return;
+  }
   // Grok extensions (wire shapes cross-checked against comet + t3code).
   if (ptext.includes('grok-question')) {
     // The question's tool call rides alongside, tagged `ask_user` in _meta.
@@ -264,7 +287,7 @@ async function runTurn(m) {
   notify(sid, { sessionUpdate: 'some_future_update_kind', payload: { x: 1 } }); // unknown kind
   send({ jsonrpc: '2.0', method: '_claude/rateLimit', params: { sessionId: sid, status: 'allowed_warning' } }); // ext notification
   const perm = await request('session/request_permission', { sessionId: sid, toolCall: { toolCallId: 'call_2', title: 'Run tests' }, options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }] });
-  const outcome = perm.result?.outcome?.outcome ?? 'error';
+  const outcome = perm.result?.outcome?.optionId ?? perm.result?.outcome?.outcome ?? 'error';
   notify(sid, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `perm=${outcome} ` } });
   // "die-late": a plain RPC failure after the permission exchange.
   if (ptext.includes('die-late')) { send({ jsonrpc: '2.0', id: m.id, error: { code: -32603, message: 'kaput' } }); turn = null; return; }

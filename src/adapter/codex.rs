@@ -17,19 +17,19 @@ use tokio::sync::mpsc;
 use crate::adapter::{
     Adapter, CLOSE_GRACE, ConnectRequest, DriverCommand, DriverConnection, DriverEvent, DriverInfo,
     Emitter, FRAME_BUFFER, Gone, HANDSHAKE_TIMEOUT, LineWire, OUTPUT_CAP, WireRecorder, attach,
-    cap, login_methods, plan_entries, selected, set_effort_option, with_stderr,
+    cap, login_methods, model_options, plan_entries, selected, set_effort_option, with_stderr,
 };
 use crate::agent::{
     AccountInfo, AgentDetails, AuthKind, AuthStatus, Capabilities, Capability, ConfigChoice,
     ConfigId, ConfigKind, ConfigOption, ConfigValue, Input, McpConnection, McpServer, McpTransport,
-    ResumeToken, SessionConfiguration, SessionStart, SlashCommand,
+    ResumeToken, SessionConfiguration, SessionOptions, SessionStart, SlashCommand,
 };
 use crate::error::AgentError;
 use crate::event::{
     Answer, Choice, ChoiceId, CompletionSource, Diagnostic, DiagnosticLevel, EventKind, Extensions,
     FileDiff, MessageId, PermissionChoice, PermissionRequest, PlanUsage, Question, QuestionAnswer,
-    QuestionId, QuestionRequest, RawTool, Request, RequestId, StopReason, ToolId, ToolInput,
-    ToolKind, ToolStatus, ToolUpdate, UsageWindow,
+    QuestionId, QuestionRequest, RawTool, Request, RequestId, ResetCredits, StopReason,
+    SubagentInfo, ToolId, ToolInput, ToolKind, ToolStatus, ToolUpdate, TurnUsage, UsageWindow,
 };
 use crate::process::{self, Spawn};
 
@@ -38,10 +38,13 @@ use crate::process::{self, Spawn};
 const CLIENT_MSG_PREFIX: &str = "anyagent-m";
 
 /// `approvalPolicy` values observed live ("on-request" is the default the
-/// wire reports; the others were probed).
-const MODES: [&str; 3] = ["untrusted", "on-request", "never"];
+/// wire reports; the others were probed), plus `plan`, a collaboration mode.
+const MODES: [&str; 4] = ["untrusted", "on-request", "never", "plan"];
 /// `sandbox` values, matching the `permissionProfile/list` ids.
 const SANDBOXES: [&str; 3] = ["read-only", "workspace-write", "danger-full-access"];
+/// The under-development feature anyagent turns on at launch: it lets
+/// `request_user_input` fire outside plan mode (live-verified 0.152.0).
+const USER_INPUT_FEATURE: &str = "default_mode_request_user_input";
 
 /// Launches `codex app-server`; one instance serves every session.
 pub(crate) struct CodexAdapter;
@@ -72,6 +75,7 @@ impl Adapter for CodexAdapter {
                 models,
                 thread_id,
                 turn: None,
+                turn_usage: TurnUsage::default(),
                 turns,
                 turn_started: false,
                 pending_steer: None,
@@ -83,6 +87,8 @@ impl Adapter for CodexAdapter {
                 requests: HashMap::new(),
                 open_reasoning: std::collections::HashSet::new(),
                 auth_lost: false,
+                // A resumed or forked thread may have been left in plan mode.
+                in_plan: !matches!(request.options.start, SessionStart::New),
                 next_msg: 1,
                 request,
             }
@@ -95,17 +101,19 @@ impl Adapter for CodexAdapter {
         })
     }
 
-    /// Quota probe: spawn, `initialize`, `account/rateLimits/read` (~0.4 s),
-    /// shut down.
+    /// Quota probe: spawn with the options' config home, env and args,
+    /// `initialize`, `account/rateLimits/read` (~0.4 s), shut down.
     async fn plan_usage(
         &self,
         installation: &crate::agent::AgentInstallation,
+        options: &SessionOptions,
     ) -> Result<PlanUsage, AgentError> {
+        create_config_home(options).await?;
         let mut child = process::spawn(Spawn {
             exec_path: installation.executable_path.clone(),
-            args: vec!["app-server".into()],
+            args: [vec!["app-server".to_owned()], options.args.clone()].concat(),
             cwd: std::env::temp_dir(),
-            env: Vec::new(),
+            env: crate::adapter::launch_env(installation, options)?,
         })
         .await?;
         let mut wire = Wire::over(&mut child, None);
@@ -115,13 +123,13 @@ impl Adapter for CodexAdapter {
             wire.roundtrip("account/rateLimits/read", json!({})).await
         };
         let result = match tokio::time::timeout(HANDSHAKE_TIMEOUT, fetch).await {
-            Ok(Ok(response)) => plan_usage(&response["rateLimits"]).ok_or_else(|| {
+            Ok(Ok(response)) => plan_usage(&response).ok_or_else(|| {
                 AgentError::UnsupportedFeature("no plan quota for this login".into())
             }),
             // Logged out: "codex account authentication required to read rate limits".
             Ok(Err(WireError::Rpc(m))) if m.contains("authentication required") => {
                 Err(AgentError::AuthRequired {
-                    login: login_methods(installation, None),
+                    login: login_methods(installation, Some(options)),
                 })
             }
             Ok(Err(e)) => Err(with_stderr(e.into_error(), &child)),
@@ -145,9 +153,14 @@ fn initialize_params() -> Value {
     })
 }
 
-/// The MCP servers as `-c mcp_servers.<name>.<key>=<toml>` launch overrides,
-/// the wire having no per-thread declaration. SSE is not a codex transport.
-fn mcp_overrides(servers: &[McpServer]) -> Result<Vec<String>, AgentError> {
+/// Environment pairs handed to the spawned server.
+type Env = Vec<(String, String)>;
+
+/// The MCP servers as `-c mcp_servers.<name>.<key>=<toml>` launch overrides
+/// plus the env pairs they need, the wire having no per-thread declaration.
+/// Values ride env vars the override names (`env_vars`, `bearer_token_env_var`,
+/// `env_http_headers`; codex 0.154.0, 2026-09-27) atop the launch env `base`. No SSE.
+fn mcp_overrides(servers: &[McpServer], base: &Env) -> Result<(Vec<String>, Env), AgentError> {
     let quote = |s: &str| serde_json::to_string(s).unwrap_or_default();
     let table = |map: &std::collections::BTreeMap<String, String>| {
         let pairs: Vec<String> = map
@@ -157,6 +170,7 @@ fn mcp_overrides(servers: &[McpServer]) -> Result<Vec<String>, AgentError> {
         format!("{{{}}}", pairs.join(", "))
     };
     let mut args = Vec::new();
+    let mut env = Vec::new();
     for server in servers {
         // The name is a bare TOML key segment; anything else would split or
         // break the override.
@@ -167,23 +181,68 @@ fn mcp_overrides(servers: &[McpServer]) -> Result<Vec<String>, AgentError> {
                 server.name
             )));
         }
+        // Two names that differ only by case or `-`/`_` would share their env vars.
+        let upper = |name: &str| name.to_uppercase().replace('-', "_");
+        let twins = servers
+            .iter()
+            .filter(|s| upper(&s.name) == upper(&server.name));
+        if twins.count() > 1 {
+            return Err(AgentError::InvalidConfiguration(format!(
+                "codex MCP server name `{}` collides with another declared server",
+                server.name
+            )));
+        }
         let key = |field: &str| format!("mcp_servers.{}.{field}", server.name);
         let mut push = |field: &str, value: String| {
             args.push("-c".to_owned());
             args.push(format!("{}={value}", key(field)));
         };
         match &server.connection {
-            McpConnection::Stdio { command, args, env } => {
+            McpConnection::Stdio {
+                command,
+                args,
+                env: vars,
+            } => {
                 push("command", quote(&command.to_string_lossy()));
                 push("args", serde_json::to_string(args).unwrap_or_default());
-                if !env.is_empty() {
-                    push("env", table(env));
+                for (name, value) in vars {
+                    // codex forwards stdio env by name, so codex's own env must agree.
+                    let held = base.iter().chain(&env).rev().find(|(n, _)| n == name);
+                    let held = held
+                        .map(|(_, v)| v.clone())
+                        .or_else(|| std::env::var(name).ok());
+                    if process::OWN_VARS.contains(&name.as_str())
+                        || held.is_some_and(|v| v != *value)
+                    {
+                        return Err(AgentError::InvalidConfiguration(format!(
+                            "codex MCP server `{}` sets `{name}`, already set to another value",
+                            server.name
+                        )));
+                    }
+                    env.push((name.clone(), value.clone()));
+                }
+                if !vars.is_empty() {
+                    let names = serde_json::to_string(&vars.keys().collect::<Vec<_>>());
+                    push("env_vars", names.unwrap_or_default());
                 }
             }
             McpConnection::Http { url, headers } => {
                 push("url", quote(url));
-                if !headers.is_empty() {
-                    push("http_headers", table(headers));
+                let var = |suffix: &str| format!("ANYAGENT_MCP_{}_{suffix}", upper(&server.name));
+                let (bearer, rest) = split_bearer(headers);
+                if let Some(token) = bearer {
+                    push("bearer_token_env_var", quote(&var("TOKEN")));
+                    env.push((var("TOKEN"), token));
+                }
+                // Other header values ride the env too, named per header.
+                let mut named = std::collections::BTreeMap::new();
+                for (i, (header, value)) in rest.into_iter().enumerate() {
+                    let name = var(&format!("HEADER_{i}"));
+                    env.push((name.clone(), value));
+                    named.insert(header, name);
+                }
+                if !named.is_empty() {
+                    push("env_http_headers", table(&named));
                 }
             }
             McpConnection::Sse { .. } => {
@@ -191,7 +250,23 @@ fn mcp_overrides(servers: &[McpServer]) -> Result<Vec<String>, AgentError> {
             }
         }
     }
-    Ok(args)
+    Ok((args, env))
+}
+
+/// Pulls a `Authorization: Bearer <token>` header out; the rest stay headers.
+fn split_bearer(
+    headers: &std::collections::BTreeMap<String, String>,
+) -> (Option<String>, std::collections::BTreeMap<String, String>) {
+    let mut rest = headers.clone();
+    let key = headers
+        .keys()
+        .find(|k| k.eq_ignore_ascii_case("authorization"));
+    let token = key.and_then(|k| {
+        let value = rest.get(k)?.strip_prefix("Bearer ")?.to_owned();
+        rest.remove(k);
+        Some(value)
+    });
+    (token, rest)
 }
 
 /// Spawns the server and handshakes within the timeout.
@@ -199,21 +274,19 @@ async fn launch(
     request: &ConnectRequest,
     recorder: Option<WireRecorder>,
 ) -> Result<(process::Child, Wire, DriverInfo, Value, String, Vec<String>), AgentError> {
-    let env = crate::adapter::config_home_env(&request.installation, &request.options)?;
-    // CODEX_HOME must already exist or the server exits at startup
-    // (probed 2026-08-27).
-    if let Some((_, dir)) = env.first() {
-        tokio::fs::create_dir_all(dir)
-            .await
-            .map_err(|e| AgentError::SpawnFailed(format!("could not create config home: {e}")))?;
-    }
-    let mut args = mcp_overrides(&request.options.mcp_servers)?;
-    args.push("app-server".into());
-    // Lets `request_user_input` fire outside plan mode (live-verified 0.152.0).
+    let mut env = crate::adapter::launch_env(&request.installation, &request.options)?;
+    create_config_home(&request.options).await?;
+    // Overrides must follow the subcommand: before it, app-server 0.154.0
+    // accepts them and starts no server (live-verified 2026-09-27).
+    let (overrides, mcp_env) = mcp_overrides(&request.options.mcp_servers, &env)?;
+    let mut args = vec!["app-server".to_owned()];
+    args.extend(overrides);
+    env.extend(mcp_env);
     args.extend([
         "-c".to_owned(),
-        "features.default_mode_request_user_input=true".to_owned(),
+        format!("features.{USER_INPUT_FEATURE}=true"),
     ]);
+    args.extend(request.options.args.iter().cloned());
     let mut child = process::spawn(Spawn {
         exec_path: request.installation.executable_path.clone(),
         args,
@@ -238,8 +311,19 @@ async fn launch(
     }
 }
 
-/// `initialize` → `initialized`, then account, model catalog, and skills, then
-/// the thread bind from `options.start`.
+/// Creates the session's config home: CODEX_HOME must already exist or the
+/// server exits at startup (probed 2026-08-27).
+async fn create_config_home(options: &SessionOptions) -> Result<(), AgentError> {
+    let Some(dir) = &options.config_home else {
+        return Ok(());
+    };
+    tokio::fs::create_dir_all(dir)
+        .await
+        .map_err(|e| AgentError::SpawnFailed(format!("could not create config home: {e}")))
+}
+
+/// `initialize` → `initialized`, then account and model catalog, then the
+/// thread bind from `options.start` (a probe reads the effective config instead).
 async fn handshake(
     wire: &mut Wire,
     request: &ConnectRequest,
@@ -265,11 +349,20 @@ async fn handshake(
     // `SessionUpdated`, like ACP's late command list.
     let commands = Vec::new();
     let config = start_config(request, &models)?;
-    let thread = open_thread(wire, request, &config).await?;
-    let thread_id = thread["thread"]["id"]
-        .as_str()
-        .ok_or_else(|| AgentError::ProtocolFailed("thread bind returned no id".into()))?
-        .to_owned();
+    // A probe stops short of `thread/start`, which starts the user's MCP servers and hooks.
+    let (thread, thread_id) = if request.options.details_only {
+        (
+            effective_config(wire, request, &config).await?,
+            String::new(),
+        )
+    } else {
+        let thread = open_thread(wire, request, &config).await?;
+        let id = thread["thread"]["id"]
+            .as_str()
+            .ok_or_else(|| AgentError::ProtocolFailed("thread bind returned no id".into()))?
+            .to_owned();
+        (thread, id)
+    };
     let info = driver_info(
         &init, &account, &models, &thread, &config, commands, request,
     );
@@ -293,6 +386,8 @@ fn parse_skill_commands(response: &Value) -> Vec<SlashCommand> {
         .into_iter()
         .flatten()
         .flat_map(|group| group["skills"].as_array().into_iter().flatten())
+        // A disabled skill still comes back, `enabled: false` (probed 2026-09-27, 0.154.0).
+        .filter(|skill| skill["enabled"].as_bool() != Some(false))
         .filter_map(|skill| {
             let name = skill["name"]
                 .as_str()
@@ -309,6 +404,11 @@ fn parse_skill_commands(response: &Value) -> Vec<SlashCommand> {
                     .unwrap_or_default()
                     .to_owned(),
                 input_hint: None,
+                // `path` is the SKILL.md file; `scope` is user, repo, system or admin.
+                source: crate::agent::CommandSource::Skill {
+                    path: skill["path"].as_str().map(PathBuf::from),
+                    scope: skill["scope"].as_str().map(str::to_owned),
+                },
             })
         })
         .collect()
@@ -398,7 +498,8 @@ async fn open_thread(
     config: &StartConfig,
 ) -> Result<Value, AgentError> {
     let mut params = json!({ "cwd": request.options.cwd() });
-    if let Some(mode) = &config.mode {
+    // `plan` is no approval policy: the thread keeps codex's default.
+    if let Some(mode) = config.mode.as_ref().filter(|mode| *mode != "plan") {
         params["approvalPolicy"] = json!(mode);
     }
     if let Some(sandbox) = &config.sandbox {
@@ -413,6 +514,10 @@ async fn open_thread(
     // Keeps the thread off disk and out of the user's thread list.
     if request.options.throwaway {
         params["ephemeral"] = json!(true);
+    }
+    // Start, resume and fork all take it (0.154.0 schema).
+    if let Some(text) = &request.options.instructions {
+        params["developerInstructions"] = json!(text);
     }
     let method = match &request.options.start {
         SessionStart::New => "thread/start",
@@ -430,10 +535,39 @@ async fn open_thread(
             "thread/fork"
         }
     };
+    // Only an unknown thread is a dead token (0.154.0: "no rollout found …").
     wire.roundtrip(method, params).await.map_err(|e| match e {
-        WireError::Rpc(m) if method == "thread/resume" => AgentError::ResumeFailed(m),
+        WireError::Rpc(m) if method == "thread/resume" && m.starts_with("no rollout found") => {
+            AgentError::ResumeFailed(m)
+        }
         e => e.into_error(),
     })
+}
+
+/// `config/read` (0.154.0) under the `configure` choices, shaped like `thread/start`'s reply.
+/// Unset values read as codex's defaults (a trusted dir's thread would say workspace-write).
+async fn effective_config(
+    wire: &mut Wire,
+    request: &ConnectRequest,
+    start: &StartConfig,
+) -> Result<Value, AgentError> {
+    let params = json!({ "cwd": request.options.cwd() });
+    let response = match wire.roundtrip("config/read", params).await {
+        // A codex without the request: every value reads as its default.
+        Err(WireError::Rpc(_)) => Value::Null,
+        other => other.map_err(WireError::into_error)?,
+    };
+    let config = &response["config"];
+    let sandbox = start.sandbox.as_deref().or(config["sandbox_mode"].as_str());
+    // Like `open_thread`: `plan` is no approval policy.
+    let policy = start.mode.as_deref().filter(|mode| *mode != "plan");
+    Ok(json!({
+        "model": config["model"],
+        "reasoningEffort": config["model_reasoning_effort"],
+        "serviceTier": config["service_tier"],
+        "approvalPolicy": policy.map_or(config["approval_policy"].clone(), Value::from),
+        "sandbox": { "type": sandbox_policy(sandbox.unwrap_or("read-only")) },
+    }))
 }
 
 /// Login state from `account/read`, offline and instant. `OPENAI_API_KEY` is
@@ -491,7 +625,10 @@ fn driver_info(
         .clone()
         .or_else(|| thread["reasoningEffort"].as_str().map(str::to_owned))
         .or_else(|| model.as_deref().and_then(|m| default_effort(models, m)));
-    let mode = thread["approvalPolicy"].as_str().unwrap_or("on-request");
+    let mode = match config.mode.as_deref() {
+        Some("plan") => "plan",
+        _ => thread["approvalPolicy"].as_str().unwrap_or("on-request"),
+    };
     let sandbox = sandbox_name(&thread["sandbox"]);
     // Every option rides `turn/start` (model, effort, serviceTier,
     // approvalPolicy, sandboxPolicy), so all switch live with no wire call.
@@ -505,17 +642,15 @@ fn driver_info(
         current: model.clone().map(ConfigValue::Text),
         live: true,
     };
-    let effort_option = model.as_deref().and_then(|m| {
-        let choices = effort_choices(models, m);
-        (!choices.is_empty()).then(|| ConfigOption {
-            id: ConfigId::new("effort"),
-            name: "Reasoning effort".into(),
-            category: Some("thought_level".into()),
-            kind: ConfigKind::Select { choices },
+    // The effort codex reports stays current even when the model's levels
+    // omit it, so the option agrees with the configuration.
+    let effort_option = model
+        .as_deref()
+        .and_then(|m| crate::adapter::effort_option(effort_choices(models, m), None))
+        .map(|option| ConfigOption {
             current: effort.clone().map(ConfigValue::Text),
-            live: true,
-        })
-    });
+            ..option
+        });
     let tier = config.tier.clone().unwrap_or_else(|| "default".into());
     let tier_choices = tier_choices(models);
     let tier_option = (tier_choices.len() > 1).then(|| ConfigOption {
@@ -532,11 +667,7 @@ fn driver_info(
         choices: values
             .iter()
             .chain(std::iter::once(&current).filter(|c| !values.contains(*c)))
-            .map(|value| ConfigChoice {
-                value: (*value).to_owned(),
-                label: (*value).to_owned(),
-                description: None,
-            })
+            .map(|value| ConfigChoice::new(*value, *value, None))
             .collect(),
     };
     let mode_option = ConfigOption {
@@ -588,6 +719,7 @@ fn driver_info(
                     Capability::SlashCommands,
                     Capability::ContextUsage,
                     Capability::PlanUsage,
+                    Capability::OutputSchema,
                 ]);
                 capabilities.mcp_transports = vec![McpTransport::Stdio, McpTransport::Http];
                 capabilities
@@ -632,7 +764,8 @@ fn driver_info(
 
 /// A client request awaiting its JSON-RPC response.
 enum Pending {
-    StartTurn,
+    /// Whether the turn states plan mode; the thread holds it once accepted.
+    StartTurn(bool),
     Steer,
     Interrupt,
     Skills,
@@ -644,8 +777,17 @@ enum Pending {
 /// A server→client request waiting for `answer`.
 struct PendingRequest {
     wire_id: u64,
-    /// Present when the request is a `requestUserInput`.
-    questions: Option<Vec<Question>>,
+    reply: Reply,
+}
+
+/// The reply shape a server request takes.
+enum Reply {
+    /// A command or file approval: `{decision}`.
+    Decision,
+    /// An MCP tool-call approval elicitation: `{action}`.
+    Action,
+    /// A `requestUserInput`: answers keyed by these questions.
+    Answers(Vec<Question>),
 }
 
 struct Drive {
@@ -659,6 +801,8 @@ struct Drive {
     thread_id: String,
     /// The running wire turn, once `turn/start`'s response names it.
     turn: Option<String>,
+    /// What the running turn has spent, summed over its model calls.
+    turn_usage: TurnUsage,
     /// Completed parent-thread turn ids, oldest first; rollback cuts before one.
     turns: Vec<String>,
     /// `turn/started` seen. A steer sent before it is refused by the wire
@@ -672,8 +816,8 @@ struct Drive {
     /// Active tool items by id. An interrupted turn leaves them with no
     /// `item/completed` (probed 2026-08-27); they are cancelled at turn end.
     tools: HashMap<String, ToolUpdate>,
-    /// Subagent child threads: child threadId → the `subAgentActivity` tool
-    /// that owns it. Cleared at turn end with the tools it points into.
+    /// Subagent child threads: child threadId → the `subAgentActivity` or
+    /// `spawnAgent` tool that owns it. Cleared at turn end with the tools it points into.
     children: HashMap<String, ToolId>,
     /// Set while a child thread's frame is being translated, so every content
     /// event it produces rides that subagent tool.
@@ -683,6 +827,8 @@ struct Drive {
     open_reasoning: std::collections::HashSet<String>,
     /// The first 401 already surfaced `AuthLost`; the retries stay quiet.
     auth_lost: bool,
+    /// The thread may be in plan mode (it sticks), so the next turn states the mode.
+    in_plan: bool,
     next_msg: u64,
     request: ConnectRequest,
 }
@@ -728,8 +874,9 @@ impl Drive {
                 self.events.send(DriverEvent::TurnAck).await?;
                 let items = self.input_items(&input).await?;
                 let params = self.turn_params(items);
+                let plan = params["collaborationMode"]["mode"] == "plan";
                 let id = self.wire.request("turn/start", params).await?;
-                self.pending.insert(id, Pending::StartTurn);
+                self.pending.insert(id, Pending::StartTurn(plan));
             }
             DriverCommand::Steer { input } => {
                 if self.turn_started {
@@ -742,10 +889,7 @@ impl Drive {
             DriverCommand::Cancel => {
                 self.pending_steer = None;
                 for (_, pending) in std::mem::take(&mut self.requests) {
-                    let response = match pending.questions {
-                        Some(_) => json!({ "answers": {} }),
-                        None => json!({ "decision": "cancel" }),
-                    };
+                    let response = cancel_reply(&pending.reply);
                     self.wire.respond(pending.wire_id, response).await?;
                 }
                 if let Some(turn) = self.turn.clone() {
@@ -753,7 +897,7 @@ impl Drive {
                 } else if self
                     .pending
                     .values()
-                    .any(|p| matches!(p, Pending::StartTurn))
+                    .any(|p| matches!(p, Pending::StartTurn(_)))
                 {
                     // The turn id has not arrived yet; interrupt on receipt.
                     self.cancel_pending = true;
@@ -799,13 +943,10 @@ impl Drive {
                 let Some(keep) = self.turns.len().checked_sub(n) else {
                     return self
                         .events
-                        .diagnostic(
-                            DiagnosticLevel::Warning,
-                            format!(
-                                "rollback({n}) rejected: {} completed turns",
-                                self.turns.len()
-                            ),
-                        )
+                        .rollback_refused(format!(
+                            "rollback({n}) rejected: {} completed turns",
+                            self.turns.len()
+                        ))
                         .await;
                 };
                 let id = self
@@ -844,8 +985,10 @@ impl Drive {
             // A wire rejection of the turn is a failed turn. A cancel that
             // raced this start has nothing left to interrupt — a stale flag
             // would cancel the next turn at its start.
-            Pending::StartTurn => match error {
+            Pending::StartTurn(plan) => match error {
                 Some(message) => {
+                    // A refused plan turn may still have left the thread in plan.
+                    self.in_plan |= plan;
                     self.cancel_pending = false;
                     self.events
                         .send(DriverEvent::TurnEnded(StopReason::Failed {
@@ -854,6 +997,7 @@ impl Drive {
                         .await?
                 }
                 None => {
+                    self.in_plan = plan;
                     self.turn = frame["result"]["turn"]["id"].as_str().map(str::to_owned);
                     self.interrupt_if_pending().await?;
                 }
@@ -882,22 +1026,19 @@ impl Drive {
                         .await?;
                 }
             }
-            // Nothing advertised changes; `SessionUpdated` is the documented
-            // confirmation.
+            // `SessionUpdated` marks the rewind; `RolledBack` then settles the call.
             Pending::Rollback(keep) => match error {
                 Some(message) => {
                     self.events
-                        .diagnostic(
-                            DiagnosticLevel::Warning,
-                            format!("rollback rejected: {message}"),
-                        )
+                        .rollback_refused(format!("rollback rejected: {message}"))
                         .await?
                 }
                 None => {
                     self.turns.truncate(keep);
                     self.events
                         .send(DriverEvent::InfoChanged(self.info.clone()))
-                        .await?
+                        .await?;
+                    self.events.send(DriverEvent::RolledBack(Ok(()))).await?
                 }
             },
             Pending::Skills => {
@@ -939,13 +1080,18 @@ impl Drive {
             "turn/completed" | "turn/failed" | "turn/aborted" => {
                 self.settle_subagent(tool, &params["turn"]).await
             }
-            // Consumed: the child's plan is a whole-list replacement and its
-            // usage is its own context window, so neither may reach the
-            // parent's, and its turn frames must not move the parent's turn.
-            "thread/tokenUsage/updated" | "thread/status/changed" => Ok(()),
+            // The child's usage is its own context window, never the parent's; its
+            // total is the subagent's token count (probed 2026-09-27, 0.154.0).
+            "thread/tokenUsage/updated" => {
+                let total = params["tokenUsage"]["total"]["totalTokens"].as_u64();
+                self.subagent_tokens(tool, total).await
+            }
+            "thread/status/changed" => Ok(()),
+            // Consumed: the child's plan is a whole-list replacement, and its
+            // turn frames must not move the parent's turn.
             _ if method.starts_with("turn/") => Ok(()),
             // Content: the parent's translation, attributed to the subagent.
-            _ if method.starts_with("item/") || method == "error" => {
+            _ if method.starts_with("item/") || matches!(method, "error" | "model/rerouted") => {
                 self.child_tool = Some(tool);
                 let result = self.on_parent_frame(method, params).await;
                 self.child_tool = None;
@@ -969,6 +1115,16 @@ impl Drive {
         if let Some(message) = turn["error"]["message"].as_str() {
             update.output = Some(message.to_owned());
         }
+        self.content(EventKind::ToolUpdated(update)).await
+    }
+
+    /// A child thread's token total rides its subagent tool's snapshot.
+    async fn subagent_tokens(&mut self, tool: ToolId, tokens: Option<u64>) -> Result<(), Gone> {
+        let Some(update) = self.tools.get_mut(tool.as_str()) else {
+            return Ok(());
+        };
+        update.subagent.get_or_insert_default().tokens = tokens;
+        let update = update.clone();
         self.content(EventKind::ToolUpdated(update)).await
     }
 
@@ -1023,10 +1179,51 @@ impl Drive {
                 })
                 .await
             }
+            // Outside a turn these are late or replayed; content would open a turn
+            // that no `turn/completed` ever ends.
+            "turn/diff/updated" | "model/rerouted" if !self.turn_started => Ok(()),
+            // The turn's whole diff so far (probed 2026-09-27, 0.154.0).
+            "turn/diff/updated" => {
+                let unified = params["diff"].as_str().unwrap_or_default().to_owned();
+                self.content(EventKind::TurnDiff { unified }).await
+            }
+            // From the 0.154.0 schema: a stdio server's MCP progress was not forwarded
+            // when probed 2026-09-27. Progress of an untracked item is dropped.
+            "item/mcpToolCall/progress" => {
+                let id = params["itemId"].as_str().unwrap_or_default();
+                if !self.tools.contains_key(id) {
+                    return Ok(());
+                }
+                self.content(EventKind::ToolProgress {
+                    tool_id: ToolId::new(id),
+                    message: params["message"].as_str().map(str::to_owned),
+                    elapsed_ms: None,
+                })
+                .await
+            }
+            // From the 0.154.0 schema; the reroute is server-side and was not seen live.
+            // A frame missing either model is dropped.
+            "model/rerouted" => {
+                let (Some(from), Some(to)) =
+                    (params["fromModel"].as_str(), params["toModel"].as_str())
+                else {
+                    return Ok(());
+                };
+                self.content(EventKind::ModelRerouted {
+                    from: from.to_owned(),
+                    to: to.to_owned(),
+                    reason: params["reason"].as_str().map(str::to_owned),
+                })
+                .await
+            }
             "thread/tokenUsage/updated" => {
                 // `last` is the latest model call = current context occupancy;
                 // the window rides in the same frame.
                 let usage = &params["tokenUsage"];
+                // Only a running turn's calls count: a bind replays the thread's last one.
+                if self.turn_started {
+                    self.add_turn_usage(&usage["last"]).await?;
+                }
                 let used = usage["last"]["totalTokens"]
                     .as_u64()
                     .or_else(|| usage["total"]["totalTokens"].as_u64());
@@ -1048,15 +1245,17 @@ impl Drive {
                     .send(DriverEvent::InfoChanged(self.info.clone()))
                     .await
             }
-            "account/rateLimits/updated" => match plan_usage(&params["rateLimits"]) {
+            "account/rateLimits/updated" => match plan_usage(params) {
                 Some(usage) => self.content(EventKind::PlanUsageUpdated(usage)).await,
                 None => Ok(()),
             },
             "error" => self.on_error(params).await,
-            "warning" | "guardianWarning" | "configWarning" | "model/rerouted" => {
-                self.events
-                    .diagnostic(DiagnosticLevel::Warning, notice_text(params))
-                    .await
+            "warning" | "guardianWarning" | "configWarning" => {
+                let text = notice_text(params);
+                if self.is_own_noise(&text) {
+                    return Ok(());
+                }
+                self.events.diagnostic(DiagnosticLevel::Warning, text).await
             }
             "deprecationNotice" => {
                 self.events
@@ -1074,15 +1273,28 @@ impl Drive {
                     _ => Ok(()),
                 }
             }
-            // Session-state echoes and login bookkeeping the engine owns or
-            // does not need.
+            // A user hook that failed, blocked or stopped the prompt; a completed one is noise.
+            "hook/completed" => match params["run"]["status"].as_str() {
+                Some("completed") => Ok(()),
+                _ => {
+                    self.events
+                        .diagnostic(DiagnosticLevel::Warning, hook_text(&params["run"]))
+                        .await
+                }
+            },
+            // Session-state echoes, hook starts and login bookkeeping the engine
+            // owns or does not need; plan deltas repeat the completed plan item.
             "thread/started"
+            | "item/plan/delta"
             | "thread/status/changed"
+            | "thread/settings/updated"
+            | "thread/reverted"
+            | "hook/started"
+            | "item/reasoning/summaryPartAdded"
             | "serverRequest/resolved"
             | "remoteControl/status/changed"
             | "account/updated"
-            | "account/login/completed"
-            | "turn/diff/updated" => Ok(()),
+            | "account/login/completed" => Ok(()),
             other => {
                 let mut extensions = Extensions::new();
                 extensions.insert("codex/raw_frame".into(), params.clone());
@@ -1155,25 +1367,64 @@ impl Drive {
                 }
                 Ok(())
             }
-            // The subagent's own thread; its frames route to this tool.
-            "subAgentActivity" => {
-                if let Some(child) = item["agentThreadId"].as_str() {
-                    self.children.insert(child.to_owned(), ToolId::new(&id));
+            // Plan mode's proposal; the completed item's text is authoritative.
+            "plan" => match item["text"]
+                .as_str()
+                .filter(|text| completed && !text.is_empty())
+            {
+                Some(text) => {
+                    self.content(EventKind::PlanProposed {
+                        markdown: text.to_owned(),
+                    })
+                    .await
                 }
-                self.on_tool_item(&id, item).await
+                None => Ok(()),
+            },
+            // The subagent's own thread; its frames route to this tool. Later activity
+            // on a known child (0.154.0 sends its finish under a new id, recording 13) is no new tool.
+            "subAgentActivity" => {
+                let child = item["agentThreadId"].as_str().unwrap_or_default();
+                if self.children.contains_key(child) {
+                    return Ok(());
+                }
+                self.children.insert(child.to_owned(), ToolId::new(&id));
+                self.on_tool(tool_update(item)).await
             }
-            _ => self.on_tool_item(&id, item).await,
+            // A spawn call names its child and model once completed (T3 live 2026-09-27, 0.154.0,
+            // recording 14). The first tool naming a child owns it and stays Running until it ends.
+            "collabAgentToolCall" if item["tool"] == "spawnAgent" => {
+                let mut tool = tool_update(item);
+                tool.subagent = item["model"]
+                    .as_str()
+                    .filter(|model| !model.is_empty())
+                    .map(|model| SubagentInfo {
+                        model: Some(model.to_owned()),
+                        ..SubagentInfo::default()
+                    });
+                for child in item["receiverThreadIds"].as_array().into_iter().flatten() {
+                    let child = child.as_str().unwrap_or_default().to_owned();
+                    let owner = self
+                        .children
+                        .entry(child)
+                        .or_insert_with(|| tool.id.clone());
+                    if *owner == tool.id && tool.status == ToolStatus::Completed {
+                        tool.status = ToolStatus::Running;
+                    }
+                }
+                self.on_tool(tool).await
+            }
+            _ => self.on_tool(tool_update(item)).await,
         }
     }
 
-    /// A tool-shaped item: emit the snapshot and keep the active ones, so an
-    /// interrupt or a child turn end can still settle them.
-    async fn on_tool_item(&mut self, id: &str, item: &Value) -> Result<(), Gone> {
-        let tool = tool_update(item);
+    /// A tool snapshot: emit it and keep the active ones, so an interrupt or a
+    /// child turn end can still settle them.
+    async fn on_tool(&mut self, tool: ToolUpdate) -> Result<(), Gone> {
+        let id = tool.id.as_str().to_owned();
         if tool.status.is_active() {
-            self.tools.insert(id.to_owned(), tool.clone());
+            self.tools.insert(id, tool.clone());
         } else {
-            self.tools.remove(id);
+            self.tools.remove(&id);
         }
         self.content(EventKind::ToolUpdated(tool)).await
     }
@@ -1192,6 +1443,7 @@ impl Drive {
         self.requests.clear();
         self.children.clear();
         self.open_reasoning.clear();
+        self.turn_usage = TurnUsage::default();
         self.turns.extend(self.turn.take());
         self.turn_started = false;
         self.pending_steer = None;
@@ -1210,6 +1462,17 @@ impl Drive {
             },
         };
         self.events.send(DriverEvent::TurnEnded(stop)).await
+    }
+
+    /// Adds one model call's tokens to the turn and reports the sum.
+    async fn add_turn_usage(&mut self, last: &Value) -> Result<(), Gone> {
+        let count = |key: &str| last[key].as_u64().unwrap_or(0);
+        self.turn_usage.input_tokens += count("inputTokens");
+        self.turn_usage.cached_input_tokens += count("cachedInputTokens");
+        self.turn_usage.output_tokens += count("outputTokens");
+        self.events
+            .send(DriverEvent::TurnUsage(self.turn_usage))
+            .await
     }
 
     /// `error` notifications; a 401 means the credentials died.
@@ -1256,13 +1519,9 @@ impl Drive {
             // names only the item; the preceding `item/started` carries the
             // command or the diff.
             "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
-                self.requests.insert(
-                    id.clone(),
-                    PendingRequest {
-                        wire_id,
-                        questions: None,
-                    },
-                );
+                let reply = Reply::Decision;
+                self.requests
+                    .insert(id.clone(), PendingRequest { wire_id, reply });
                 Request::Permission(PermissionRequest {
                     id,
                     tool: self.tool_for(method, params),
@@ -1274,15 +1533,36 @@ impl Drive {
                     detail: params["reason"].as_str().map(str::to_owned),
                 })
             }
+            // MCP tool approvals name the server, not the item; other elicitations are declined.
+            "mcpServer/elicitation/request"
+                if params["_meta"]["codex_approval_kind"] == "mcp_tool_call" =>
+            {
+                let reply = Reply::Action;
+                self.requests
+                    .insert(id.clone(), PendingRequest { wire_id, reply });
+                // `persist` lists the remember forms offered; only "session" maps to a choice.
+                let persist = &params["_meta"]["persist"];
+                let session = *persist == "session"
+                    || persist
+                        .as_array()
+                        .is_some_and(|forms| forms.iter().any(|f| *f == "session"));
+                let mut options = vec![PermissionChoice::AllowOnce];
+                if session {
+                    options.push(PermissionChoice::AllowAlways);
+                }
+                options.push(PermissionChoice::DenyOnce);
+                Request::Permission(PermissionRequest {
+                    id,
+                    tool: self.mcp_tool_for(params),
+                    options,
+                    detail: params["message"].as_str().map(str::to_owned),
+                })
+            }
             "item/tool/requestUserInput" => {
                 let questions = questions(&params["questions"]);
-                self.requests.insert(
-                    id.clone(),
-                    PendingRequest {
-                        wire_id,
-                        questions: Some(questions.clone()),
-                    },
-                );
+                let reply = Reply::Answers(questions.clone());
+                self.requests
+                    .insert(id.clone(), PendingRequest { wire_id, reply });
                 Request::Question(QuestionRequest { id, questions })
             }
             other => {
@@ -1308,13 +1588,28 @@ impl Drive {
         let Some(pending) = self.requests.remove(&request) else {
             return Ok(());
         };
-        let response = match (&pending.questions, answer) {
-            (None, Answer::Permission(choice)) => json!({ "decision": match choice {
+        let response = match (&pending.reply, answer) {
+            (Reply::Decision, Answer::Permission(choice)) => json!({ "decision": match choice {
                 PermissionChoice::AllowOnce => "accept",
                 PermissionChoice::AllowAlways => "acceptForSession",
                 _ => "decline",
             }}),
-            (Some(questions), Answer::Question(answers)) => question_response(questions, &answers),
+            // An MCP tool-call approval; the session form rides `_meta.persist`.
+            (Reply::Action, Answer::Permission(choice)) => match choice {
+                PermissionChoice::AllowOnce => json!({ "action": "accept" }),
+                PermissionChoice::AllowAlways => {
+                    json!({ "action": "accept", "_meta": { "persist": "session" } })
+                }
+                _ => json!({ "action": "decline" }),
+            },
+            (Reply::Answers(questions), Answer::Question(answers)) => {
+                question_response(questions, &answers)
+            }
+            // Neither `decline` form takes a message (generated schema, 0.154.0).
+            (Reply::Decision, Answer::Deny { .. }) => json!({ "decision": "decline" }),
+            (Reply::Action, Answer::Deny { .. }) => json!({ "action": "decline" }),
+            (reply, Answer::Cancel) => cancel_reply(reply),
+            // A shape mismatch; the engine refuses these before they get here.
             _ => json!({ "decision": "decline" }),
         };
         self.wire.respond(pending.wire_id, response).await?;
@@ -1325,24 +1620,42 @@ impl Drive {
     /// only what the request itself says.
     fn tool_for(&self, method: &str, params: &Value) -> ToolUpdate {
         let item_id = params["itemId"].as_str().unwrap_or_default();
+        let kind = if method.contains("fileChange") {
+            ToolKind::Edit
+        } else {
+            ToolKind::Execute
+        };
         self.tools
             .get(item_id)
             .cloned()
-            .unwrap_or_else(|| ToolUpdate {
-                id: ToolId::new(item_id),
-                kind: if method.contains("fileChange") {
-                    ToolKind::Edit
-                } else {
-                    ToolKind::Execute
-                },
-                title: "Approval required".into(),
-                status: ToolStatus::Running,
-                input: ToolInput::None,
-                output: None,
-                diffs: Vec::new(),
-                locations: Vec::new(),
-                raw: None,
-            })
+            .unwrap_or_else(|| approval_stub(item_id, kind))
+    }
+
+    /// The MCP call an approval elicitation is about: a tracked call on the request's
+    /// server, ranked by its tool quoted in the message, then its arguments in `tool_params`.
+    fn mcp_tool_for(&self, params: &Value) -> ToolUpdate {
+        let server = params["serverName"].as_str().unwrap_or_default();
+        let message = params["message"].as_str().unwrap_or_default();
+        let on_server =
+            |t: &&ToolUpdate| matches!(&t.kind, ToolKind::Mcp { server: s, .. } if s == server);
+        let rank = |t: &&ToolUpdate| {
+            let quoted = match &t.kind {
+                ToolKind::Mcp { tool, .. } => message.contains(&format!("\"{tool}\"")),
+                _ => false,
+            };
+            let arguments = t.raw.as_ref().map(|raw| &raw.input["arguments"]);
+            (quoted, arguments == Some(&params["_meta"]["tool_params"]))
+        };
+        let unknown = ToolKind::Mcp {
+            server: server.to_owned(),
+            tool: String::new(),
+        };
+        self.tools
+            .values()
+            .filter(on_server)
+            .max_by_key(rank)
+            .cloned()
+            .unwrap_or_else(|| approval_stub("", unknown))
     }
 
     /// `turn/steer` into the running wire turn; refused when none is known.
@@ -1404,9 +1717,8 @@ impl Drive {
         Ok(items)
     }
 
-    /// `turn/start` params: every option rides each turn. `summary` opts
-    /// into reasoning summaries (none stream without it, probed 2026-09-03);
-    /// `fast` resolves the model's fast tier, and "default" is never sent.
+    /// `turn/start` params: selected options (no `default` tier), plan mode, the output schema.
+    /// `summary` turns on reasoning summaries (probed 2026-09-03).
     fn turn_params(&mut self, items: Vec<Value>) -> Value {
         let mut params = json!({
             "threadId": self.thread_id,
@@ -1415,14 +1727,26 @@ impl Drive {
             "summary": "auto",
         });
         let option = |key: &str| selected(&self.info, key);
-        for (key, param) in [
-            ("model", "model"),
-            ("effort", "effort"),
-            ("mode", "approvalPolicy"),
-        ] {
+        for key in ["model", "effort"] {
             if let Some(value) = option(key) {
-                params[param] = json!(value);
+                params[key] = json!(value);
             }
+        }
+        // Policy and plan mode stick to the thread (probed 0.154.0): plan keeps the policy.
+        let mode = option("mode");
+        let plan = mode.as_deref() == Some("plan");
+        if let Some(policy) = mode.filter(|_| !plan) {
+            params["approvalPolicy"] = json!(policy);
+        }
+        if plan || self.in_plan {
+            params["collaborationMode"] = json!({
+                "mode": if plan { "plan" } else { "default" },
+                "settings": {
+                    "model": option("model"),
+                    "reasoning_effort": option("effort"),
+                    "developer_instructions": null, // codex's own prompt for the mode
+                },
+            });
         }
         if let Some(sandbox) = option("sandbox") {
             params["sandboxPolicy"] = json!({ "type": sandbox_policy(&sandbox) });
@@ -1434,6 +1758,10 @@ impl Drive {
             == Some(&ConfigValue::Bool(true));
         if fast && let Some(tier) = option("model").and_then(|m| fast_tier(&self.models, &m)) {
             params["serviceTier"] = json!(tier);
+        }
+        // `outputSchema` holds for one turn (0.154.0 schema), so it rides every one.
+        if let Some(schema) = &self.request.options.output_schema {
+            params["outputSchema"] = schema.clone();
         }
         params
     }
@@ -1451,6 +1779,24 @@ impl Drive {
         self.events
             .content(kind, self.child_tool.clone(), Extensions::new())
             .await
+    }
+
+    /// A warning about our own doing: the launch flag alone, or a revert's
+    /// model mismatch while the session runs the recorded model (0.154.0).
+    fn is_own_noise(&self, text: &str) -> bool {
+        if text.starts_with(&format!(
+            "Under-development features enabled: {USER_INPUT_FEATURE}. "
+        )) {
+            return true;
+        }
+        let reverting = self
+            .pending
+            .values()
+            .any(|p| matches!(p, Pending::Rollback(_)));
+        reverting
+            && selected(&self.info, "model").is_some_and(|model| {
+                text.starts_with(&format!("This session was recorded with model `{model}` "))
+            })
     }
 }
 
@@ -1548,6 +1894,7 @@ fn tool_update(item: &Value) -> ToolUpdate {
             name: item_type.to_owned(),
             input: item.clone(),
         }),
+        subagent: None,
     }
 }
 
@@ -1615,6 +1962,32 @@ fn question_response(questions: &[Question], answers: &[QuestionAnswer]) -> Valu
     json!({ "answers": map })
 }
 
+/// The reply that withdraws a request; `cancel` also interrupts the turn only for command
+/// and file approvals (generated schema, 0.154.0). A question has no cancel: no answers.
+fn cancel_reply(reply: &Reply) -> Value {
+    match reply {
+        Reply::Decision => json!({ "decision": "cancel" }),
+        Reply::Action => json!({ "action": "cancel" }),
+        Reply::Answers(_) => json!({ "answers": {} }),
+    }
+}
+
+/// A running stand-in for an approval's tool when no tracked item matches.
+fn approval_stub(id: &str, kind: ToolKind) -> ToolUpdate {
+    ToolUpdate {
+        id: ToolId::new(id),
+        kind,
+        title: "Approval required".into(),
+        status: ToolStatus::Running,
+        input: ToolInput::None,
+        output: None,
+        diffs: Vec::new(),
+        locations: Vec::new(),
+        raw: None,
+        subagent: None,
+    }
+}
+
 /// The human text of a warning-shaped notification.
 fn notice_text(params: &Value) -> String {
     params["message"]
@@ -1624,12 +1997,46 @@ fn notice_text(params: &Value) -> String {
         .unwrap_or_else(|| params.to_string())
 }
 
-/// `account/rateLimits` → quota windows; `primary` and `secondary` are the
-/// plan's two windows (300 min and 10080 min observed), and `planType` names
-/// the plan. `windowDurationMins` is sometimes absent; T3 falls back to the
-/// plan's known pair (5h/weekly, the secondary monthly on free/go plans).
-fn plan_usage(rate_limits: &Value) -> Option<PlanUsage> {
+/// A hook run as one line (0.154.0 `HookRunSummary`): event, status, then the
+/// hook's own output entries, or its `statusMessage` when it has none.
+fn hook_text(run: &Value) -> String {
+    let mut own: Vec<&str> = run["entries"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e["text"].as_str())
+        .collect();
+    if own.is_empty() {
+        own.extend(run["statusMessage"].as_str());
+    }
+    let event = run["eventName"].as_str().unwrap_or("unknown");
+    let head = format!(
+        "hook {event} {}",
+        run["status"].as_str().unwrap_or("unknown")
+    );
+    match own.is_empty() {
+        true => head,
+        false => format!("{head}: {}", own.join("; ")),
+    }
+}
+
+/// `account/rateLimits/read` result or `/updated` params → the plan's two
+/// windows (`primary`, `secondary`), its name, and banked resets.
+fn plan_usage(result: &Value) -> Option<PlanUsage> {
+    // The legacy `rateLimits` can name another limit; prefer codex's own.
+    let rate_limits = match &result["rateLimitsByLimitId"]["codex"] {
+        Value::Null => &result["rateLimits"],
+        codex => codex,
+    };
+    // Another limit's snapshot (a model-specific one) is not the account's.
+    if rate_limits["limitId"]
+        .as_str()
+        .is_some_and(|id| id != "codex")
+    {
+        return None;
+    }
     let plan = rate_limits["planType"].as_str().map(str::to_owned);
+    // Durations can be absent: fall back to 5h/weekly (monthly secondary on free/go).
     let monthly = matches!(plan.as_deref(), Some("free" | "go"));
     let secondary_default = if monthly { 43200 } else { 10080 };
     let windows: Vec<UsageWindow> = [("primary", 300), ("secondary", secondary_default)]
@@ -1651,7 +2058,26 @@ fn plan_usage(rate_limits: &Value) -> Option<PlanUsage> {
     (!windows.is_empty()).then(|| PlanUsage {
         plan,
         windows,
+        reset_credits: reset_credits(&result["rateLimitResetCredits"]),
         fetched_at: SystemTime::now(),
+    })
+}
+
+/// `rateLimitResetCredits` → the usable count and the soonest expiry among
+/// `available` credits. `None` when the field is absent (the notification).
+fn reset_credits(summary: &Value) -> Option<ResetCredits> {
+    let available = u32::try_from(summary["availableCount"].as_u64()?).unwrap_or(u32::MAX);
+    let next_expires_at = summary["credits"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|credit| credit["status"] == "available")
+        .filter_map(|credit| credit["expiresAt"].as_u64())
+        .min()
+        .map(|secs| UNIX_EPOCH + Duration::from_secs(secs));
+    Some(ResetCredits {
+        available,
+        next_expires_at,
     })
 }
 
@@ -1731,17 +2157,26 @@ fn default_effort(models: &Value, model: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// The `model/list` catalog as config choices; hidden entries stay hidden.
+/// The `model/list` catalog as config choices, each with its own effort
+/// levels and Fast mode; hidden entries stay hidden.
 fn model_choices(models: &Value) -> Vec<ConfigChoice> {
     models
         .as_array()
         .into_iter()
         .flatten()
         .filter(|m| m["hidden"].as_bool() != Some(true))
-        .map(|m| ConfigChoice {
-            value: m["id"].as_str().unwrap_or_default().to_owned(),
-            label: m["displayName"].as_str().unwrap_or_default().to_owned(),
-            description: m["description"].as_str().map(str::to_owned),
+        .map(|m| {
+            let id = m["id"].as_str().unwrap_or_default();
+            let levels = effort_choices(models, id);
+            let fast = fast_tier(models, id).is_some();
+            ConfigChoice {
+                options: model_options(levels, default_effort(models, id), fast),
+                ..ConfigChoice::new(
+                    id,
+                    m["displayName"].as_str().unwrap_or_default(),
+                    m["description"].as_str().map(str::to_owned),
+                )
+            }
         })
         .collect()
 }
@@ -1753,11 +2188,9 @@ fn effort_choices(models: &Value, model: &str) -> Vec<ConfigChoice> {
         .into_iter()
         .flatten()
         .filter_map(|level| {
-            Some(ConfigChoice {
-                value: level["reasoningEffort"].as_str()?.to_owned(),
-                label: level["reasoningEffort"].as_str()?.to_owned(),
-                description: level["description"].as_str().map(str::to_owned),
-            })
+            let effort = level["reasoningEffort"].as_str()?;
+            let description = level["description"].as_str().map(str::to_owned);
+            Some(ConfigChoice::new(effort, effort, description))
         })
         .collect()
 }
@@ -1766,11 +2199,7 @@ fn effort_choices(models: &Value, model: &str) -> Vec<ConfigChoice> {
 /// `model/list`). Tiers are identical across the models that have them, so
 /// one option serves all; `turn/start` resolves "default" per model.
 fn tier_choices(models: &Value) -> Vec<ConfigChoice> {
-    let mut choices = vec![ConfigChoice {
-        value: "default".into(),
-        label: "Standard".into(),
-        description: None,
-    }];
+    let mut choices = vec![ConfigChoice::new("default", "Standard", None)];
     for tier in models
         .as_array()
         .into_iter()
@@ -1782,11 +2211,11 @@ fn tier_choices(models: &Value) -> Vec<ConfigChoice> {
             continue;
         };
         if choices.iter().all(|c| c.value != id) {
-            choices.push(ConfigChoice {
-                value: id.to_owned(),
-                label: tier["name"].as_str().unwrap_or(id).to_owned(),
-                description: tier["description"].as_str().map(str::to_owned),
-            });
+            choices.push(ConfigChoice::new(
+                id,
+                tier["name"].as_str().unwrap_or(id),
+                tier["description"].as_str().map(str::to_owned),
+            ));
         }
     }
     choices
@@ -1896,24 +2325,76 @@ mod tests {
     #[test]
     fn plan_usage_falls_back_when_durations_are_absent() {
         // The observed shape carries durations; older frames may not.
-        let usage = plan_usage(&json!({
+        let usage = plan_usage(&json!({ "rateLimits": {
             "planType": "plus",
             "primary": { "usedPercent": 12.4 },
             "secondary": { "usedPercent": 55.6 },
-        }))
+        }}))
         .unwrap();
         let labels: Vec<&str> = usage.windows.iter().map(|w| w.label.as_str()).collect();
         assert_eq!(labels, vec!["Session", "Week"]);
         assert_eq!(usage.windows[0].used_percent, 12);
 
         // free/go plans meter the secondary window monthly.
-        let usage = plan_usage(&json!({
+        let usage = plan_usage(&json!({ "rateLimits": {
             "planType": "free",
             "primary": { "usedPercent": 1.0 },
             "secondary": { "usedPercent": 2.0 },
-        }))
+        }}))
         .unwrap();
         assert_eq!(usage.windows[1].label, "Month");
+    }
+
+    #[test]
+    fn plan_usage_reads_the_codex_limit_and_zero_credits() {
+        // The 0.154.0 shape, with the legacy field set to another limit.
+        let usage = plan_usage(&json!({
+            "rateLimits": { "limitId": "other", "primary": { "usedPercent": 90, "windowDurationMins": 300 } },
+            "rateLimitsByLimitId": { "codex": {
+                "limitId": "codex",
+                "primary": { "usedPercent": 8, "windowDurationMins": 300, "resetsAt": 1790484843 },
+            }},
+            "rateLimitResetCredits": { "availableCount": 0, "credits": [] },
+        }))
+        .unwrap();
+        assert_eq!(usage.windows[0].used_percent, 8);
+        let credits = usage.reset_credits.unwrap();
+        assert_eq!(credits.available, 0);
+        assert_eq!(credits.next_expires_at, None);
+    }
+
+    #[test]
+    fn reset_credits_expire_with_the_soonest_available_one() {
+        let usage = plan_usage(&json!({
+            "rateLimits": { "primary": { "usedPercent": 1 } },
+            "rateLimitResetCredits": { "availableCount": 1, "credits": [
+                { "id": "a", "status": "available", "expiresAt": 1_800_000_000, "grantedAt": 1, "resetType": "x" },
+                { "id": "b", "status": "redeemed", "expiresAt": 1_700_000_000, "grantedAt": 1, "resetType": "x" },
+            ]},
+        }))
+        .unwrap();
+        let credits = usage.reset_credits.unwrap();
+        assert_eq!(credits.available, 1);
+        assert_eq!(
+            credits.next_expires_at,
+            Some(UNIX_EPOCH + Duration::from_secs(1_800_000_000))
+        );
+    }
+
+    #[test]
+    fn rate_limit_notification_carries_no_credits() {
+        let usage =
+            plan_usage(&json!({ "rateLimits": { "primary": { "usedPercent": 1 } } })).unwrap();
+        assert_eq!(usage.reset_credits, None);
+    }
+
+    #[test]
+    fn a_push_for_another_limit_is_skipped() {
+        let other =
+            json!({ "rateLimits": { "limitId": "other", "primary": { "usedPercent": 1 } } });
+        assert_eq!(plan_usage(&other), None);
+        let unnamed = json!({ "rateLimits": { "primary": { "usedPercent": 1 } } });
+        assert_eq!(plan_usage(&unnamed).unwrap().windows.len(), 1);
     }
 
     #[test]

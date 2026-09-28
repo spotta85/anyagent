@@ -16,8 +16,8 @@ use tokio::sync::mpsc;
 
 use crate::adapter::{
     Adapter, CLOSE_GRACE, ConnectRequest, DriverCommand, DriverConnection, DriverEvent, DriverInfo,
-    Emitter, FRAME_BUFFER, Gone, HANDSHAKE_TIMEOUT, LineWire, WireRecorder, attach, level_choices,
-    offers, plan_entries, selected, set_effort_option, set_select_option,
+    Emitter, FRAME_BUFFER, Gone, HANDSHAKE_TIMEOUT, LineWire, WireRecorder, attach, child_env_set,
+    level_choices, offers, plan_entries, selected, set_effort_option, set_select_option,
 };
 use crate::agent::{
     AccountInfo, AgentDetails, AgentInstallation, AuthKind, AuthStatus, Capabilities, Capability,
@@ -87,21 +87,21 @@ impl Adapter for AcpAdapter {
         };
         let mut child = process::spawn(Spawn {
             exec_path: request.installation.executable_path.clone(),
-            args: self.args.clone(),
+            args: [&self.args[..], &request.options.args].concat(),
             cwd: request.options.cwd().clone(),
-            env: env.clone(),
+            env: crate::adapter::launch_env(&request.installation, &request.options)?,
         })
         .await?;
         let mut wire = Wire::over(&mut child, recorder);
 
         // ACP never says which credential opened the session: a documented
-        // API key in the env is taken as the one in use, else the catalog's
-        // proven kind.
+        // API key in the session's env, else the process env, is taken as
+        // the one in use, else the catalog's proven kind.
         let open_auth_kind = self.profile.and_then(|p| {
             let keyed = p
                 .api_key_env
                 .iter()
-                .any(|var| std::env::var(var).is_ok_and(|v| !v.trim().is_empty()));
+                .any(|var| child_env_set(&request.options, var));
             p.open_auth_kind
                 .clone()
                 .map(|kind| if keyed { AuthKind::ApiKey } else { kind })
@@ -182,6 +182,7 @@ impl Adapter for AcpAdapter {
                 held_prompt: None,
                 retry: None,
                 login: crate::adapter::login_in(login, &env),
+                instructions: crate::adapter::first_prompt_instructions(&request.options),
             }
             .run(cmd_rx),
         );
@@ -410,10 +411,10 @@ struct CursorAbout {
     account: Option<AccountInfo>,
 }
 
-/// Runs `about` before the ACP handshake. `userEmail: null` means logged
-/// out and fails typed with the catalog login command, since Cursor's own
-/// `authenticate` would start a browser login instead (read from the
-/// 2026.09.02 bundle). A failed or unparseable `about` reports nothing.
+/// Runs `about` with the session's env before the ACP handshake. A null
+/// `userEmail` is logged out: typed with the catalog login, since Cursor's
+/// `authenticate` would start a browser login (2026.09.02 bundle). A failed
+/// or unparseable `about` reports nothing.
 async fn cursor_about(
     installation: &AgentInstallation,
     options: &crate::agent::SessionOptions,
@@ -421,6 +422,7 @@ async fn cursor_about(
     let mut command = tokio::process::Command::new(&installation.executable_path);
     command
         .args(["about", "--format", "json"])
+        .envs(crate::adapter::launch_env(installation, options)?)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -633,11 +635,11 @@ fn sync_first_class_models(info: &mut DriverInfo, models: &Value) {
         .iter()
         .filter_map(|m| {
             let id = m["modelId"].as_str()?;
-            Some(ConfigChoice {
-                value: id.to_owned(),
-                label: m["name"].as_str().unwrap_or(id).to_owned(),
-                description: m["description"].as_str().map(str::to_owned),
-            })
+            Some(ConfigChoice::new(
+                id,
+                m["name"].as_str().unwrap_or(id),
+                m["description"].as_str().map(str::to_owned),
+            ))
         })
         .collect();
     let current = list.iter().find(|m| m["modelId"].as_str() == current_id);
@@ -647,11 +649,11 @@ fn sync_first_class_models(info: &mut DriverInfo, models: &Value) {
         .flatten()
         .filter_map(|e| {
             let value = e["value"].as_str().or(e["id"].as_str())?;
-            Some(ConfigChoice {
-                value: value.to_owned(),
-                label: e["label"].as_str().unwrap_or(value).to_owned(),
-                description: e["description"].as_str().map(str::to_owned),
-            })
+            Some(ConfigChoice::new(
+                value,
+                e["label"].as_str().unwrap_or(value),
+                e["description"].as_str().map(str::to_owned),
+            ))
         })
         .collect();
     let effort = selected(info, "effort")
@@ -801,11 +803,7 @@ fn apply_session_config(
                 choices: modes
                     .available_modes
                     .iter()
-                    .map(|m| ConfigChoice {
-                        value: m.id.0.to_string(),
-                        label: m.name.clone(),
-                        description: m.description.clone(),
-                    })
+                    .map(|m| ConfigChoice::new(&*m.id.0, &m.name, m.description.clone()))
                     .collect(),
             },
             current: Some(ConfigValue::Text(modes.current_mode_id.0.to_string())),
@@ -888,11 +886,7 @@ fn select_choices(options: &acp::SessionConfigSelectOptions) -> Vec<ConfigChoice
         _ => Vec::new(),
     };
     flat.iter()
-        .map(|o| ConfigChoice {
-            value: o.value.0.to_string(),
-            label: o.name.clone(),
-            description: o.description.clone(),
-        })
+        .map(|o| ConfigChoice::new(&*o.value.0, &o.name, o.description.clone()))
         .collect()
 }
 
@@ -986,6 +980,8 @@ struct Drive {
     retry: Option<Value>,
     /// Runnable login methods from `initialize`, for mid-session auth loss.
     login: Vec<LoginMethod>,
+    /// Instructions the first prompt still owes (ACP has no system prompt).
+    instructions: Option<String>,
 }
 
 impl Drive {
@@ -1026,6 +1022,7 @@ impl Drive {
                 // this exact prompt; spec-conformant agents ignore `_meta`.
                 self.prompt_seq += 1;
                 let pid = format!("p{}", self.prompt_seq);
+                let input = crate::adapter::with_instructions(&mut self.instructions, input);
                 let blocks = self.prompt_blocks(&input).await?;
                 self.usage_chars += prompt_chars(&blocks);
                 let params = json!({
@@ -1132,10 +1129,9 @@ impl Drive {
             }
             DriverCommand::Rollback(turns, _) => {
                 self.events
-                    .diagnostic(
-                        DiagnosticLevel::Warning,
-                        format!("rollback({turns}) is not supported by the ACP adapter"),
-                    )
+                    .rollback_refused(format!(
+                        "rollback({turns}) is not supported by the ACP adapter"
+                    ))
                     .await?;
             }
             DriverCommand::Close => unreachable!("handled in run"),
@@ -1317,6 +1313,7 @@ impl Drive {
                         name: c.name,
                         description: c.description,
                         input_hint: None,
+                        source: crate::agent::CommandSource::Builtin,
                     })
                     .collect();
                 return self.set_commands(commands).await;
@@ -1661,6 +1658,7 @@ impl Drive {
                         .as_str()
                         .filter(|h| !h.is_empty())
                         .map(str::to_owned),
+                    source: crate::agent::CommandSource::Builtin,
                 })
             })
             .collect();
@@ -1865,11 +1863,15 @@ impl Drive {
         answer: crate::event::Answer,
     ) -> Result<(), Gone> {
         if let Some(pending) = self.permissions.remove(&request) {
-            let outcome = match answer {
-                crate::event::Answer::Permission(choice) => option_for(choice, &pending.options)
-                    .map(|option_id| json!({ "outcome": "selected", "optionId": option_id })),
-                crate::event::Answer::Question(_) => None,
+            // A reject option has no message; `Cancel` sends `cancelled` (ACP schema 1.7).
+            let choice = match answer {
+                crate::event::Answer::Permission(choice) => Some(choice),
+                crate::event::Answer::Deny { .. } => Some(PermissionChoice::DenyOnce),
+                _ => None,
             };
+            let outcome = choice
+                .and_then(|choice| option_for(choice, &pending.options))
+                .map(|option_id| json!({ "outcome": "selected", "optionId": option_id }));
             let outcome = outcome.unwrap_or(json!({ "outcome": "cancelled" }));
             self.wire
                 .respond(pending.wire_id, json!({ "outcome": outcome }))
@@ -1889,7 +1891,8 @@ impl Drive {
             (crate::event::Answer::Question(answers), QuestionWire::Interaction) => {
                 interaction_response(&pending.questions, &answers)
             }
-            (crate::event::Answer::Permission(_), _) => None,
+            // `Cancel`, and a shape mismatch, send the cancelled reply.
+            _ => None,
         };
         let response = response.unwrap_or_else(|| cancelled_question(pending.wire));
         self.wire.respond(pending.wire_id, response).await?;
@@ -1903,7 +1906,13 @@ impl Drive {
             .tools
             .entry(update.tool_call_id.0.to_string())
             .or_insert_with(|| blank_tool(update.tool_call_id.0.as_ref()));
+        // A known MCP kind outlives a later bare `kind: other` (kiro, qwen).
+        let mcp = mcp_kind(update.meta.as_ref())
+            .or_else(|| matches!(tool.kind, ToolKind::Mcp { .. }).then(|| tool.kind.clone()));
         let appended = apply_fields(tool, update.fields);
+        if let Some(kind) = mcp {
+            tool.kind = kind;
+        }
         (tool.clone(), appended)
     }
 
@@ -1970,7 +1979,7 @@ fn text_kind(
 /// A `tool_call` notification as a full snapshot.
 fn fresh_tool(call: acp::ToolCall) -> ToolUpdate {
     let mut tool = blank_tool(call.tool_call_id.0.as_ref());
-    tool.kind = tool_kind(call.kind);
+    tool.kind = mcp_kind(call.meta.as_ref()).unwrap_or_else(|| tool_kind(call.kind));
     tool.status = tool_status(call.status);
     tool.title = call.title;
     tool.locations = call.locations.into_iter().map(|l| l.path).collect();
@@ -1991,6 +2000,7 @@ fn blank_tool(id: &str) -> ToolUpdate {
         diffs: Vec::new(),
         locations: Vec::new(),
         raw: None,
+        subagent: None,
     }
 }
 
@@ -2065,6 +2075,29 @@ fn tool_kind(kind: acp::ToolKind) -> ToolKind {
         K::Fetch => ToolKind::Fetch,
         _ => ToolKind::Other,
     }
+}
+
+/// An MCP call named in `_meta` (probed 2026-09-27): antigravity ACP server
+/// RC01 `mcp`, kiro 2.23.0 `kiro`, qwen 0.23.2 `provenance: "mcp"`.
+fn mcp_kind(meta: Option<&acp::Meta>) -> Option<ToolKind> {
+    let meta = meta?;
+    let (server, tool) = if let Some(mcp) = meta.get("mcp") {
+        (mcp["server"].as_str()?, mcp["tool"].as_str()?)
+    } else if let Some(kiro) = meta.get("kiro") {
+        (kiro["mcpServerName"].as_str()?, kiro["toolName"].as_str()?)
+    } else if meta.get("provenance")?.as_str()? == "mcp" {
+        // qwen's `toolName` is `mcp__<server>__<tool>`.
+        let server = meta.get("serverId")?.as_str()?;
+        let name = meta.get("toolName")?.as_str()?;
+        let tool = name.strip_prefix(&format!("mcp__{server}__"));
+        (server, tool.unwrap_or(name))
+    } else {
+        return None;
+    };
+    Some(ToolKind::Mcp {
+        server: server.to_owned(),
+        tool: tool.to_owned(),
+    })
 }
 
 /// ACP tool statuses to ours.

@@ -71,49 +71,18 @@
           ]
         },
         {
-          "type": "object",
-          "properties": {
-            "agent": {
-              "$ref": "#/definitions/AgentRef"
-            },
-            "cmd": {
-              "type": "string",
-              "const": "probe"
-            }
-          },
-          "required": [
-            "cmd",
-            "agent"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "agent": {
-              "$ref": "#/definitions/AgentRef"
-            },
-            "cmd": {
-              "type": "string",
-              "const": "plan_usage"
-            }
-          },
-          "required": [
-            "cmd",
-            "agent"
-          ]
-        },
-        {
-          "description": "The `SessionOptions` the wire exposes, as top-level fields of `open`\nand `generate`.",
+          "description": "The `SessionOptions` the wire exposes, as top-level fields of `open`,\n`generate`, `probe` and `plan_usage`.",
           "type": "object",
           "properties": {
             "agent": {
               "$ref": "#/definitions/AgentRef"
             },
             "dir": {
-              "type": "string"
-            },
-            "prompt": {
-              "type": "string"
+              "description": "Default: the temp dir.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "resume": {
               "type": [
@@ -156,6 +125,242 @@
                 "$ref": "#/definitions/ConfigValue"
               },
               "default": {}
+            },
+            "instructions": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "output_schema": {
+              "description": "A JSON schema each turn's final message must match (`open`, `generate`)."
+            },
+            "env": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {}
+            },
+            "args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "config_home": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "record_wire": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "cmd": {
+              "type": "string",
+              "const": "probe"
+            }
+          },
+          "required": [
+            "cmd",
+            "agent"
+          ]
+        },
+        {
+          "description": "The `SessionOptions` the wire exposes, as top-level fields of `open`,\n`generate`, `probe` and `plan_usage`.",
+          "type": "object",
+          "properties": {
+            "agent": {
+              "$ref": "#/definitions/AgentRef"
+            },
+            "resume": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "fork": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "fork_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "permission_mode": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PermissionMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "mcp_servers": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/McpServer"
+              },
+              "default": []
+            },
+            "configure": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/definitions/ConfigValue"
+              },
+              "default": {}
+            },
+            "instructions": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "output_schema": {
+              "description": "A JSON schema each turn's final message must match (`open`, `generate`)."
+            },
+            "env": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {}
+            },
+            "args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "config_home": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "record_wire": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "cmd": {
+              "type": "string",
+              "const": "plan_usage"
+            }
+          },
+          "required": [
+            "cmd",
+            "agent"
+          ]
+        },
+        {
+          "description": "The `SessionOptions` the wire exposes, as top-level fields of `open`,\n`generate`, `probe` and `plan_usage`.",
+          "type": "object",
+          "properties": {
+            "agent": {
+              "$ref": "#/definitions/AgentRef"
+            },
+            "dir": {
+              "type": "string"
+            },
+            "prompt": {
+              "type": "string"
+            },
+            "attachments": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "resume": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "fork": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "fork_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "permission_mode": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PermissionMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "mcp_servers": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/McpServer"
+              },
+              "default": []
+            },
+            "configure": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/definitions/ConfigValue"
+              },
+              "default": {}
+            },
+            "instructions": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "output_schema": {
+              "description": "A JSON schema each turn's final message must match (`open`, `generate`)."
+            },
+            "env": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {}
+            },
+            "args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "config_home": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "record_wire": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "cmd": {
               "type": "string",
@@ -170,7 +375,7 @@
           ]
         },
         {
-          "description": "The `SessionOptions` the wire exposes, as top-level fields of `open`\nand `generate`.",
+          "description": "The `SessionOptions` the wire exposes, as top-level fields of `open`,\n`generate`, `probe` and `plan_usage`.",
           "type": "object",
           "properties": {
             "agent": {
@@ -220,6 +425,41 @@
                 "$ref": "#/definitions/ConfigValue"
               },
               "default": {}
+            },
+            "instructions": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "output_schema": {
+              "description": "A JSON schema each turn's final message must match (`open`, `generate`)."
+            },
+            "env": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {}
+            },
+            "args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "config_home": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "record_wire": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "cmd": {
               "type": "string",
@@ -379,6 +619,13 @@
               "type": "boolean",
               "default": false
             },
+            "turn": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
             "cmd": {
               "type": "string",
               "const": "cancel"
@@ -424,7 +671,7 @@
       ]
     },
     "AgentRef": {
-      "description": "A catalog id like `\"claude\"`, or an ACP agent the catalog does not know.",
+      "description": "A catalog id like `\"claude\"`, a catalog agent at an exact path, or an unknown ACP agent.",
       "anyOf": [
         {
           "type": "string"
@@ -439,6 +686,9 @@
           "required": [
             "acp"
           ]
+        },
+        {
+          "$ref": "#/definitions/AgentAt"
         }
       ]
     },
@@ -464,6 +714,22 @@
         "path"
       ]
     },
+    "AgentAt": {
+      "description": "A catalog agent run from one executable: `{\"id\": \"claude\", \"path\": \"/opt/claude\"}`.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "path"
+      ]
+    },
     "PermissionMode": {
       "description": "How anyagent handles tool permission requests.",
       "oneOf": [
@@ -473,7 +739,12 @@
           "const": "Ask"
         },
         {
-          "description": "Allow each permission request once without forwarding it.",
+          "description": "Allow file edits once without asking; forward every other request.",
+          "type": "string",
+          "const": "AcceptEdits"
+        },
+        {
+          "description": "Allow each permission request once without forwarding it, except a\nproposed plan's approval.",
           "type": "string",
           "const": "AutoApprove"
         }
@@ -626,6 +897,32 @@
             "Question"
           ],
           "additionalProperties": false
+        },
+        {
+          "description": "Deny a permission once and tell the agent why.",
+          "type": "object",
+          "properties": {
+            "Deny": {
+              "type": "object",
+              "properties": {
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "message"
+              ]
+            }
+          },
+          "required": [
+            "Deny"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "Take the request back without choosing. The agent stops waiting for it.",
+          "type": "string",
+          "const": "Cancel"
         }
       ]
     },
@@ -1022,6 +1319,93 @@
           "additionalProperties": false
         },
         {
+          "description": "A running tool reports what it is doing, or for how long it has run.",
+          "type": "object",
+          "properties": {
+            "ToolProgress": {
+              "type": "object",
+              "properties": {
+                "tool_id": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "elapsed_ms": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "uint64",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "tool_id"
+              ]
+            }
+          },
+          "required": [
+            "ToolProgress"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "The whole turn's changes so far as one unified diff; replaces the previous one.",
+          "type": "object",
+          "properties": {
+            "TurnDiff": {
+              "type": "object",
+              "properties": {
+                "unified": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "unified"
+              ]
+            }
+          },
+          "required": [
+            "TurnDiff"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "The agent answered with another model than the selected one.",
+          "type": "object",
+          "properties": {
+            "ModelRerouted": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "string"
+                },
+                "to": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "from",
+                "to"
+              ]
+            }
+          },
+          "required": [
+            "ModelRerouted"
+          ],
+          "additionalProperties": false
+        },
+        {
           "description": "The agent's full current task list; replaces the previous one.",
           "type": "object",
           "properties": {
@@ -1042,6 +1426,27 @@
           },
           "required": [
             "PlanUpdated"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "The agent proposes this plan and waits for a go-ahead.",
+          "type": "object",
+          "properties": {
+            "PlanProposed": {
+              "type": "object",
+              "properties": {
+                "markdown": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "markdown"
+              ]
+            }
+          },
+          "required": [
+            "PlanProposed"
           ],
           "additionalProperties": false
         },
@@ -1184,6 +1589,17 @@
                   "items": {
                     "type": "string"
                   }
+                },
+                "usage": {
+                  "description": "Tokens this turn spent, when the agent reports them.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/TurnUsage"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
@@ -1268,6 +1684,17 @@
               "type": "null"
             }
           ]
+        },
+        "subagent": {
+          "description": "For a `Subagent` tool: who runs and what it reports.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SubagentInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -1328,13 +1755,15 @@
       ]
     },
     "ToolStatus": {
+      "description": "`Denied`: refused by the agent's permission rules or mode without asking the caller.",
       "type": "string",
       "enum": [
         "Pending",
         "Running",
         "Completed",
         "Failed",
-        "Cancelled"
+        "Cancelled",
+        "Denied"
       ]
     },
     "ToolInput": {
@@ -1467,6 +1896,41 @@
         "name",
         "input"
       ]
+    },
+    "SubagentInfo": {
+      "description": "What a subagent tool reports about the agent it spawned.",
+      "type": "object",
+      "properties": {
+        "role": {
+          "description": "The kind of agent, as the parent named it (\"general-purpose\").",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "description": "Its latest progress line.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tokens": {
+          "description": "Tokens as the agent reports them: claude the latest call's size, codex the child thread's total.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      }
     },
     "PlanEntry": {
       "type": "object",
@@ -2013,6 +2477,11 @@
           "description": "`compact` can summarize the session's context on demand.",
           "type": "string",
           "const": "Compact"
+        },
+        {
+          "description": "`SessionOptions::output_schema` is honored.",
+          "type": "string",
+          "const": "OutputSchema"
         }
       ]
     },
@@ -2025,7 +2494,7 @@
       ]
     },
     "ConfigOption": {
-      "description": "A session setting the agent advertises. Well-known ids: `model`, `effort`,\n`mode`, `sandbox`, `fast` (boolean, lower latency with increased usage).",
+      "description": "A session setting the agent advertises. Well-known ids: `model`, `effort`,\n`mode`, `sandbox`, `fast` (boolean, lower latency with increased usage).\nThe `mode` choice `plan` is plan mode on every agent that has one.",
       "type": "object",
       "properties": {
         "id": {
@@ -2112,6 +2581,13 @@
             "string",
             "null"
           ]
+        },
+        "options": {
+          "description": "For a `model` choice: the options this model offers once selected.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ConfigOption"
+          }
         }
       },
       "required": [
@@ -2133,11 +2609,56 @@
             "string",
             "null"
           ]
+        },
+        "source": {
+          "description": "Where the command comes from; absent on the wire means `Builtin`.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CommandSource"
+            }
+          ]
         }
       },
       "required": [
         "name",
         "description"
+      ]
+    },
+    "CommandSource": {
+      "description": "Where a slash command comes from.",
+      "oneOf": [
+        {
+          "description": "Not reported as a skill by the agent.",
+          "type": "string",
+          "const": "Builtin"
+        },
+        {
+          "description": "A skill on disk. `scope` is the agent's own word for where it lives (\"user\", \"repo\").",
+          "type": "object",
+          "properties": {
+            "Skill": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "scope": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "required": [
+            "Skill"
+          ],
+          "additionalProperties": false
+        }
       ]
     },
     "SessionConfiguration": {
@@ -2191,6 +2712,17 @@
             "$ref": "#/definitions/UsageWindow"
           }
         },
+        "reset_credits": {
+          "description": "Banked limit resets on the account. `None` when this report does not carry them.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResetCredits"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "fetched_at": {
           "$ref": "#/definitions/SystemTime"
         }
@@ -2227,6 +2759,31 @@
       "required": [
         "label",
         "used_percent"
+      ]
+    },
+    "ResetCredits": {
+      "description": "Limit resets the account can use now.",
+      "type": "object",
+      "properties": {
+        "available": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "next_expires_at": {
+          "description": "When the next one to be used expires.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SystemTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "available"
       ]
     },
     "Diagnostic": {
@@ -2315,6 +2872,35 @@
           "type": "string",
           "const": "Inferred"
         }
+      ]
+    },
+    "TurnUsage": {
+      "description": "Tokens one turn spent, summed over its model calls.",
+      "type": "object",
+      "properties": {
+        "input_tokens": {
+          "description": "Input tokens, cached ones included.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cached_input_tokens": {
+          "description": "The part of `input_tokens` read from cache.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "description": "Output tokens, reasoning included.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "input_tokens",
+        "cached_input_tokens",
+        "output_tokens"
       ]
     },
     "ErrorBody": {

@@ -20,6 +20,7 @@ use tokio::sync::mpsc;
 use crate::agent::{
     AgentDetails, AgentInstallation, ConfigChoice, ConfigId, ConfigKind, ConfigOption, ConfigValue,
     Input, LoginMethod, ResumeToken, RollbackScope, SessionConfiguration, SessionOptions,
+    SessionStart,
 };
 use crate::error::AgentError;
 use crate::event::{
@@ -69,6 +70,7 @@ pub(crate) enum DriverCommand {
         answer: Answer,
     },
     Configure(ConfigId, ConfigValue),
+    /// Must be answered with `DriverEvent::RolledBack`.
     Rollback(NonZeroU32, RollbackScope),
     /// Summarize the session's context now. Most wires run it as a turn of
     /// their own; the adapter only triggers it and lets its frames decode.
@@ -97,10 +99,15 @@ pub(crate) enum DriverEvent {
     /// Content and turn ends delivered before it belong to earlier turns;
     /// the engine drops them instead of attributing them to the new one.
     TurnAck,
+    /// Tokens the current turn has spent so far; the latest one before
+    /// `TurnEnded` rides on it.
+    TurnUsage(crate::event::TurnUsage),
     /// Wire evidence that the current turn ended.
     TurnEnded(StopReason),
     /// Outcome of the last `Steer` command.
     Steered(bool),
+    /// Outcome of the last `Rollback` command; `Err` carries the agent's reason.
+    RolledBack(Result<(), String>),
     /// The agent changed advertised details or configuration.
     InfoChanged(DriverInfo),
     /// The agent's credentials stopped working mid-session. The engine fails
@@ -164,13 +171,14 @@ pub(crate) trait Adapter: Send + Sync {
     /// Launch, handshake, and create the provider session.
     async fn connect(&self, request: ConnectRequest) -> Result<DriverConnection, AgentError>;
 
-    /// Plan quota for the logged-in account, from a short-lived process.
-    /// Default: this agent has no quota to report.
+    /// Plan quota for the login `options` point at, from a short-lived
+    /// process. Default: this agent has no quota to report.
     async fn plan_usage(
         &self,
         installation: &AgentInstallation,
+        options: &SessionOptions,
     ) -> Result<crate::event::PlanUsage, AgentError> {
-        let _ = installation;
+        let _ = (installation, options);
         Err(AgentError::UnsupportedFeature("plan usage".into()))
     }
 }
@@ -237,6 +245,11 @@ impl Emitter {
         .await
     }
 
+    /// A rollback that did not happen, with the reason the caller gets.
+    pub(crate) async fn rollback_refused(&self, reason: impl Into<String>) -> Result<(), Gone> {
+        self.send(DriverEvent::RolledBack(Err(reason.into()))).await
+    }
+
     /// The agent went away: report how it died before the stream closes.
     pub(crate) async fn exited(&self, child: &mut crate::process::Child) {
         let status = child.exit_status(CLOSE_GRACE).await;
@@ -290,28 +303,11 @@ pub(crate) fn set_select_option(
     choices: Vec<ConfigChoice>,
     current: Option<String>,
 ) {
-    let id = ConfigId::new(id);
-    info.details.config_options.retain(|o| o.id != id);
-    info.configuration.options.remove(&id);
-    if choices.is_empty() {
-        return;
-    }
-    let current = current
-        .filter(|c| choices.iter().any(|choice| &choice.value == c))
-        .map(ConfigValue::Text);
-    if let Some(current) = &current {
-        info.configuration
-            .options
-            .insert(id.clone(), current.clone());
-    }
-    info.details.config_options.push(ConfigOption {
+    replace_option(
+        info,
         id,
-        name: name.into(),
-        category: Some(category.into()),
-        kind: ConfigKind::Select { choices },
-        current,
-        live: true,
-    });
+        select_option(id, name, category, choices, current),
+    );
 }
 
 /// The `effort` option follows the selected model: these are the new
@@ -321,25 +317,14 @@ pub(crate) fn set_effort_option(
     choices: Vec<ConfigChoice>,
     current: Option<String>,
 ) {
-    set_select_option(
-        info,
-        "effort",
-        "Reasoning effort",
-        "thought_level",
-        choices,
-        current,
-    );
+    replace_option(info, "effort", effort_option(choices, current));
 }
 
 /// Levels as plain choices (value = label), for wires that list them by name.
 pub(crate) fn level_choices<'a>(levels: impl IntoIterator<Item = &'a str>) -> Vec<ConfigChoice> {
     levels
         .into_iter()
-        .map(|level| ConfigChoice {
-            value: level.to_owned(),
-            label: level.to_owned(),
-            description: None,
-        })
+        .map(|level| ConfigChoice::new(level, level, None))
         .collect()
 }
 
@@ -349,25 +334,96 @@ pub(crate) fn set_fast_option(info: &mut DriverInfo, current: Option<bool>, live
     info.details.config_options.retain(|option| option.id != id);
     info.configuration.options.remove(&id);
     if let Some(current) = current {
-        let value = ConfigValue::Bool(current);
         let position = info
             .details
             .config_options
             .iter()
             .position(|option| option.id.as_str() == "model")
             .map_or(0, |index| index + 1);
-        info.details.config_options.insert(
-            position,
-            ConfigOption {
-                id: id.clone(),
-                name: "Fast mode".into(),
-                category: Some("speed".into()),
-                kind: ConfigKind::Boolean,
-                current: Some(value.clone()),
-                live,
-            },
-        );
-        info.configuration.options.insert(id, value);
+        info.details
+            .config_options
+            .insert(position, fast_option(current, live));
+        info.configuration
+            .options
+            .insert(id, ConfigValue::Bool(current));
+    }
+}
+
+/// One model's own options for its `model` choice: `effort` at the model's
+/// `default` level, and `fast` (off) when the model supports it.
+pub(crate) fn model_options(
+    levels: Vec<ConfigChoice>,
+    default: Option<String>,
+    fast: bool,
+) -> Vec<ConfigOption> {
+    let fast = fast.then(|| fast_option(false, true));
+    effort_option(levels, default)
+        .into_iter()
+        .chain(fast)
+        .collect()
+}
+
+/// The live `effort` select over these levels; `None` without levels.
+pub(crate) fn effort_option(
+    levels: Vec<ConfigChoice>,
+    current: Option<String>,
+) -> Option<ConfigOption> {
+    select_option(
+        "effort",
+        "Reasoning effort",
+        "thought_level",
+        levels,
+        current,
+    )
+}
+
+/// A live select; `None` without choices, and `current` dropped unless offered.
+fn select_option(
+    id: &str,
+    name: &str,
+    category: &str,
+    choices: Vec<ConfigChoice>,
+    current: Option<String>,
+) -> Option<ConfigOption> {
+    if choices.is_empty() {
+        return None;
+    }
+    let current = current
+        .filter(|c| choices.iter().any(|choice| &choice.value == c))
+        .map(ConfigValue::Text);
+    Some(ConfigOption {
+        id: ConfigId::new(id),
+        name: name.into(),
+        category: Some(category.into()),
+        kind: ConfigKind::Select { choices },
+        current,
+        live: true,
+    })
+}
+
+/// The Fast mode boolean.
+fn fast_option(current: bool, live: bool) -> ConfigOption {
+    ConfigOption {
+        id: ConfigId::new("fast"),
+        name: "Fast mode".into(),
+        category: Some("speed".into()),
+        kind: ConfigKind::Boolean,
+        current: Some(ConfigValue::Bool(current)),
+        live,
+    }
+}
+
+/// Puts `option` in place of option `id` (none removes it), keeping the
+/// configuration's value in step.
+fn replace_option(info: &mut DriverInfo, id: &str, option: Option<ConfigOption>) {
+    let id = ConfigId::new(id);
+    info.details.config_options.retain(|o| o.id != id);
+    info.configuration.options.remove(&id);
+    if let Some(option) = option {
+        if let Some(current) = &option.current {
+            info.configuration.options.insert(id, current.clone());
+        }
+        info.details.config_options.push(option);
     }
 }
 
@@ -411,6 +467,48 @@ pub(crate) fn config_home_env(
             installation.id
         ))),
     }
+}
+
+/// The child's env: the config-home variable, then the caller's `env` pairs,
+/// which win on a shared name (the child keeps its inherited env too).
+pub(crate) fn launch_env(
+    installation: &AgentInstallation,
+    options: &SessionOptions,
+) -> Result<Vec<(String, String)>, AgentError> {
+    let mut env = config_home_env(installation, options)?;
+    env.extend(options.env.0.clone());
+    Ok(env)
+}
+
+/// Whether the child sees `name` set and not blank: the session's `env`
+/// first, then the process env.
+pub(crate) fn child_env_set(options: &SessionOptions, name: &str) -> bool {
+    options
+        .env
+        .0
+        .get(name)
+        .cloned()
+        .or_else(|| std::env::var(name).ok())
+        .is_some_and(|v| !v.trim().is_empty())
+}
+
+/// Instructions owed to the first prompt, for agents with no system-prompt
+/// field: a new session's only; a resumed or forked one already has them.
+pub(crate) fn first_prompt_instructions(options: &SessionOptions) -> Option<String> {
+    matches!(options.start, SessionStart::New)
+        .then(|| options.instructions.clone())
+        .flatten()
+}
+
+/// Puts owed instructions before the prompt's text, separated by a blank
+/// line. A slash command passes untouched and leaves them for the next prompt.
+pub(crate) fn with_instructions(owed: &mut Option<String>, mut input: Input) -> Input {
+    if !input.text.starts_with('/')
+        && let Some(text) = owed.take()
+    {
+        input.text = format!("{text}\n\n{}", input.text);
+    }
+    input
 }
 
 /// Runnable login methods from the catalog, for a logged-out handshake and
@@ -522,4 +620,40 @@ pub(crate) fn cap(mut s: String, at: usize) -> String {
         s.truncate(end);
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Only a new session owes its instructions to the first prompt; a
+    /// resumed or forked one (ACP and agy refuse forks anyway) owes none.
+    #[test]
+    fn only_a_new_session_owes_instructions() {
+        let token = ResumeToken::new("t1");
+        let new = SessionOptions::in_dir(".").instructions("Be brief.");
+        assert_eq!(
+            first_prompt_instructions(&new).as_deref(),
+            Some("Be brief.")
+        );
+        let resumed = new.clone().resume(token.clone());
+        assert_eq!(first_prompt_instructions(&resumed), None);
+        let forked = new.fork_from(token, None);
+        assert_eq!(first_prompt_instructions(&forked), None);
+    }
+
+    /// Owed instructions lead the first plain prompt once; a slash command
+    /// before it passes untouched.
+    #[test]
+    fn instructions_skip_a_slash_command_and_are_paid_once() {
+        let mut owed = Some("Be brief.".to_owned());
+        let sent = |owed: &mut Option<String>, text: &str| {
+            with_instructions(owed, Input::text(text))
+                .as_text()
+                .to_owned()
+        };
+        assert_eq!(sent(&mut owed, "/init"), "/init");
+        assert_eq!(sent(&mut owed, "hi"), "Be brief.\n\nhi");
+        assert_eq!(sent(&mut owed, "again"), "again");
+    }
 }

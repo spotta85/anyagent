@@ -28,7 +28,7 @@ use crate::error::AgentError;
 use crate::event::{
     Answer, ChoiceId, CompletionSource, Delivery, DeliveryKind, Diagnostic, DiagnosticLevel, Event,
     EventKind, Extensions, MessageId, PermissionChoice, PromptId, QuestionAnswer, Request,
-    RequestId, SessionId, StopReason, ToolId, TurnContext, TurnId, TurnOrigin,
+    RequestId, SessionId, StopReason, ToolId, ToolKind, TurnContext, TurnId, TurnOrigin, TurnUsage,
 };
 
 /// Consumer event buffer. Generous because the engine never waits on it: a
@@ -113,7 +113,12 @@ enum Command {
     Configure(ConfigId, ConfigValue, Reply<()>),
     Rollback(NonZeroU32, RollbackScope, Reply<()>),
     Compact(Reply<()>),
-    Cancel { clear_queue: bool, reply: Reply<()> },
+    /// `turn` set: act only if it is the running turn.
+    Cancel {
+        turn: Option<TurnId>,
+        clear_queue: bool,
+        reply: Reply<()>,
+    },
     Close(Reply<()>),
 }
 
@@ -168,10 +173,8 @@ impl Session {
             .await
     }
 
-    /// Rewinds provider-owned conversation context by completed turns; the
-    /// files scope also restores agent-changed files to the cut point.
-    /// Requires an idle session and rollback support. `SessionUpdated`
-    /// confirms success; a diagnostic reports rejection.
+    /// Rewinds whole turns (and their file changes with the files scope) on an idle session.
+    /// Resolves once the agent answers; a refusal is `InvalidRequest(reason)`.
     pub async fn rollback(
         &self,
         turns: NonZeroU32,
@@ -193,8 +196,22 @@ impl Session {
     /// Stops the active turn. The session and the queue survive; the next
     /// queued prompt starts unless `clear_queue` is set.
     pub async fn cancel(&self, clear_queue: bool) -> Result<(), AgentError> {
-        self.send(|reply| Command::Cancel { clear_queue, reply })
-            .await
+        self.send(|reply| Command::Cancel {
+            turn: None,
+            clear_queue,
+            reply,
+        })
+        .await
+    }
+
+    /// Cancels `turn` only if it is the running turn; otherwise does nothing.
+    pub async fn cancel_turn(&self, turn: TurnId, clear_queue: bool) -> Result<(), AgentError> {
+        self.send(|reply| Command::Cancel {
+            turn: Some(turn),
+            clear_queue,
+            reply,
+        })
+        .await
     }
 
     /// Ends the agent session and waits for cleanup, capped by a grace period.
@@ -243,6 +260,7 @@ pub(crate) fn start(
         state: TurnState::Idle,
         queue: VecDeque::new(),
         steer: None,
+        rollback: None,
         steer_supported: connection
             .info
             .details
@@ -260,12 +278,15 @@ pub(crate) fn start(
         ),
         deadline: None,
         closing: None,
-        auto_approve: matches!(options.permission_mode, PermissionMode::AutoApprove),
+        permission_mode: options.permission_mode,
+        plan_proposed: false,
         stall: None,
         stall_after: options.stall_after.unwrap_or(STALL_WARNING),
         exit: None,
         noise_reported: false,
         awaiting_ack: false,
+        turn_usage: None,
+        background: BTreeSet::new(),
         last_status: SessionStatus::Idle,
         done: false,
     };
@@ -367,6 +388,13 @@ impl RequestShape {
                 }
                 format!("choice {choice:?} was not offered")
             }
+            (RequestShape::Permission(options), Answer::Deny { .. }) => {
+                if options.contains(&PermissionChoice::DenyOnce) {
+                    return Ok(());
+                }
+                "choice DenyOnce was not offered".into()
+            }
+            (_, Answer::Cancel) => return Ok(()),
             (RequestShape::Question(questions), Answer::Question(answers)) => {
                 if answers.len() != questions.len() {
                     format!(
@@ -424,6 +452,8 @@ struct Engine {
     queue: VecDeque<(PromptId, Input)>,
     /// A steer the adapter has not answered yet; resolved by `Steered`.
     steer: Option<(PromptId, Input, Reply<Delivery>)>,
+    /// A rollback's caller, waiting for `RolledBack`; dropped, it reads `SessionClosed`.
+    rollback: Option<Reply<()>>,
     steer_supported: bool,
     quiet_user: Option<Duration>,
     quiet_agent: Option<Duration>,
@@ -431,8 +461,11 @@ struct Engine {
     deadline: Option<Instant>,
     /// `close` callers waiting for the driver to finish.
     closing: Option<Vec<Reply<()>>>,
-    /// `PermissionMode::AutoApprove`: allow each permission request once.
-    auto_approve: bool,
+    /// Which permission requests the engine allows once without the caller.
+    permission_mode: PermissionMode,
+    /// A `PlanProposed` came and no request followed yet: the next one is
+    /// the plan's approval and always reaches the caller.
+    plan_proposed: bool,
     /// When mid-turn silence becomes a warning; re-armed by every driver
     /// event, off while the agent waits on the caller.
     stall: Option<Instant>,
@@ -442,6 +475,10 @@ struct Engine {
     noise_reported: bool,
     /// A `StartTurn` is unacknowledged: content arriving now is stale.
     awaiting_ack: bool,
+    /// Latest usage the adapter reported for the running turn.
+    turn_usage: Option<TurnUsage>,
+    /// Tools a turn ended with still running; their updates start no turn.
+    background: BTreeSet<ToolId>,
     /// The last status emitted, so `StatusChanged` fires only on change.
     last_status: SessionStatus,
     done: bool,
@@ -549,8 +586,14 @@ impl Engine {
             Command::Configure(id, value, reply) => {
                 let _ = reply.send(self.handle_configure(id, value).await);
             }
+            // The reply waits for the adapter's `RolledBack`.
             Command::Rollback(turns, scope, reply) => {
-                let _ = reply.send(self.handle_rollback(turns, scope).await);
+                match self.handle_rollback(turns, scope).await {
+                    Ok(()) => self.rollback = Some(reply),
+                    Err(e) => {
+                        let _ = reply.send(Err(e));
+                    }
+                }
             }
             Command::Compact(reply) => {
                 let result = self.handle_compact().await;
@@ -558,8 +601,12 @@ impl Engine {
                 self.sync_status().await;
                 let _ = reply.send(result);
             }
-            Command::Cancel { clear_queue, reply } => {
-                let _ = reply.send(self.handle_cancel(clear_queue).await);
+            Command::Cancel {
+                turn,
+                clear_queue,
+                reply,
+            } => {
+                let _ = reply.send(self.handle_cancel(turn, clear_queue).await);
             }
             Command::Close(reply) => self.shutdown(Some(reply)).await,
         }
@@ -679,7 +726,8 @@ impl Engine {
         self.forward(DriverCommand::Configure(id, value))
     }
 
-    /// Checks rollback support and idleness, then forwards.
+    /// Checks rollback support, idleness, and that no rollback is pending,
+    /// then forwards.
     async fn handle_rollback(
         &mut self,
         turns: NonZeroU32,
@@ -692,7 +740,7 @@ impl Engine {
         {
             return Err(AgentError::UnsupportedFeature("file rollback".into()));
         }
-        if matches!(self.state, TurnState::Running { .. }) {
+        if matches!(self.state, TurnState::Running { .. }) || self.rollback.is_some() {
             return Err(AgentError::SessionBusy);
         }
         self.forward(DriverCommand::Rollback(turns, scope))
@@ -715,7 +763,17 @@ impl Engine {
     /// Cancels the active turn; open requests close first. Idempotent.
     /// Clearing the queue also drops a steer still waiting for its verdict,
     /// or it would be requeued at turn end and run after the cancel.
-    async fn handle_cancel(&mut self, clear_queue: bool) -> Result<(), AgentError> {
+    async fn handle_cancel(
+        &mut self,
+        turn: Option<TurnId>,
+        clear_queue: bool,
+    ) -> Result<(), AgentError> {
+        // A named turn that is not the running one leaves everything as it is.
+        if let Some(named) = turn
+            && !matches!(&self.state, TurnState::Running { turn, .. } if *turn == named)
+        {
+            return Ok(());
+        }
         if clear_queue {
             self.queue.clear();
             if let Some((_, _, reply)) = self.steer.take() {
@@ -774,14 +832,29 @@ impl Engine {
         // bookkeeping (usage receipts, diagnostics) still passes.
         if self.awaiting_ack {
             match &ev {
-                DriverEvent::Event { kind, .. } if is_content(kind) => return,
-                DriverEvent::TurnEnded(_) => return,
+                DriverEvent::Event {
+                    kind,
+                    parent_tool_id,
+                    ..
+                } if is_content(kind, parent_tool_id.as_ref(), &self.background) => return,
+                DriverEvent::TurnEnded(_) | DriverEvent::TurnUsage(_) => return,
                 _ => {}
             }
         }
         match ev {
             DriverEvent::TurnAck => self.awaiting_ack = false,
             DriverEvent::Steered(accepted) => self.resolve_steer(accepted).await,
+            DriverEvent::RolledBack(outcome) => {
+                if let Some(reply) = self.rollback.take() {
+                    let _ = reply.send(outcome.map_err(AgentError::InvalidRequest));
+                }
+            }
+            // Usage outside a turn is nobody's; it must not reach the next one.
+            DriverEvent::TurnUsage(usage) => {
+                if matches!(self.state, TurnState::Running { .. }) {
+                    self.turn_usage = Some(usage);
+                }
+            }
             DriverEvent::TurnEnded(stop) => self.handle_turn_ended(stop).await,
             DriverEvent::InfoChanged(info) => self.handle_info_changed(info).await,
             DriverEvent::Exited { status, stderr } => self.exit = Some((status, stderr)),
@@ -807,12 +880,16 @@ impl Engine {
                 .await;
             return;
         }
-        // AutoApprove answers permissions itself; the caller never sees them.
-        // A request that does not offer a one-time allow is forwarded
-        // instead: a persistent rule is never chosen on the caller's behalf.
-        if self.auto_approve
-            && let EventKind::RequestOpened(Request::Permission(request)) = &kind
+        // The request right after a proposed plan approves it: never unasked.
+        let plan_approval =
+            matches!(kind, EventKind::RequestOpened(_)) && std::mem::take(&mut self.plan_proposed);
+        self.plan_proposed |= matches!(kind, EventKind::PlanProposed { .. });
+        // Allow once what the mode allows unasked. A request without a one-time
+        // allow is forwarded: a persistent rule is never chosen for the caller.
+        if let EventKind::RequestOpened(Request::Permission(request)) = &kind
+            && !plan_approval
             && request.options.contains(&PermissionChoice::AllowOnce)
+            && allows_unasked(self.permission_mode, &request.tool.kind)
         {
             let _ = self.forward(DriverCommand::Answer {
                 request: request.id.clone(),
@@ -820,7 +897,14 @@ impl Engine {
             });
             return;
         }
-        if matches!(self.state, TurnState::Idle) && is_content(&kind) {
+        // A settled tool no longer runs in the background.
+        if let EventKind::ToolUpdated(tool) = &kind
+            && !tool.status.is_active()
+        {
+            self.background.remove(&tool.id);
+        }
+        let parent = parent_tool_id.as_ref();
+        if matches!(self.state, TurnState::Idle) && is_content(&kind, parent, &self.background) {
             self.enter_running(TurnOrigin::Agent).await;
         }
         let turn = match &mut self.state {
@@ -1058,10 +1142,16 @@ impl Engine {
             )
             .await;
         }
+        self.background.extend(running_tools.iter().cloned());
         let background = running_tools.into_iter().collect();
+        let usage = self.turn_usage.take();
         self.push(
             ctx(None),
-            EventKind::TurnEnded { stop, background },
+            EventKind::TurnEnded {
+                stop,
+                background,
+                usage,
+            },
             Extensions::new(),
         )
         .await;
@@ -1071,6 +1161,7 @@ impl Engine {
         }
         self.stall = None;
         self.noise_reported = false;
+        self.plan_proposed = false;
         self.resolve_steer(false).await;
     }
 
@@ -1172,15 +1263,20 @@ impl Engine {
     }
 }
 
-/// Content opens an agent-originated turn when the session is idle;
-/// everything else is bookkeeping.
-fn is_content(kind: &EventKind) -> bool {
+/// Content opens an agent-originated turn when the session is idle; everything else is
+/// bookkeeping, as are updates of a `background` tool or one nested under it.
+fn is_content(kind: &EventKind, parent: Option<&ToolId>, background: &BTreeSet<ToolId>) -> bool {
     match kind {
         EventKind::TextDelta { .. }
         | EventKind::ReasoningDelta { .. }
         | EventKind::UserMessage { .. }
+        | EventKind::PlanProposed { .. }
         | EventKind::RequestOpened(_) => true,
-        EventKind::ToolUpdated(tool) => tool.status.is_active(),
+        EventKind::ToolUpdated(tool) => {
+            tool.status.is_active()
+                && !background.contains(&tool.id)
+                && !parent.is_some_and(|p| background.contains(p))
+        }
         _ => false,
     }
 }
@@ -1195,6 +1291,17 @@ fn is_engine_owned(kind: &EventKind) -> bool {
             | EventKind::SessionUpdated(_)
             | EventKind::StatusChanged(_)
     )
+}
+
+/// Whether the mode allows a permission for this tool kind without asking.
+fn allows_unasked(mode: PermissionMode, kind: &ToolKind) -> bool {
+    match mode {
+        PermissionMode::Ask => false,
+        PermissionMode::AcceptEdits => {
+            matches!(kind, ToolKind::Edit | ToolKind::Delete | ToolKind::Move)
+        }
+        PermissionMode::AutoApprove => true,
+    }
 }
 
 /// Keeps the open-request and running-tool sets current for one event.

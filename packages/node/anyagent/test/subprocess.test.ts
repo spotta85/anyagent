@@ -128,6 +128,7 @@ test("S6 process death rejects pending calls, fails iterators, and later calls",
   for (const p of pending) await rejects(p, "ProcessExited");
   await rejects(drain(session), "ProcessExited");
   await rejects(rt.discover(), "ProcessExited");
+  assert.equal(await rt.exited, null); // killed by a signal: no exit code
   await rt.close();
 });
 

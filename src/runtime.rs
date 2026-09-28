@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::adapter::{Adapter, ConnectRequest};
 use crate::agent::{
-    AgentDetails, AgentId, AgentInstallation, AuthStatus, Capabilities, Capability, Input,
+    AgentDetails, AgentId, AgentInstallation, AuthStatus, Capabilities, Capability, EnvVars, Input,
     InstallationSource, PermissionMode, SessionOptions, SessionStart,
 };
 use crate::error::AgentError;
@@ -35,9 +35,12 @@ pub struct Runtime {
     /// Installations known without discovery (tests and pinned agents).
     pinned: Vec<AgentInstallation>,
     profiles: &'static [crate::catalog::AgentProfile],
-    /// `plan_usage` results per installation, kept for `USAGE_CACHE_TTL`.
-    usage_cache: Mutex<HashMap<(AgentId, PathBuf), (Instant, PlanUsage)>>,
+    /// `plan_usage` results per installation and login, kept for `USAGE_CACHE_TTL`.
+    usage_cache: Mutex<HashMap<UsageKey, (Instant, PlanUsage)>>,
 }
+
+/// One cached login: agent, executable, config home, env, args.
+type UsageKey = (AgentId, PathBuf, Option<PathBuf>, EnvVars, Vec<String>);
 
 impl Default for Runtime {
     fn default() -> Self {
@@ -159,27 +162,23 @@ impl Runtime {
                 options: options.clone(),
             })
             .await?;
+        // Only an adapter that advertises it honours a schema; the dropped connection stops it.
+        let capabilities = &connection.info.details.capabilities;
+        if options.output_schema.is_some() && !capabilities.supports(Capability::OutputSchema) {
+            return Err(AgentError::UnsupportedFeature("output schema".into()));
+        }
         Ok(session::start(agent.clone(), connection, &options))
     }
-    /// One-shot generation: prompt in, the agent's reply text out. Opens a
-    /// throwaway session with tools disabled where the wire allows (claude,
-    /// pi) and every permission declined elsewhere, gathers the text until
-    /// the turn ends, and closes. Requires a new session; a tool event or a
-    /// question requiring a choice cancels generation. Include context
-    /// inline: path attachments cannot be opened without tools. Like the
-    /// probes, the session is never persisted (claude, codex, pi) or is
-    /// deleted at close (opencode), so it stays out of the user's history.
+    /// One-shot text: a throwaway, hands-off session (no tools, or every request declined) runs one
+    /// prompt; a tool event fails it. With an output schema the reply is the final message only.
     pub async fn generate(
         &self,
         agent: &AgentInstallation,
         options: SessionOptions,
         prompt: impl Into<Input>,
     ) -> Result<String, AgentError> {
-        if !matches!(options.start, SessionStart::New) {
-            return Err(AgentError::InvalidConfiguration(
-                "generate requires a new session".into(),
-            ));
-        }
+        require_new(&options, "generate")?;
+        let final_only = options.output_schema.is_some();
         // Hands-off regardless of the caller's mode: AutoApprove would let
         // the agent run tools before any request reached this loop.
         let mut options = options.permission_mode(PermissionMode::Ask);
@@ -200,16 +199,29 @@ impl Runtime {
                 "generate requires tool permissions or launch-time tool disabling".into(),
             ));
         }
-        let reply = collect_reply(&session, &mut events, prompt.into()).await;
+        let reply = collect_reply(&session, &mut events, prompt.into(), final_only).await;
         session.close().await.ok();
         reply
     }
 
-    /// Opens a throwaway session in the temp dir, reads the details the
-    /// handshake learned, and closes. A logged-out agent is a result, not
-    /// an error.
+    /// The details a throwaway handshake in the temp dir learns (codex opens no thread).
+    /// A logged-out agent is a result, not an error.
     pub async fn probe(&self, agent: &AgentInstallation) -> Result<AgentDetails, AgentError> {
-        let opened = self.open(agent, throwaway_options()).await;
+        self.probe_with(agent, throwaway_options()).await
+    }
+
+    /// `probe` with the caller's options: dir, env, args, config home. Always
+    /// throwaway; an output schema is ignored, so it cannot fail the probe.
+    pub async fn probe_with(
+        &self,
+        agent: &AgentInstallation,
+        mut options: SessionOptions,
+    ) -> Result<AgentDetails, AgentError> {
+        require_new(&options, "probe")?;
+        options.throwaway = true;
+        options.details_only = true;
+        options.output_schema = None;
+        let opened = self.open(agent, options).await;
         // Not logged is reported as a detail.
         let (session, mut events) = match opened {
             Err(AgentError::AuthRequired { login }) => {
@@ -246,7 +258,9 @@ impl Runtime {
     /// Fast auth-only probe: does not wait for `availableCommands` (saves
     /// `PROBE_COMMANDS_WAIT`). Use when only `auth` is needed (e.g. kiro).
     pub async fn probe_auth(&self, agent: &AgentInstallation) -> Result<AuthStatus, AgentError> {
-        let opened = self.open(agent, throwaway_options()).await;
+        let mut options = throwaway_options();
+        options.details_only = true;
+        let opened = self.open(agent, options).await;
         match opened {
             Err(AgentError::AuthRequired { login }) => Ok(AuthStatus::Unauthenticated { login }),
             Err(e) => Err(e),
@@ -263,7 +277,23 @@ impl Runtime {
     /// an API-key login) return `UnsupportedFeature`. May spawn a short-lived
     /// agent process; results are cached for 60 s.
     pub async fn plan_usage(&self, agent: &AgentInstallation) -> Result<PlanUsage, AgentError> {
-        let key = (agent.id.clone(), agent.executable_path.clone());
+        self.plan_usage_with(agent, throwaway_options()).await
+    }
+
+    /// `plan_usage` for the login these options point at.
+    pub async fn plan_usage_with(
+        &self,
+        agent: &AgentInstallation,
+        options: SessionOptions,
+    ) -> Result<PlanUsage, AgentError> {
+        require_new(&options, "plan usage")?;
+        let key = (
+            agent.id.clone(),
+            agent.executable_path.clone(),
+            options.config_home.clone(),
+            options.env.clone(),
+            options.args.clone(),
+        );
         if let Some((at, usage)) = self.usage_cache.lock().unwrap().get(&key)
             && at.elapsed() < USAGE_CACHE_TTL
         {
@@ -273,11 +303,11 @@ impl Runtime {
             .adapters
             .get(&agent.id)
             .ok_or_else(|| AgentError::UnsupportedFeature("plan usage".into()))?;
-        let usage = adapter.plan_usage(agent).await?;
-        self.usage_cache
-            .lock()
-            .unwrap()
-            .insert(key, (Instant::now(), usage.clone()));
+        let usage = adapter.plan_usage(agent, &options).await?;
+        let mut cache = self.usage_cache.lock().unwrap();
+        // Drop expired entries: a key holds the login's env values.
+        cache.retain(|_, (at, _)| at.elapsed() < USAGE_CACHE_TTL);
+        cache.insert(key, (Instant::now(), usage.clone()));
         Ok(usage)
     }
 
@@ -293,22 +323,34 @@ impl Runtime {
     }
 }
 
-/// Options for a probe: temp dir, never persisted.
-fn throwaway_options() -> SessionOptions {
+/// Default options for the probes and the quota read: temp dir, never persisted.
+pub(crate) fn throwaway_options() -> SessionOptions {
     let mut options = SessionOptions::in_dir(std::env::temp_dir());
     options.throwaway = true;
     options
 }
 
-/// Sends the prompt and gathers the agent's own text (not subagents') until
-/// the turn ends. Requests are declined so the agent stays hands-off.
+/// Refuses a resume or fork for a call that only ever starts a new session.
+fn require_new(options: &SessionOptions, call: &str) -> Result<(), AgentError> {
+    match options.start {
+        SessionStart::New => Ok(()),
+        _ => Err(AgentError::InvalidConfiguration(format!(
+            "{call} requires a new session"
+        ))),
+    }
+}
+
+/// Sends the prompt and gathers the agent's own text (not subagents', only the last message's
+/// with `final_only`) until the turn ends, declining requests to stay hands-off.
 async fn collect_reply(
     session: &Session,
     events: &mut Events,
     prompt: Input,
+    final_only: bool,
 ) -> Result<String, AgentError> {
     session.prompt(prompt).await?;
     let mut text = String::new();
+    let mut message = None;
     while let Some(event) = events.next().await {
         let event = event?;
         let nested = event
@@ -316,7 +358,17 @@ async fn collect_reply(
             .as_ref()
             .is_some_and(|t| t.parent_tool_id.is_some());
         match event.kind {
-            EventKind::TextDelta { text: delta, .. } if !nested => text.push_str(&delta),
+            EventKind::TextDelta {
+                message_id,
+                text: delta,
+            } if !nested => {
+                // A new message starts the reply over when only the last one counts.
+                if final_only && message.as_ref() != Some(&message_id) {
+                    text.clear();
+                }
+                message = Some(message_id);
+                text.push_str(&delta);
+            }
             // Stop even on a proposed tool call; generation is text-only.
             EventKind::ToolUpdated(_) => {
                 session.cancel(true).await?;
@@ -506,8 +558,10 @@ mod tests {
         }
     }
 
+    /// `generate`, `probe_with` and `plan_usage_with` refuse a resume or fork
+    /// before anything launches.
     #[tokio::test]
-    async fn generate_rejects_existing_sessions_before_launch() {
+    async fn one_shot_calls_reject_existing_sessions_before_launch() {
         let runtime = Runtime::new();
         let agent = AgentInstallation::at("pi", "/nonexistent/pi");
         for start in [
@@ -520,10 +574,41 @@ mod tests {
             let mut options = SessionOptions::in_dir(std::env::temp_dir());
             options.start = start;
             assert!(matches!(
-                runtime.generate(&agent, options, "go").await,
+                runtime.generate(&agent, options.clone(), "go").await,
+                Err(AgentError::InvalidConfiguration(_))
+            ));
+            assert!(matches!(
+                runtime.probe_with(&agent, options.clone()).await,
+                Err(AgentError::InvalidConfiguration(_))
+            ));
+            assert!(matches!(
+                runtime.plan_usage_with(&agent, options).await,
                 Err(AgentError::InvalidConfiguration(_))
             ));
         }
+    }
+
+    /// An agent that does not advertise `OutputSchema` refuses a schema typed,
+    /// at `open` and so at `generate`; a probe ignores it.
+    #[tokio::test]
+    async fn an_output_schema_is_refused_without_the_capability() {
+        use crate::adapter::mock::MockAdapter;
+        let runtime = Runtime::with_test_adapter(MockAdapter::permission_flow());
+        let agent = runtime.discover().await.require("mock").unwrap().clone();
+        let options = SessionOptions::in_dir(std::env::temp_dir())
+            .output_schema(serde_json::json!({ "type": "object" }));
+        let probed = runtime.probe_with(&agent, options.clone()).await;
+        assert!(probed.is_ok(), "{probed:?}");
+        let refused = runtime.open(&agent, options.clone()).await.err();
+        assert!(
+            matches!(&refused, Some(AgentError::UnsupportedFeature(f)) if f == "output schema"),
+            "{refused:?}"
+        );
+        let refused = runtime.generate(&agent, options, "go").await.err();
+        assert!(
+            matches!(&refused, Some(AgentError::UnsupportedFeature(f)) if f == "output schema"),
+            "{refused:?}"
+        );
     }
 
     #[tokio::test]

@@ -2,12 +2,18 @@
 // plus the `/event` SSE bus, gated by the per-session basic-auth secret.
 // Launch args after the scenario flags are the real ones (`serve --hostname
 // 127.0.0.1 --port N`). Flags: --logged-out (no connected provider),
-// --rename (the server titles the session after the first turn). Prompt
+// --rename (the server titles the session after the first turn),
+// --messages-fail (listing a session's messages is a 500). Prompt
 // words: "write-file" (a write asks permission), "question" (a question
 // tool), "sleep" (only an abort ends the turn), "child" (a task-tool child
-// session runs and asks permission), "die" (exit mid-turn).
+// session runs and asks permission), "die" (exit mid-turn), "mcp" (says how
+// many `GET /mcp` came so far), "mcp-call" (two tools of the user's "my
+// docs" MCP server run).
 import { createServer } from 'node:http';
+import { appendFileSync, existsSync } from 'node:fs';
 
+// FIXTURE_ARGV_LOG, set through the session's env: log the launch args there.
+if (process.env.FIXTURE_ARGV_LOG) appendFileSync(process.env.FIXTURE_ARGV_LOG, JSON.stringify(process.argv.slice(2)) + '\n');
 const flag = (name) => process.argv.includes(name);
 const argAfter = (name) => { const i = process.argv.indexOf(name); return i > -1 ? process.argv[i + 1] : undefined; };
 const port = Number(argAfter('--port'));
@@ -20,6 +26,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sessions = {};
 let sesN = 0, msgN = 0, partN = 0, askN = 0;
 const bus = new Set();
+// MCP: every server's status (user "my docs" + added), added bodies, GET count.
+const mcpStatus = { 'my docs': { status: 'connected' } }, mcpAdds = [];
+let mcpGets = 0;
 const busy = {};
 const waiters = {};
 const emit = (type, properties) => { const line = `data: ${JSON.stringify({ type, properties })}\n\n`; for (const res of bus) res.write(line); };
@@ -66,6 +75,8 @@ async function runTurn(ses, body, text) {
   if (prompt.includes('Attached files:')) say('ref=1 ');
   if (ses.reverted) say(`reverted=${ses.reverted} `);
   if (ses.fork !== undefined) say(`fork=${ses.fork ?? 'tip'} `);
+  if (mcpAdds.length) say(`mcp=${JSON.stringify(mcpAdds)}\n`);
+  if (prompt.includes('mcp')) say(`mcp-gets=${mcpGets} `);
   if (prompt.includes('sleep')) {
     const bash = part(sid, asst.id, { type: 'tool', tool: 'bash', callID: `call_${partN}`, state: { status: 'running', input: { command: 'sleep 45' } } });
     partUpdated(sid, bash);
@@ -75,12 +86,14 @@ async function runTurn(ses, body, text) {
   const bash = part(sid, asst.id, { type: 'tool', tool: 'bash', callID: `call_${partN}`, state: { status: 'pending', input: {} } });
   partUpdated(sid, bash);
   partUpdated(sid, { ...bash, state: { status: 'completed', input: { command: 'echo PEAR' }, output: 'PEAR\n' } });
+  // The tool call closes a step; its tokens are that step's alone (1.18.29).
+  partUpdated(sid, part(sid, asst.id, { type: 'step-finish', tokens: { total: 900, input: 600, output: 40, reasoning: 20, cache: { write: 40, read: 200 } }, cost: 0 }));
   if (prompt.includes('write-file')) {
     const write = part(sid, asst.id, { type: 'tool', tool: 'write', callID: `call_${partN + 1}`, state: { status: 'running', input: { filePath: 'fruit.txt', content: 'PEAR' } } });
     partUpdated(sid, write);
     const resp = await ask('per', sid, { permission: 'write', patterns: ['fruit.txt'], metadata: { filepath: 'fruit.txt' }, tool: { messageID: asst.id, callID: write.callID } });
     if (ses.aborting) return abortTurn(ses, asst);
-    partUpdated(sid, { ...write, state: resp === 'reject' ? { status: 'error', input: write.state.input, error: 'denied' } : { status: 'completed', input: write.state.input, output: 'wrote fruit.txt' } });
+    partUpdated(sid, { ...write, state: resp.startsWith('reject') ? { status: 'error', input: write.state.input, error: 'denied' } : { status: 'completed', input: write.state.input, output: 'wrote fruit.txt' } });
     say(`perm=${resp} `);
   }
   if (prompt.includes('question')) {
@@ -89,9 +102,12 @@ async function runTurn(ses, body, text) {
     say(`q=${answers.map((a) => a.join('+')).join(',')} `);
   }
   if (prompt.includes('child')) await runChild(ses, asst, say);
+  if (prompt.includes('mcp-call')) {
+    for (const tool of ['my_docs_lookup', 'my_docs_search']) partUpdated(sid, part(sid, asst.id, { type: 'tool', tool, callID: `call_${partN + 1}`, state: { status: 'completed', input: {}, output: 'found' } }));
+  }
   partUpdated(sid, part(sid, asst.id, { type: 'tool', tool: 'todowrite', callID: `call_${partN + 1}`, state: { status: 'completed', input: { todos: [{ content: 'step 1', status: 'in_progress' }] }, output: '' } }));
   say('done');
-  partUpdated(sid, part(sid, asst.id, { type: 'step-finish', tokens: { total: 1200, input: 1000, output: 200 }, cost: 0.01 }));
+  partUpdated(sid, part(sid, asst.id, { type: 'step-finish', tokens: { total: 1200, input: 700, output: 150, reasoning: 50, cache: { write: 0, read: 300 } }, cost: 0.01 }));
   emit('message.updated', { sessionID: sid, info: { ...asst, time: { ...asst.time, completed: 2 } } });
   busy[sid] = false;
   emit('session.idle', { sessionID: sid });
@@ -114,16 +130,19 @@ function abortTurn(ses, asst) {
 // asks a permission of its own, then finishes.
 async function runChild(ses, asst, say) {
   const sid = ses.id;
-  const task = part(sid, asst.id, { type: 'tool', tool: 'task', callID: `call_task_${partN}`, state: { status: 'running', input: { description: 'review' } } });
-  partUpdated(sid, task);
   const child = newSession(sid);
+  // The task's running state as live 1.18.29 sent it (2026-09-27, T3 wire log, trimmed).
+  const metadata = { parentSessionId: sid, sessionId: child.id, model: { modelID: 'ling-3.0-flash-fin-free', providerID: 'opencode' } };
+  const input = { command: 'ls files in directory', description: 'review', prompt: 'List all files.', subagent_type: 'general' };
+  const task = part(sid, asst.id, { type: 'tool', tool: 'task', callID: `call_task_${partN}`, state: { title: 'review', metadata, status: 'running', input, time: { start: 1 } } });
+  partUpdated(sid, task);
   emit('session.created', { sessionID: child.id, info: { id: child.id, parentID: sid, title: 'Child session - 2026' } });
   const cm = message(child.id, 'assistant');
   emit('message.updated', { sessionID: child.id, info: cm });
   partUpdated(child.id, part(child.id, cm.id, { type: 'text', text: 'child text' }));
   const resp = await ask('per', child.id, { permission: 'bash', patterns: ['ls'], metadata: { command: 'ls' }, tool: { messageID: cm.id, callID: 'call_child' } });
   emit('message.updated', { sessionID: child.id, info: { ...cm, time: { ...cm.time, completed: 4 } } });
-  partUpdated(sid, { ...task, state: { status: 'completed', input: task.state.input, output: `child ${resp}` } });
+  partUpdated(sid, { ...task, state: { ...task.state, status: 'completed', output: `child ${resp}` } });
   say(`child=${resp} `);
 }
 
@@ -148,21 +167,38 @@ createServer(async (req, res) => {
     req.on('close', () => bus.delete(res));
     return;
   }
+  // Like 1.18.29: replies every status; a missing local command is `failed`.
+  if (req.method === 'POST' && url.pathname === '/mcp') {
+    const cmd = body.config.type === 'local' ? body.config.command[0] : undefined;
+    const missing = cmd !== undefined && !existsSync(cmd);
+    mcpStatus[body.name] = missing ? { status: 'failed', error: `ENOENT: no such file or directory, posix_spawn '${cmd}'` } : { status: 'connected' };
+    if (!missing) mcpAdds.push(body);
+    // FIXTURE_MCP_LOG: log the body as received, secrets included.
+    if (process.env.FIXTURE_MCP_LOG) appendFileSync(process.env.FIXTURE_MCP_LOG, JSON.stringify(body) + '\n');
+    return json(res, 200, mcpStatus);
+  }
+  if (req.method === 'GET' && url.pathname === '/mcp') { mcpGets++; return json(res, 200, mcpStatus); }
   if (req.method === 'POST' && url.pathname === '/session') { const s = newSession(); return json(res, 200, { id: s.id, title: s.title, model: s.model }); }
   if (req.method === 'POST' && p[0] === 'question' && p[2] === 'reply') { waiters[p[1]]?.(body.answers); delete waiters[p[1]]; return json(res, 200, true); }
-  if (!ses) return json(res, 404, { error: `no session ${p[1]}` });
+  if (req.method === 'POST' && p[0] === 'question' && p[2] === 'reject') { waiters[p[1]]?.([['rejected']]); delete waiters[p[1]]; return json(res, 200, true); }
+  // A reject may carry the user's message (1.18.29 OpenAPI `/doc`).
+  if (req.method === 'POST' && p[0] === 'permission' && p[2] === 'reply') { waiters[p[1]]?.(body.message ? `${body.reply}:${body.message}` : body.reply); delete waiters[p[1]]; return json(res, 200, true); }
+  // Recorded 2026-09-26 (1.18.29): an id without the `ses_` prefix is a 500.
+  if (p[0] === 'session' && !p[1]?.startsWith('ses_')) return json(res, 500, { name: 'UnknownError', data: { message: 'Unexpected server error. Check server logs for details.' } });
+  if (!ses) return json(res, 404, { name: 'NotFoundError', data: { message: `Session not found: ${p[1]}` } });
   if (req.method === 'GET' && p.length === 2) return json(res, 200, { id: ses.id, title: ses.title, model: ses.model });
+  if (req.method === 'GET' && p[2] === 'message' && flag('--messages-fail')) return json(res, 500, { name: 'UnknownError', data: { message: 'Unexpected server error. Check server logs for details.' } });
   if (req.method === 'GET' && p[2] === 'message') return json(res, 200, ses.messages.map((m) => ({ info: m, parts: [] })));
   if (req.method === 'POST' && p[2] === 'prompt_async') { if (busy[ses.id]) return json(res, 400, { error: 'busy' }); runTurn(ses, body, '').catch(() => process.exit(1)); return json(res, 202, {}); }
   if (req.method === 'POST' && p[2] === 'command') { await runTurn(ses, { parts: [{ type: 'text', text: '' }], model: body.model }, `cmd=${body.command} args=${body.arguments} `); return json(res, 200, { info: {}, parts: [] }); }
   if (req.method === 'POST' && p[2] === 'abort') { ses.aborting = true; return json(res, 200, true); }
-  if (req.method === 'POST' && p[2] === 'permissions') { waiters[p[3]]?.(body.response); delete waiters[p[3]]; return json(res, 200, true); }
   if (req.method === 'POST' && p[2] === 'summarize') {
     busy[ses.id] = true;
     emit('session.status', { sessionID: ses.id, status: { type: 'busy' } });
     const m = message(ses.id, 'assistant');
     emit('message.updated', { sessionID: ses.id, info: m });
     partUpdated(ses.id, part(ses.id, m.id, { type: 'text', text: 'summary' }));
+    partUpdated(ses.id, part(ses.id, m.id, { type: 'step-finish', tokens: { total: 150, input: 100, output: 30, reasoning: 20, cache: { write: 0, read: 0 } }, cost: 0 }));
     emit('message.updated', { sessionID: ses.id, info: { ...m, time: { ...m.time, completed: 5 } } });
     emit('session.compacted', { sessionID: ses.id });
     busy[ses.id] = false;

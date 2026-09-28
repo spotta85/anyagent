@@ -35,6 +35,7 @@ class Frame12(TypedDict):
     id: int
     session: str
     clear_queue: NotRequired[bool]
+    turn: NotRequired[str | None]
     cmd: Literal['cancel']
 
 
@@ -56,7 +57,12 @@ class AcpSpec(TypedDict):
     args: NotRequired[list[str]]
 
 
-PermissionMode: TypeAlias = Literal['Ask', 'AutoApprove']
+class AgentAt(TypedDict):
+    id: str
+    path: str
+
+
+PermissionMode: TypeAlias = Literal['Ask', 'AcceptEdits', 'AutoApprove']
 
 
 class Stdio(TypedDict):
@@ -91,6 +97,14 @@ McpConnection: TypeAlias = McpConnection1 | McpConnection2 | McpConnection3
 
 
 ConfigValue: TypeAlias = str | bool
+
+
+class Deny(TypedDict):
+    message: str
+
+
+class Answer3(TypedDict):
+    Deny: Deny
 
 
 PermissionChoice: TypeAlias = Literal['AllowOnce', 'AllowAlways', 'DenyOnce', 'DenyAlways']
@@ -188,11 +202,51 @@ class EventKind7(TypedDict):
     ToolOutputDelta: ToolOutputDelta
 
 
+class ToolProgress(TypedDict):
+    tool_id: str
+    message: NotRequired[str | None]
+    elapsed_ms: NotRequired[int | None]
+
+
+class EventKind8(TypedDict):
+    ToolProgress: ToolProgress
+
+
+class TurnDiff(TypedDict):
+    unified: str
+
+
+class EventKind9(TypedDict):
+    TurnDiff: TurnDiff
+
+
+ModelRerouted = TypedDict(
+    'ModelRerouted',
+    {
+        'from': str,
+        'to': str,
+        'reason': NotRequired[str | None],
+    },
+)
+
+
+class EventKind10(TypedDict):
+    ModelRerouted: ModelRerouted
+
+
+class PlanProposed(TypedDict):
+    markdown: str
+
+
+class EventKind12(TypedDict):
+    PlanProposed: PlanProposed
+
+
 class RequestClosed(TypedDict):
     request_id: str
 
 
-class EventKind10(TypedDict):
+class EventKind14(TypedDict):
     RequestClosed: RequestClosed
 
 
@@ -202,7 +256,7 @@ class ContextUsage(TypedDict):
     cost_usd: NotRequired[float | None]
 
 
-class EventKind13(TypedDict):
+class EventKind17(TypedDict):
     ContextUsage: ContextUsage
 
 
@@ -225,7 +279,7 @@ class ToolKind1(TypedDict):
 ToolKind: TypeAlias = Literal['Read', 'Edit', 'Delete', 'Move', 'Search', 'Execute', 'Fetch', 'Think', 'Other'] | ToolKind1 | Literal['Subagent']
 
 
-ToolStatus: TypeAlias = Literal['Pending', 'Running', 'Completed', 'Failed', 'Cancelled']
+ToolStatus: TypeAlias = Literal['Pending', 'Running', 'Completed', 'Failed', 'Cancelled', 'Denied']
 
 
 class ToolInput1(TypedDict):
@@ -269,6 +323,13 @@ class FileDiff(TypedDict):
 class RawTool(TypedDict):
     name: str
     input: Any
+
+
+class SubagentInfo(TypedDict):
+    role: NotRequired[str | None]
+    model: NotRequired[str | None]
+    summary: NotRequired[str | None]
+    tokens: NotRequired[int | None]
 
 
 PlanStatus: TypeAlias = Literal['Pending', 'InProgress', 'Completed']
@@ -323,22 +384,22 @@ class LoginMethod2(TypedDict):
 LoginMethod: TypeAlias = LoginMethod1 | LoginMethod2
 
 
-Capability: TypeAlias = Literal['Images', 'Resume', 'Steer', 'Permissions', 'Questions', 'Rollback', 'Fork', 'SlashCommands', 'Plan', 'Subagents', 'ContextUsage', 'PlanUsage'] | Literal['RollbackFiles'] | Literal['Compact']
+Capability: TypeAlias = Literal['Images', 'Resume', 'Steer', 'Permissions', 'Questions', 'Rollback', 'Fork', 'SlashCommands', 'Plan', 'Subagents', 'ContextUsage', 'PlanUsage'] | Literal['RollbackFiles'] | Literal['Compact'] | Literal['OutputSchema']
 
 
 McpTransport: TypeAlias = Literal['Stdio', 'Http', 'Sse']
 
 
-class ConfigChoice(TypedDict):
-    value: str
-    label: str
-    description: NotRequired[str | None]
+class Skill(TypedDict):
+    path: NotRequired[str | None]
+    scope: NotRequired[str | None]
 
 
-class SlashCommand(TypedDict):
-    name: str
-    description: str
-    input_hint: NotRequired[str | None]
+class CommandSource1(TypedDict):
+    Skill: Skill
+
+
+CommandSource: TypeAlias = Literal['Builtin'] | CommandSource1
 
 
 class SessionConfiguration(TypedDict):
@@ -354,6 +415,11 @@ class UsageWindow(TypedDict):
     resets_at: NotRequired[SystemTime | None]
 
 
+class ResetCredits(TypedDict):
+    available: int
+    next_expires_at: NotRequired[SystemTime | None]
+
+
 DiagnosticLevel: TypeAlias = Literal['Info', 'Warning', 'Error']
 
 
@@ -366,6 +432,12 @@ class StopReason2(TypedDict):
 
 
 CompletionSource: TypeAlias = Literal['Protocol', 'Inferred']
+
+
+class TurnUsage(TypedDict):
+    input_tokens: int
+    cached_input_tokens: int
+    output_tokens: int
 
 
 class ErrorBody(TypedDict):
@@ -420,7 +492,7 @@ class AgentRef1(TypedDict):
     acp: AcpSpec
 
 
-AgentRef: TypeAlias = str | AgentRef1
+AgentRef: TypeAlias = str | AgentRef1 | AgentAt
 
 
 class McpServer(TypedDict):
@@ -436,7 +508,7 @@ class Answer2(TypedDict):
     Question: list[QuestionAnswer]
 
 
-Answer: TypeAlias = Answer1 | Answer2
+Answer: TypeAlias = Answer1 | Answer2 | Answer3 | Literal['Cancel']
 
 
 class Line1(TypedDict):
@@ -451,7 +523,7 @@ class EventKind1(TypedDict):
     TurnStarted: TurnStarted
 
 
-class EventKind12(TypedDict):
+class EventKind16(TypedDict):
     StatusChanged: SessionStatus
 
 
@@ -465,6 +537,7 @@ class ToolUpdate(TypedDict):
     diffs: list[FileDiff]
     locations: list[str]
     raw: NotRequired[RawTool | None]
+    subagent: NotRequired[SubagentInfo | None]
 
 
 class PlanEntry(TypedDict):
@@ -522,20 +595,17 @@ class Capabilities(TypedDict):
     mcp_transports: list[McpTransport]
 
 
-class Select(TypedDict):
-    choices: list[ConfigChoice]
-
-
-class ConfigKind1(TypedDict):
-    Select: Select
-
-
-ConfigKind: TypeAlias = Literal['Boolean'] | ConfigKind1
+class SlashCommand(TypedDict):
+    name: str
+    description: str
+    input_hint: NotRequired[str | None]
+    source: NotRequired[CommandSource]
 
 
 class PlanUsage(TypedDict):
     plan: NotRequired[str | None]
     windows: list[UsageWindow]
+    reset_credits: NotRequired[ResetCredits | None]
     fetched_at: SystemTime
 
 
@@ -569,12 +639,37 @@ class Delivery(TypedDict):
 class Frame2(TypedDict):
     id: int
     agent: AgentRef
+    dir: NotRequired[str | None]
+    resume: NotRequired[str | None]
+    fork: NotRequired[str | None]
+    fork_at: NotRequired[str | None]
+    permission_mode: NotRequired[PermissionMode | None]
+    mcp_servers: NotRequired[list[McpServer]]
+    configure: NotRequired[dict[str, ConfigValue]]
+    instructions: NotRequired[str | None]
+    output_schema: NotRequired[Any]
+    env: NotRequired[dict[str, str]]
+    args: NotRequired[list[str]]
+    config_home: NotRequired[str | None]
+    record_wire: NotRequired[str | None]
     cmd: Literal['probe']
 
 
 class Frame3(TypedDict):
     id: int
     agent: AgentRef
+    resume: NotRequired[str | None]
+    fork: NotRequired[str | None]
+    fork_at: NotRequired[str | None]
+    permission_mode: NotRequired[PermissionMode | None]
+    mcp_servers: NotRequired[list[McpServer]]
+    configure: NotRequired[dict[str, ConfigValue]]
+    instructions: NotRequired[str | None]
+    output_schema: NotRequired[Any]
+    env: NotRequired[dict[str, str]]
+    args: NotRequired[list[str]]
+    config_home: NotRequired[str | None]
+    record_wire: NotRequired[str | None]
     cmd: Literal['plan_usage']
 
 
@@ -583,12 +678,19 @@ class Frame4(TypedDict):
     agent: AgentRef
     dir: str
     prompt: str
+    attachments: NotRequired[list[str]]
     resume: NotRequired[str | None]
     fork: NotRequired[str | None]
     fork_at: NotRequired[str | None]
     permission_mode: NotRequired[PermissionMode | None]
     mcp_servers: NotRequired[list[McpServer]]
     configure: NotRequired[dict[str, ConfigValue]]
+    instructions: NotRequired[str | None]
+    output_schema: NotRequired[Any]
+    env: NotRequired[dict[str, str]]
+    args: NotRequired[list[str]]
+    config_home: NotRequired[str | None]
+    record_wire: NotRequired[str | None]
     cmd: Literal['generate']
 
 
@@ -602,6 +704,12 @@ class Frame5(TypedDict):
     permission_mode: NotRequired[PermissionMode | None]
     mcp_servers: NotRequired[list[McpServer]]
     configure: NotRequired[dict[str, ConfigValue]]
+    instructions: NotRequired[str | None]
+    output_schema: NotRequired[Any]
+    env: NotRequired[dict[str, str]]
+    args: NotRequired[list[str]]
+    config_home: NotRequired[str | None]
+    record_wire: NotRequired[str | None]
     cmd: Literal['open']
 
 
@@ -624,24 +732,25 @@ class PlanUpdated(TypedDict):
     entries: list[PlanEntry]
 
 
-class EventKind8(TypedDict):
+class EventKind11(TypedDict):
     PlanUpdated: PlanUpdated
 
 
-class EventKind14(TypedDict):
+class EventKind18(TypedDict):
     PlanUsageUpdated: PlanUsage
 
 
-class EventKind15(TypedDict):
+class EventKind19(TypedDict):
     Diagnostic: Diagnostic
 
 
 class TurnEnded(TypedDict):
     stop: StopReason
     background: list[str]
+    usage: NotRequired[TurnUsage | None]
 
 
-class EventKind16(TypedDict):
+class EventKind20(TypedDict):
     TurnEnded: TurnEnded
 
 
@@ -654,15 +763,6 @@ class QuestionRequest(TypedDict):
     questions: list[Question]
 
 
-class ConfigOption(TypedDict):
-    id: str
-    name: str
-    category: NotRequired[str | None]
-    kind: ConfigKind
-    current: NotRequired[ConfigValue | None]
-    live: bool
-
-
 class Request2(TypedDict):
     Question: QuestionRequest
 
@@ -670,49 +770,8 @@ class Request2(TypedDict):
 Request: TypeAlias = Request1 | Request2
 
 
-class AgentDetails(TypedDict):
-    version: NotRequired[str | None]
-    auth: AuthStatus
-    capabilities: Capabilities
-    config_options: list[ConfigOption]
-    commands: list[SlashCommand]
-
-
-class EventKind9(TypedDict):
+class EventKind13(TypedDict):
     RequestOpened: Request
-
-
-class SessionInfo(TypedDict):
-    id: str
-    agent: AgentInstallation
-    details: AgentDetails
-    configuration: SessionConfiguration
-    resume_token: NotRequired[str | None]
-    title: NotRequired[str | None]
-    status: NotRequired[SessionStatus]
-
-
-class EventKind11(TypedDict):
-    SessionUpdated: SessionInfo
-
-
-EventKind: TypeAlias = EventKind1 | EventKind2 | EventKind3 | EventKind4 | EventKind5 | EventKind6 | EventKind7 | EventKind8 | EventKind9 | EventKind10 | EventKind11 | EventKind12 | EventKind13 | Literal['ContextCompacted'] | EventKind14 | EventKind15 | EventKind16
-
-
-class Event(TypedDict):
-    sequence: int
-    occurred_at: NotRequired[SystemTime]
-    session_id: str
-    turn_info: NotRequired[TurnContext | None]
-    kind: EventKind
-    extensions: dict[str, Any]
-
-
-class Line4(TypedDict):
-    event: Event
-
-
-Line: TypeAlias = Line1 | Line2 | Line3 | Line4 | Line5 | Line6
 
 
 class Protocol(TypedDict):
@@ -725,3 +784,71 @@ class Protocol(TypedDict):
     plan_usage: PlanUsage
     session_info: SessionInfo
     delivery: Delivery
+
+
+class Line4(TypedDict):
+    event: Event
+
+
+Line: TypeAlias = Line1 | Line2 | Line3 | Line4 | Line5 | Line6
+
+
+class Event(TypedDict):
+    sequence: int
+    occurred_at: NotRequired[SystemTime]
+    session_id: str
+    turn_info: NotRequired[TurnContext | None]
+    kind: EventKind
+    extensions: dict[str, Any]
+
+
+class EventKind15(TypedDict):
+    SessionUpdated: SessionInfo
+
+
+EventKind: TypeAlias = EventKind1 | EventKind2 | EventKind3 | EventKind4 | EventKind5 | EventKind6 | EventKind7 | EventKind8 | EventKind9 | EventKind10 | EventKind11 | EventKind12 | EventKind13 | EventKind14 | EventKind15 | EventKind16 | EventKind17 | Literal['ContextCompacted'] | EventKind18 | EventKind19 | EventKind20
+
+
+class SessionInfo(TypedDict):
+    id: str
+    agent: AgentInstallation
+    details: AgentDetails
+    configuration: SessionConfiguration
+    resume_token: NotRequired[str | None]
+    title: NotRequired[str | None]
+    status: NotRequired[SessionStatus]
+
+
+class AgentDetails(TypedDict):
+    version: NotRequired[str | None]
+    auth: AuthStatus
+    capabilities: Capabilities
+    config_options: list[ConfigOption]
+    commands: list[SlashCommand]
+
+
+class ConfigOption(TypedDict):
+    id: str
+    name: str
+    category: NotRequired[str | None]
+    kind: ConfigKind
+    current: NotRequired[ConfigValue | None]
+    live: bool
+
+
+class Select(TypedDict):
+    choices: list[ConfigChoice]
+
+
+class ConfigKind1(TypedDict):
+    Select: Select
+
+
+ConfigKind: TypeAlias = Literal['Boolean'] | ConfigKind1
+
+
+class ConfigChoice(TypedDict):
+    value: str
+    label: str
+    description: NotRequired[str | None]
+    options: NotRequired[list[ConfigOption]]

@@ -39,7 +39,7 @@ use crate::catalog::AgentProfile;
 use crate::error::AgentError;
 use crate::event::{
     CompletionSource, DiagnosticLevel, EventKind, MessageId, RawTool, StopReason, ToolId,
-    ToolInput, ToolKind, ToolStatus, ToolUpdate,
+    ToolInput, ToolKind, ToolStatus, ToolUpdate, TurnUsage,
 };
 use crate::process::{self, Spawn};
 
@@ -70,16 +70,15 @@ impl Adapter for AntigravityAdapter {
         let events = Emitter::new(ev_tx);
         let recorder = WireRecorder::for_session(&request.options, &events).await;
         let env = crate::adapter::config_home_env(&request.installation, &request.options)?;
-        let (child, wire, info) = launch(&request, recorder.clone(), &env)
-            .await
-            .map_err(|e| {
-                auth_hinted(
-                    e,
-                    Some(self.profile),
-                    &request.installation.executable_path,
-                    &env,
-                )
-            })?;
+        let (child, wire, info) = launch(&request, recorder.clone()).await.map_err(|e| {
+            auth_hinted(
+                e,
+                Some(self.profile),
+                &request.installation.executable_path,
+                &env,
+            )
+        })?;
+        let instructions = crate::adapter::first_prompt_instructions(&request.options);
         // A cancel respawns on the conversation this open landed on.
         if let Some(token) = &info.resume_token {
             request.options.start = SessionStart::Resume(token.clone());
@@ -92,10 +91,12 @@ impl Adapter for AntigravityAdapter {
                 events,
                 recorder,
                 request,
+                instructions,
                 message: None,
                 next_message: 0,
                 tools: BTreeMap::new(),
                 last_usage: None,
+                turn_usage: TurnUsage::default(),
             }
             .run(cmd_rx),
         );
@@ -116,13 +117,13 @@ impl Adapter for AntigravityAdapter {
 async fn launch(
     request: &ConnectRequest,
     recorder: Option<WireRecorder>,
-    env: &[(String, String)],
 ) -> Result<(process::Child, LineWire, DriverInfo), AgentError> {
     let exe = &request.installation.executable_path;
+    let env = crate::adapter::launch_env(&request.installation, &request.options)?;
     let (started, models, version) = tokio::join!(
         start(request, recorder),
-        models(exe, env),
-        version(exe, env)
+        models(exe, &env),
+        version(exe, &env)
     );
     let (child, wire, init) = started?;
     Ok((
@@ -168,11 +169,12 @@ async fn spawn(request: &ConnectRequest) -> Result<process::Child, AgentError> {
         cwd.to_string_lossy().into_owned(),
     ];
     args.extend(launch_args(&request.options)?);
+    args.extend(request.options.args.iter().cloned());
     process::spawn(Spawn {
         exec_path: request.installation.executable_path.clone(),
         args,
         cwd,
-        env: crate::adapter::config_home_env(&request.installation, &request.options)?,
+        env: crate::adapter::launch_env(&request.installation, &request.options)?,
     })
     .await
 }
@@ -261,12 +263,9 @@ async fn models(exe: &Path, env: &[(String, String)]) -> Vec<ConfigChoice> {
         .into_iter()
         .flatten()
         .filter_map(|model| {
-            let value = model["id"].as_str()?.to_owned();
-            Some(ConfigChoice {
-                label: model["label"].as_str().unwrap_or(&value).to_owned(),
-                value,
-                description: None,
-            })
+            let value = model["id"].as_str()?;
+            let label = model["label"].as_str().unwrap_or(value);
+            Some(ConfigChoice::new(value, label, None))
         })
         .collect()
 }
@@ -380,6 +379,8 @@ struct Drive {
     /// The open request, pointed at this conversation for the respawn a
     /// cancel needs.
     request: ConnectRequest,
+    /// Instructions the first prompt still owes (the wire has no system prompt).
+    instructions: Option<String>,
     /// The assistant message being streamed.
     message: Option<MessageId>,
     next_message: u64,
@@ -388,6 +389,8 @@ struct Drive {
     /// Context occupancy from the turn's last model call: `result.usage`
     /// sums every step's snapshot instead (recorded), so it is not the size.
     last_usage: Option<u64>,
+    /// What the running turn has spent, summed over its model calls.
+    turn_usage: TurnUsage,
 }
 
 impl Drive {
@@ -424,6 +427,7 @@ impl Drive {
         match cmd {
             DriverCommand::StartTurn { input } => {
                 self.events.send(DriverEvent::TurnAck).await?;
+                let input = crate::adapter::with_instructions(&mut self.instructions, input);
                 self.send_user(&input).await
             }
             // Never sent: `Steer`, `Answer`, and `Compact` are not
@@ -441,7 +445,7 @@ impl Drive {
             }
             DriverCommand::Rollback(..) => {
                 self.events
-                    .diagnostic(DiagnosticLevel::Warning, "rollback is not supported on agy")
+                    .rollback_refused("rollback is not supported on agy")
                     .await
             }
             DriverCommand::Close => unreachable!("handled in run"),
@@ -455,6 +459,7 @@ impl Drive {
         self.child.shutdown(CLOSE_GRACE).await;
         self.message = None;
         self.last_usage = None;
+        self.turn_usage = TurnUsage::default();
         self.settle_tools().await?;
         self.events
             .send(DriverEvent::TurnEnded(StopReason::Cancelled))
@@ -495,6 +500,10 @@ impl Drive {
             // A message exists once text arrives: a step with no text (a
             // tool-only response) opens nothing to end.
             "agent_response" => {
+                // Only a DONE step carries `usage`, once per model call.
+                if step["usage"].is_object() {
+                    self.add_turn_usage(&step["usage"]).await?;
+                }
                 if let Some(used) = step["usage"]["total_tokens"].as_u64().filter(|t| *t > 0) {
                     self.last_usage = Some(used);
                 }
@@ -537,6 +546,19 @@ impl Drive {
         }
     }
 
+    /// Adds one model call's tokens to the turn and reports the sum. agy's
+    /// `input_tokens` leaves the cache out; `output_tokens` holds thinking (probed 1.1.27).
+    async fn add_turn_usage(&mut self, usage: &Value) -> Result<(), Gone> {
+        let count = |key: &str| usage[key].as_u64().unwrap_or(0);
+        let cached = count("cache_read_tokens");
+        self.turn_usage.input_tokens += count("input_tokens") + cached;
+        self.turn_usage.cached_input_tokens += cached;
+        self.turn_usage.output_tokens += count("output_tokens");
+        self.events
+            .send(DriverEvent::TurnUsage(self.turn_usage))
+            .await
+    }
+
     /// Exactly one `result` per turn: usage, then the turn's end.
     async fn on_result(&mut self, result: &Value) -> Result<(), Gone> {
         if let Some(message_id) = self.message.take() {
@@ -554,6 +576,7 @@ impl Drive {
                 })
                 .await?;
         }
+        self.turn_usage = TurnUsage::default();
         let stop = match result["status"].as_str() {
             Some("SUCCESS") => StopReason::Completed {
                 source: CompletionSource::Protocol,
@@ -675,6 +698,7 @@ fn tool(step: &Value) -> ToolUpdate {
                 false => params.clone(),
             },
         }),
+        subagent: None,
     }
 }
 

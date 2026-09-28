@@ -21,9 +21,9 @@ use futures::StreamExt;
 
 use anyagent::{
     AgentError, Answer, AuthStatus, Capability, ConfigKind, ConfigValue, DeliveryKind, Event,
-    EventKind, Events, Input, MessageId, PermissionChoice, PermissionMode, PromptId,
-    QuestionAnswer, Request, RequestId, ResumeToken, RollbackScope, Runtime, Session,
-    SessionOptions, StopReason, ToolStatus, TurnOrigin,
+    EventKind, Events, Input, McpServer, McpTransport, MessageId, PermissionChoice, PermissionMode,
+    PromptId, QuestionAnswer, Request, RequestId, ResumeToken, RollbackScope, Runtime, Session,
+    SessionOptions, StopReason, ToolKind, ToolStatus, TurnOrigin,
 };
 
 /// Every harness the shared matrix covers, in report order.
@@ -54,6 +54,8 @@ const TITLE: &str = "Title this conversation in at most six words: the user aske
 a git branch. Reply with only the title. No tools.";
 /// The cheap claude alias; the CLI resolves it to the current Haiku.
 const CLAUDE_MODEL: &str = "haiku";
+/// What the `secret_word` tool of tests/fixtures/mcp/server.mjs returns.
+const MCP_MARKER: &str = "PLUM-4417";
 
 // -- gate -------------------------------------------------------------------
 
@@ -255,6 +257,89 @@ async fn mode_switches_live() {
         );
         session.close().await.unwrap();
         pass(h, &format!("mode switched live to {target}"));
+    }
+}
+
+/// `mode: plan` selected live: the agent proposes a plan as `PlanProposed` and writes nothing;
+/// claude's `ExitPlanMode` request follows its plan and is denied (keep planning).
+#[tokio::test]
+#[ignore = "live: talks to real agents"]
+async fn plan_mode_proposes_a_plan() {
+    for h in enabled().await {
+        if !matches!(h, "claude" | "codex") {
+            println!("SKIP {h}: plan mode asserted on claude and codex");
+            continue;
+        }
+        let (session, mut events, dir) = open(h).await;
+        std::fs::write(dir.path().join("main.py"), "print(1 + 2)\n").unwrap();
+        session.configure("mode", "plan").await.unwrap();
+        let mode = anyagent::ConfigId::new("mode");
+        while session.info().configuration.options.get(&mode) != Some(&"plan".into()) {
+            next(&mut events, "plan mode").await;
+        }
+        session
+            .prompt("Plan how to add a README to this project. Do not write files. Do not ask me any questions; make reasonable assumptions.")
+            .await
+            .unwrap();
+        let mut plans = Vec::new();
+        let mut previous = None;
+        loop {
+            let kind = next(&mut events, &format!("{h}: plan")).await.kind;
+            match &kind {
+                EventKind::PlanProposed { markdown } => plans.push(markdown.clone()),
+                // claude's go-ahead comes right after its plan; deny keeps planning.
+                EventKind::RequestOpened(Request::Permission(request)) => {
+                    let choice = if request.tool.title == "ExitPlanMode" {
+                        assert!(
+                            matches!(previous, Some(EventKind::PlanProposed { .. })),
+                            "{h}: the request did not follow its plan: {previous:?}"
+                        );
+                        PermissionChoice::DenyOnce
+                    } else {
+                        PermissionChoice::AllowOnce
+                    };
+                    session
+                        .answer(request.id.clone(), Answer::Permission(choice))
+                        .await
+                        .unwrap();
+                }
+                // Plan mode may still ask; the first choice keeps it moving.
+                EventKind::RequestOpened(Request::Question(request)) => {
+                    let answers = request
+                        .questions
+                        .iter()
+                        .map(|q| match q.choices.first() {
+                            Some(choice) => QuestionAnswer::Choices(vec![choice.id.clone()]),
+                            None => QuestionAnswer::Text("Use your best judgment.".into()),
+                        })
+                        .collect();
+                    session
+                        .answer(request.id.clone(), Answer::Question(answers))
+                        .await
+                        .unwrap();
+                }
+                EventKind::TurnEnded { stop, .. } => {
+                    assert!(
+                        matches!(stop, StopReason::Completed { .. }),
+                        "{h}: {stop:?}"
+                    );
+                    break;
+                }
+                _ => {}
+            }
+            previous = Some(kind);
+        }
+        println!("{h}: proposed plan:\n{}", plans.join("\n---\n"));
+        let plan = plans
+            .last()
+            .unwrap_or_else(|| panic!("{h}: no plan proposed"));
+        assert!(plan.to_lowercase().contains("readme"), "{h}: plan {plan:?}");
+        assert!(
+            !dir.path().join("README.md").exists(),
+            "{h}: wrote the README"
+        );
+        session.close().await.unwrap();
+        pass(h, "plan mode proposed a plan");
     }
 }
 
@@ -573,6 +658,91 @@ async fn generate_returns_text_without_a_session() {
     }
 }
 
+/// `generate` with an output schema returns JSON matching it. Strict: codex fails the turn with
+/// `invalid_json_schema` without `additionalProperties: false` (live 2026-09-27, 0.154.0).
+#[tokio::test]
+#[ignore = "live: talks to real agents"]
+async fn generate_matches_an_output_schema() {
+    let schema = serde_json::json!({ "type": "object", "properties": { "title": { "type": "string" } }, "required": ["title"], "additionalProperties": false });
+    for h in enabled().await {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = Runtime::new();
+        let report = runtime.discover().await;
+        let agent = report
+            .require(h)
+            .unwrap_or_else(|_| panic!("{h}: not discovered"));
+        let options = options(h, dir.path()).output_schema(schema.clone());
+        let text = match runtime.generate(agent, options, TITLE).await {
+            Ok(text) => text,
+            Err(AgentError::UnsupportedFeature(why)) => {
+                println!("SKIP {h}: output schema unsupported (typed): {why}");
+                continue;
+            }
+            Err(e) => panic!("{h}: generate failed: {e}"),
+        };
+        let reply: serde_json::Value =
+            serde_json::from_str(&text).unwrap_or_else(|e| panic!("{h}: not JSON ({e}): {text:?}"));
+        assert!(reply["title"].is_string(), "{h}: no title: {text:?}");
+        pass(h, &format!("generate matched the schema: {text}"));
+    }
+}
+
+/// `instructions` reach the agent: the reply follows a rule the prompt never
+/// mentions, and still does after a resume with the same instructions.
+#[tokio::test]
+#[ignore = "live: talks to real agents"]
+async fn instructions_reach_the_agent() {
+    const RULE: &str = "End every reply with the word PINEAPPLE";
+    for h in enabled().await {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = Runtime::new();
+        let report = runtime.discover().await;
+        let agent = report
+            .require(h)
+            .unwrap_or_else(|_| panic!("{h}: not discovered"));
+        let (session, mut events) = runtime
+            .open(agent, options(h, dir.path()).instructions(RULE))
+            .await
+            .unwrap_or_else(|e| panic!("{h}: open failed: {e}"));
+        session
+            .prompt("Say hello in three words. No tools.")
+            .await
+            .unwrap();
+        let text = drain_to_turn_end(&session, &mut events, &format!("{h}: instructions")).await;
+        let info = session.info();
+        session.close().await.ok();
+        assert!(
+            text.to_uppercase().contains("PINEAPPLE"),
+            "{h}: instructions not followed: {text:?}"
+        );
+        pass(h, &format!("instructions reached the agent: {text:?}"));
+
+        let (true, Some(token)) = (
+            info.details.capabilities.supports(Capability::Resume),
+            info.resume_token,
+        ) else {
+            println!("SKIP {h}: no resume, so no resumed leg");
+            continue;
+        };
+        let options = options(h, dir.path()).instructions(RULE).resume(token);
+        let (session, mut events) = runtime
+            .open(agent, options)
+            .await
+            .unwrap_or_else(|e| panic!("{h}: resume failed: {e}"));
+        session
+            .prompt("Say goodbye in three words. No tools.")
+            .await
+            .unwrap();
+        let text = drain_to_turn_end(&session, &mut events, &format!("{h}: resumed")).await;
+        session.close().await.ok();
+        assert!(
+            text.to_uppercase().contains("PINEAPPLE"),
+            "{h}: instructions lost on resume: {text:?}"
+        );
+        pass(h, &format!("instructions held after resume: {text:?}"));
+    }
+}
+
 /// Even a prompt asking to read a file cannot enable Pi's tools during generation.
 #[tokio::test]
 #[ignore = "live: talks to real agents"]
@@ -731,6 +901,77 @@ async fn tools_run_to_completion_and_the_file_lands() {
     }
 }
 
+/// A declared stdio MCP server's tool is called: the call reaches the server,
+/// shows as `ToolKind::Mcp`, and its marker comes back. No stdio: skipped.
+#[tokio::test]
+#[ignore = "live: talks to real agents"]
+async fn mcp_server_tools_are_called() {
+    let script =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mcp/server.mjs");
+    for h in enabled().await {
+        let dir = tempfile::tempdir().unwrap();
+        let calls = dir.path().join("mcp-calls.log");
+        let server = McpServer::stdio(
+            "probe",
+            "node",
+            [script.to_string_lossy(), calls.to_string_lossy()],
+        );
+        let runtime = Runtime::new();
+        let report = runtime.discover().await;
+        let agent = report.require(h).unwrap();
+        let options = options(h, dir.path()).mcp_server(server);
+        let (session, mut events) = match runtime.open(agent, options).await {
+            Ok(opened) => opened,
+            Err(AgentError::UnsupportedFeature(what)) => {
+                println!("SKIP {h}: {what}");
+                continue;
+            }
+            Err(e) => panic!("{h}: open failed: {e}"),
+        };
+        let transports = session.info().details.capabilities.mcp_transports;
+        assert!(
+            transports.contains(&McpTransport::Stdio),
+            "{h}: {transports:?}"
+        );
+        session
+            .prompt("Call the secret_word tool of the probe MCP server once, then reply with only the word it returned.")
+            .await
+            .unwrap();
+        let mut text = String::new();
+        let mut kinds = Vec::new();
+        loop {
+            match next(&mut events, &format!("{h}: mcp tool turn")).await.kind {
+                EventKind::TextDelta { text: t, .. } => text.push_str(&t),
+                EventKind::ToolUpdated(tool) => kinds.push(tool.kind),
+                EventKind::RequestOpened(request) => {
+                    session.answer(request.id(), allow()).await.unwrap();
+                }
+                EventKind::TurnEnded { stop, .. } => {
+                    assert!(
+                        matches!(stop, StopReason::Completed { .. }),
+                        "{h}: turn ended {stop:?}"
+                    );
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let logged = std::fs::read_to_string(&calls).unwrap_or_default();
+        assert!(
+            logged.contains("secret_word"),
+            "{h}: no call reached the server"
+        );
+        let mcp = ToolKind::Mcp {
+            server: "probe".into(),
+            tool: "secret_word".into(),
+        };
+        assert!(kinds.contains(&mcp), "{h}: tool kinds {kinds:?}");
+        assert!(text.contains(MCP_MARKER), "{h}: reply {text:?}");
+        session.close().await.unwrap();
+        pass(h, "the MCP tool was called and its marker came back");
+    }
+}
+
 /// Permission allow writes the file, deny blocks it and leaves the session usable for the next prompt.
 #[tokio::test]
 #[ignore = "live: talks to real agents"]
@@ -820,6 +1061,114 @@ async fn permissions_gate_the_write_and_deny_holds() {
     }
 }
 
+/// A deny's message reaches the model in place of the fixed text. claude only: opencode's
+/// route takes one too (OpenAPI `/doc`, 1.18.29), but its free model often ignores it.
+#[tokio::test]
+#[ignore = "live: talks to real agents"]
+async fn deny_with_a_message_reaches_the_agent() {
+    if !enabled().await.contains(&"claude") {
+        println!("SKIP: claude not enabled");
+        return;
+    }
+    let (session, mut events, dir) = open("claude").await;
+    session
+        .prompt(
+            "Create a file named note.txt containing exactly the word HELLO. Use your \
+             file tools. If the tool is refused, do not retry: reply with the reason \
+             you were given, word for word.",
+        )
+        .await
+        .unwrap();
+    let mut text = String::new();
+    let stop = loop {
+        match next(&mut events, "claude: deny with a message").await.kind {
+            EventKind::TextDelta { text: t, .. } => text.push_str(&t),
+            EventKind::RequestOpened(request) => {
+                // A fact to repeat, not a style request: haiku ignored one of those.
+                let deny = Answer::Deny {
+                    message: "Denied by the reviewer. The secret word is PINEAPPLE.".into(),
+                };
+                session.answer(request.id(), deny).await.unwrap();
+            }
+            EventKind::TurnEnded { stop, .. } => break stop,
+            _ => {}
+        }
+    };
+    assert!(!dir.path().join("note.txt").exists(), "file after deny");
+    assert!(
+        text.to_uppercase().contains("PINEAPPLE"),
+        "turn ended {stop:?}, text was {text:?}"
+    );
+    session.close().await.unwrap();
+    pass("claude", "a deny's message reached the model");
+}
+
+/// AcceptEdits: the file edit lands without a request reaching the caller;
+/// a shell command still asks.
+#[tokio::test]
+#[ignore = "live: talks to real agents"]
+async fn accept_edits_allows_the_edit_and_asks_for_the_shell() {
+    for h in enabled().await {
+        if !matches!(h, "claude" | "codex") {
+            println!("SKIP {h}: AcceptEdits asserted on claude and codex");
+            continue;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = Runtime::new();
+        let report = runtime.discover().await;
+        let agent = report.require(h).unwrap();
+        let mut options = options(h, dir.path()).permission_mode(PermissionMode::AcceptEdits);
+        // Under `on-request` the model may run the command sandboxed and
+        // never ask; `untrusted` asks for every non-trivial command.
+        if h == "codex" {
+            options = options.configure("mode", "untrusted");
+        }
+        let (session, mut events) = runtime.open(agent, options).await.unwrap();
+        session
+            .prompt(
+                "First create a file named note.txt containing exactly the word HELLO, using \
+                 your file-edit tool, not the shell. Then run the shell command `touch shell.txt`. \
+                 Do nothing else.",
+            )
+            .await
+            .unwrap();
+        let mut forwarded = Vec::new();
+        loop {
+            let event = next(&mut events, &format!("{h}: accept edits")).await;
+            match event.kind {
+                EventKind::RequestOpened(Request::Permission(request)) => {
+                    println!(
+                        "{h}: forwarded {:?} {}",
+                        request.tool.kind, request.tool.title
+                    );
+                    forwarded.push(request.tool.kind.clone());
+                    session
+                        .answer(request.id, Answer::Permission(PermissionChoice::DenyOnce))
+                        .await
+                        .unwrap();
+                }
+                EventKind::TurnEnded { .. } => break,
+                _ => {}
+            }
+        }
+        let content = std::fs::read_to_string(dir.path().join("note.txt"))
+            .unwrap_or_else(|_| panic!("{h}: note.txt missing"));
+        assert_eq!(content.trim(), "HELLO", "{h}: wrong content");
+        assert!(
+            !forwarded
+                .iter()
+                .any(|k| matches!(k, ToolKind::Edit | ToolKind::Delete | ToolKind::Move)),
+            "{h}: an edit reached the caller: {forwarded:?}"
+        );
+        assert!(
+            forwarded.contains(&ToolKind::Execute),
+            "{h}: the shell command never asked: {forwarded:?}"
+        );
+        session.close().await.unwrap();
+        pass(h, "edit allowed unasked, shell asked");
+    }
+}
+
 /// A `/word` that is not an advertised command must ride as plain text — an
 /// over-eager slash router would fail the turn on it (opencode routed every
 /// `/…` to its command endpoint before the fix).
@@ -859,7 +1208,7 @@ async fn opencode_child_session_permissions_reach_the_caller() {
         )
         .await
         .unwrap();
-    let mut approved = 0;
+    let (mut approved, mut info) = (0, None);
     loop {
         let event = next(&mut events, "opencode: child permission").await;
         match event.kind {
@@ -867,10 +1216,17 @@ async fn opencode_child_session_permissions_reach_the_caller() {
                 approved += 1;
                 session.answer(request.id, allow()).await.unwrap();
             }
+            EventKind::ToolUpdated(tool) if tool.kind == ToolKind::Subagent => {
+                println!("opencode: subagent {:?} {:?}", tool.status, tool.subagent);
+                info = tool.subagent.or(info);
+            }
             EventKind::TurnEnded { .. } => break,
             _ => {}
         }
     }
+    // The task names its agent and the child's model.
+    let info = info.expect("opencode: no subagent info");
+    assert!(info.role.is_some() && info.model.is_some(), "{info:?}");
     // The task tool asks on the root, its bash on the child.
     assert!(
         approved >= 2,
@@ -878,6 +1234,129 @@ async fn opencode_child_session_permissions_reach_the_caller() {
     );
     session.close().await.unwrap();
     pass("opencode", "child session permissions reached the caller");
+}
+
+/// A codex turn that writes a file streams a `TurnDiff` naming it.
+#[tokio::test]
+#[ignore = "live: talks to real agents"]
+async fn codex_turn_diff_names_the_edited_file() {
+    if !enabled().await.contains(&"codex") {
+        println!("SKIP: codex not enabled");
+        return;
+    }
+    let (session, mut events, _dir) = open("codex").await;
+    session
+        .prompt(
+            "Create a file named note.txt containing exactly the word HELLO. Use your file tools.",
+        )
+        .await
+        .unwrap();
+    let mut diffs = Vec::new();
+    loop {
+        match next(&mut events, "codex: turn diff").await.kind {
+            EventKind::RequestOpened(request) => {
+                session.answer(request.id(), allow()).await.unwrap();
+            }
+            EventKind::TurnDiff { unified } => diffs.push(unified),
+            EventKind::TurnEnded { .. } => break,
+            _ => {}
+        }
+    }
+    assert!(
+        diffs.iter().any(|d| d.contains("note.txt")),
+        "codex: no turn diff names note.txt: {diffs:?}"
+    );
+    session.close().await.unwrap();
+    pass(
+        "codex",
+        &format!("{} turn diffs, the file named", diffs.len()),
+    );
+}
+
+/// A codex subagent's child thread rides its subagent tool: the child's content carries
+/// the tool as parent, and its token total lands on the tool.
+#[tokio::test]
+#[ignore = "live: talks to real agents"]
+async fn codex_subagent_links_its_child() {
+    if !enabled().await.contains(&"codex") {
+        println!("SKIP: codex not enabled");
+        return;
+    }
+    let (session, mut events, _dir) = open("codex").await;
+    session
+        .prompt(
+            "Spawn exactly one subagent to reply with the single word PONG, wait for it, \
+             then reply with just the word done.",
+        )
+        .await
+        .unwrap();
+    let (mut nested, mut tools) = (0, std::collections::HashMap::new());
+    loop {
+        let event = next(&mut events, "codex: subagent").await;
+        nested += usize::from(event.turn_info.and_then(|t| t.parent_tool_id).is_some());
+        match event.kind {
+            EventKind::RequestOpened(request) => {
+                session.answer(request.id(), allow()).await.unwrap();
+            }
+            EventKind::ToolUpdated(tool) if tool.kind == ToolKind::Subagent => {
+                println!(
+                    "codex: subagent {} {:?} {:?}",
+                    tool.title, tool.status, tool.subagent
+                );
+                tools.insert(tool.id.clone(), tool);
+            }
+            EventKind::TurnEnded { .. } => break,
+            _ => {}
+        }
+    }
+    let owner = tools
+        .values()
+        .find(|t| t.subagent.as_ref().is_some_and(|s| s.tokens.is_some()))
+        .expect("codex: no subagent tool with the child's tokens");
+    assert!(nested > 0, "codex: no child event carried a parent tool");
+    assert_eq!(owner.status, ToolStatus::Completed);
+    session.close().await.unwrap();
+    pass(
+        "codex",
+        &format!("subagent {} {:?}", owner.title, owner.subagent),
+    );
+}
+
+/// claude's subagent tool names the role the parent gave it in the Agent input.
+#[tokio::test]
+#[ignore = "live: talks to real agents"]
+async fn claude_subagent_reports_its_role() {
+    if !enabled().await.contains(&"claude") {
+        println!("SKIP: claude not enabled");
+        return;
+    }
+    let (session, mut events, _dir) = open("claude").await;
+    session
+        .prompt(
+            "Call the Agent tool once with subagent_type \"general-purpose\" and the prompt \
+             \"Reply with the single word PONG. Use no tools.\". Then reply with what it said.",
+        )
+        .await
+        .unwrap();
+    let mut info = None;
+    loop {
+        let event = next(&mut events, "claude: subagent").await;
+        match event.kind {
+            EventKind::RequestOpened(Request::Permission(request)) => {
+                session.answer(request.id, allow()).await.unwrap();
+            }
+            EventKind::ToolUpdated(tool) if tool.kind == ToolKind::Subagent => {
+                println!("claude: subagent {:?} {:?}", tool.status, tool.subagent);
+                info = tool.subagent;
+            }
+            EventKind::TurnEnded { .. } => break,
+            _ => {}
+        }
+    }
+    let info = info.expect("claude: no subagent tool");
+    assert_eq!(info.role.as_deref(), Some("general-purpose"));
+    session.close().await.unwrap();
+    pass("claude", &format!("subagent reported {info:?}"));
 }
 
 /// Question request round-trips: choices presented, answer selected, and response echoed.
@@ -1178,6 +1657,36 @@ async fn resume_recalls_without_replaying() {
         assert!(text.contains("FALCON42"), "{h}: recall said {text:?}");
         session.close().await.unwrap();
         pass(h, "resumed with no replay and full recall");
+    }
+}
+
+/// TurnEnded carries the turn's token counts on the agents that report them.
+#[tokio::test]
+#[ignore = "live: talks to real agents"]
+async fn turn_usage_rides_turn_ended() {
+    for h in enabled().await {
+        let (session, mut events, _dir) = open(h).await;
+        session.prompt("Say OK. No tools.").await.unwrap();
+        let usage = loop {
+            match next(&mut events, &format!("{h}: usage turn")).await.kind {
+                EventKind::RequestOpened(request) => {
+                    session.answer(request.id(), allow()).await.unwrap();
+                }
+                EventKind::TurnEnded { usage, .. } => break usage,
+                _ => {}
+            }
+        };
+        println!("{h}: turn usage {usage:?}");
+        // Headless agy reports usage; its ACP server reports only context fill.
+        let headless_agy = h == "antigravity" && HEADLESS_AGY.get().copied().unwrap_or(false);
+        if matches!(h, "claude" | "codex" | "opencode" | "pi") || headless_agy {
+            let usage = usage.unwrap_or_else(|| panic!("{h}: TurnEnded without usage"));
+            assert!(usage.input_tokens > 0, "{h}: no input tokens");
+            assert!(usage.output_tokens > 0, "{h}: no output tokens");
+            assert!(usage.cached_input_tokens <= usage.input_tokens);
+        }
+        session.close().await.unwrap();
+        pass(h, "turn usage");
     }
 }
 
@@ -1518,7 +2027,7 @@ async fn fork_from_branches_at_a_point_and_at_the_tip() {
     }
 }
 
-/// Runtime plan_usage probes quota without a session, caches within TTL, or returns UnsupportedFeature typed.
+/// Runtime plan_usage probes quota without a session, caches within TTL, prints reset credits, or returns UnsupportedFeature typed.
 #[tokio::test]
 #[ignore = "live: talks to real agents"]
 async fn runtime_plan_usage_probes_without_a_session() {
@@ -1529,11 +2038,18 @@ async fn runtime_plan_usage_probes_without_a_session() {
         match runtime.plan_usage(agent).await {
             Ok(usage) => {
                 assert!(!usage.windows.is_empty(), "{h}: quota with no windows");
+                if h == "codex" {
+                    assert!(usage.reset_credits.is_some(), "{h}: no reset credits");
+                }
                 let cached = runtime.plan_usage(agent).await.unwrap();
                 assert_eq!(cached.fetched_at, usage.fetched_at, "{h}: cache missed");
                 pass(
                     h,
-                    &format!("probe returned {} windows, cached", usage.windows.len()),
+                    &format!(
+                        "probe returned {} windows, cached; reset credits {:?}",
+                        usage.windows.len(),
+                        usage.reset_credits
+                    ),
                 );
             }
             Err(AgentError::UnsupportedFeature(_)) => {
@@ -1705,13 +2221,16 @@ async fn errors_are_typed() {
         // (d) a resume token that names no conversation refuses typed, so
         // apps can tell a dead token from a broken protocol (native wires;
         // probed: claude "No conversation found", codex "no rollout found",
-        // opencode a session-fetch rejection).
+        // opencode a 404 on an unknown `ses_` id).
         if matches!(h, "claude" | "codex" | "opencode") {
             let runtime = Runtime::new();
             let report = runtime.discover().await;
             let agent = report.require(h).unwrap();
             let dir = tempfile::tempdir().unwrap();
-            let bogus = ResumeToken::new("3b1c9f2e-5a6d-4e7f-8a9b-0c1d2e3f4a5b");
+            let bogus = ResumeToken::new(match h {
+                "opencode" => "ses_0000000000000000000000000",
+                _ => "3b1c9f2e-5a6d-4e7f-8a9b-0c1d2e3f4a5b",
+            });
             let mut options = SessionOptions::in_dir(dir.path()).resume(bogus);
             if h == "opencode" {
                 options = options.configure("model", OPENCODE_MODEL);

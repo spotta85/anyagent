@@ -9,9 +9,13 @@
 // unless --dangerously-skip-permissions), "ask" (a skipped question),
 // "sleep" (a spoken step, then a tool only a kill ends), "subagent", "fail" (the model errors),
 // "die" (the process exits mid-turn), "recall" (echoes the conversation id
-// and the launch flags), "chunks" (text in two deltas).
+// and the launch flags), "chunks" (text in two deltas), "think" (two model
+// calls with live-recorded usage).
 import { createInterface } from 'node:readline';
+import { appendFileSync } from 'node:fs';
 
+// FIXTURE_ARGV_LOG, set through the session's env: log the launch args there.
+if (process.env.FIXTURE_ARGV_LOG) appendFileSync(process.env.FIXTURE_ARGV_LOG, JSON.stringify(process.argv.slice(2)) + '\n');
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(name);
 const after = (name) => argv[argv.indexOf(name) + 1];
@@ -64,7 +68,7 @@ rl.on('close', () => process.exit(0));
 // --- turns ------------------------------------------------------------------
 
 const update = (fields) => send({ event: 'step_update', step_update: { conversation_id: conversation, step_index: step, ...fields } });
-const text = (delta, state = 'DONE') => update({ state, step_type: 'agent_response', text_delta: delta, ...(state === 'DONE' && { duration_seconds: 1, usage: usage(13762) }) });
+const text = (delta, state = 'DONE', used = usage(13762)) => update({ state, step_type: 'agent_response', text_delta: delta, ...(state === 'DONE' && { duration_seconds: 1, usage: used }) });
 // `result.usage` sums every step snapshot (recorded): twice a single step.
 const result = (response, status = 'SUCCESS', error) => {
   turns += 1;
@@ -110,6 +114,14 @@ async function onUser(frame) {
     step += 1;
     text('The subagent said pong.\n');
     return result('The subagent said pong.\n');
+  }
+  if (prompt.includes('think')) {
+    // Two model calls carrying what agy 1.1.27 reported live (gemini-3.8-flash-high):
+    // cache read beside input, thinking inside output.
+    text('Counting.\n', 'DONE', { input_tokens: 19456, output_tokens: 62, thinking_tokens: 61, cache_read_tokens: 0, total_tokens: 19518 });
+    step += 2;
+    text('7\n', 'DONE', { input_tokens: 3324, output_tokens: 4935, thinking_tokens: 4309, cache_read_tokens: 16297, total_tokens: 8259 });
+    return result('Counting.\n7\n');
   }
   if (prompt.includes('chunks')) {
     text('I have created the', 'ACTIVE');

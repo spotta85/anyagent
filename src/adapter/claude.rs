@@ -16,8 +16,8 @@ use tokio::sync::mpsc;
 use crate::adapter::{
     Adapter, CLOSE_GRACE, ConnectRequest, DriverCommand, DriverConnection, DriverEvent, DriverInfo,
     Emitter, FRAME_BUFFER, Gone, HANDSHAKE_TIMEOUT, LineWire, OUTPUT_CAP, WireRecorder, attach,
-    cap, level_choices, login_methods, plan_entries, selected, set_effort_option, set_fast_option,
-    with_stderr,
+    cap, child_env_set, level_choices, login_methods, model_options, plan_entries, selected,
+    set_effort_option, set_fast_option, with_stderr,
 };
 use crate::agent::{
     AccountInfo, AgentDetails, AuthKind, AuthStatus, Capabilities, Capability, ConfigChoice,
@@ -28,8 +28,8 @@ use crate::error::AgentError;
 use crate::event::{
     Answer, Choice, ChoiceId, CompletionSource, Diagnostic, DiagnosticLevel, EventKind, Extensions,
     FileDiff, MessageId, PermissionChoice, PermissionRequest, PlanUsage, Question, QuestionAnswer,
-    QuestionId, QuestionRequest, RawTool, Request, RequestId, StopReason, ToolId, ToolInput,
-    ToolKind, ToolStatus, ToolUpdate, UsageWindow,
+    QuestionId, QuestionRequest, RawTool, Request, RequestId, ResetCredits, StopReason,
+    SubagentInfo, ToolId, ToolInput, ToolKind, ToolStatus, ToolUpdate, TurnUsage, UsageWindow,
 };
 use crate::process::{self, Spawn};
 
@@ -88,6 +88,8 @@ impl Adapter for ClaudeAdapter {
                 messages: HashMap::new(),
                 configs: Vec::new(),
                 usage_request: None,
+                mcp_request: None,
+                skills_request: None,
                 interrupt_id: None,
                 turn_uuid: None,
                 turn_assistant: None,
@@ -106,23 +108,32 @@ impl Adapter for ClaudeAdapter {
         })
     }
 
-    /// Quota probe: spawn, `initialize`, `get_usage`, shut down (~1-2 s).
+    /// Quota probe: spawn isolated like a throwaway session with the options'
+    /// config home, env and args, `initialize`, `get_usage`, shut down (~1-2 s).
     async fn plan_usage(
         &self,
         installation: &crate::agent::AgentInstallation,
+        options: &crate::agent::SessionOptions,
     ) -> Result<PlanUsage, AgentError> {
+        // Only the throwaway flags: no other session option applies to a quota read.
+        let isolation = option_args(&crate::runtime::throwaway_options())?;
+        let args = BASE_ARGS.iter().map(|s| (*s).to_owned());
         let mut child = process::spawn(Spawn {
             exec_path: installation.executable_path.clone(),
-            args: BASE_ARGS.iter().map(|s| (*s).to_owned()).collect(),
+            args: args
+                .chain(isolation)
+                .chain(options.args.iter().cloned())
+                .collect(),
             cwd: std::env::temp_dir(),
-            env: Vec::new(),
+            env: crate::adapter::launch_env(installation, options)?,
         })
         .await?;
         let mut wire = Wire::over(&mut child, None);
         let fetch = async {
             wire.roundtrip(json!({ "subtype": "initialize", "hooks": {} }))
                 .await?;
-            wire.roundtrip(json!({ "subtype": "get_usage" })).await
+            wire.roundtrip(json!({ "subtype": "get_usage", "skip_behaviors": true }))
+                .await
         };
         let result = match tokio::time::timeout(HANDSHAKE_TIMEOUT, fetch).await {
             Ok(Ok(response)) => parse_plan_usage(&response).ok_or_else(|| {
@@ -179,7 +190,12 @@ async fn launch(
     if request.options.throwaway {
         args.push("--no-session-persistence".into());
     }
-    let mut env = crate::adapter::config_home_env(&request.installation, &request.options)?;
+    // A schema is no secret, so argv is fine (`--json-schema`, 2.1.283).
+    if let Some(schema) = &request.options.output_schema {
+        args.extend(["--json-schema".into(), schema.to_string()]);
+    }
+    args.extend(request.options.args.iter().cloned());
+    let mut env = crate::adapter::launch_env(&request.installation, &request.options)?;
     // Free until used (probed 2026-08-27): enables `rewind_files` for the
     // files rollback scope. Env-only, so it must be set at spawn.
     env.push((
@@ -224,13 +240,20 @@ fn map_resume(start: &SessionStart, e: AgentError) -> AgentError {
     }
 }
 
-/// `initialize` then `get_binary_version`, both over the control channel.
+/// `initialize` (carrying the instructions), `get_binary_version`, then
+/// `get_skills_dialog`, all over the control channel.
 async fn handshake(
     wire: &mut Wire,
     request: &ConnectRequest,
 ) -> Result<(DriverInfo, Value), AgentError> {
+    let mut params = json!({ "subtype": "initialize", "hooks": {} });
+    // On the control channel, not argv: out of `ps` and the OS argument
+    // limit (live-verified 2026-09-27, 2.1.283).
+    if let Some(text) = &request.options.instructions {
+        params["appendSystemPrompt"] = json!(text);
+    }
     let init = wire
-        .roundtrip(json!({ "subtype": "initialize", "hooks": {} }))
+        .roundtrip(params)
         .await
         .map_err(WireError::into_error)?;
     let version = wire
@@ -238,7 +261,12 @@ async fn handshake(
         .await
         .ok()
         .and_then(|v| v["version"].as_str().map(str::to_owned));
-    let info = driver_info(&init, version, request);
+    // Skills rows: `@internal` in the CLI's schema (2.1.283); a CLI that refuses it marks none.
+    let skills = wire
+        .roundtrip(json!({ "subtype": "get_skills_dialog" }))
+        .await
+        .unwrap_or_default();
+    let info = driver_info(&init, &skills, version, request);
     if requested_fast(request)
         && !info
             .configuration
@@ -252,12 +280,15 @@ async fn handshake(
     Ok((info, init["models"].clone()))
 }
 
-/// MCP declarations and creation-time config as launch flags.
+/// Throwaway isolation and creation-time config as launch flags. Flag
+/// settings share one `--settings` value.
 fn option_args(options: &crate::agent::SessionOptions) -> Result<Vec<String>, AgentError> {
     let mut args = Vec::new();
-    if !options.mcp_servers.is_empty() {
-        args.push("--mcp-config".into());
-        args.push(mcp_config(&options.mcp_servers).to_string());
+    let mut settings = serde_json::Map::new();
+    // A throwaway session (probe, generate) runs no user hooks or MCP servers.
+    if options.throwaway {
+        args.push("--strict-mcp-config".into());
+        settings.insert("disableAllHooks".into(), json!(true));
     }
     for (id, value) in &options.configure {
         match (id.as_str(), value) {
@@ -270,8 +301,7 @@ fn option_args(options: &crate::agent::SessionOptions) -> Result<Vec<String>, Ag
                 args.push(model.clone());
             }
             ("fast", ConfigValue::Bool(fast)) => {
-                args.push("--settings".into());
-                args.push(json!({ "fastMode": fast }).to_string());
+                settings.insert("fastMode".into(), json!(fast));
             }
             ("effort", ConfigValue::Text(effort)) => {
                 args.push("--effort".into());
@@ -283,6 +313,10 @@ fn option_args(options: &crate::agent::SessionOptions) -> Result<Vec<String>, Ag
                 )));
             }
         }
+    }
+    if !settings.is_empty() {
+        args.push("--settings".into());
+        args.push(Value::Object(settings).to_string());
     }
     Ok(args)
 }
@@ -313,8 +347,8 @@ fn supports_fast(models: &Value, model: &str) -> bool {
         .any(|entry| entry["value"].as_str() == Some(model) && entry["supportsFastMode"] == true)
 }
 
-/// The current model's effort levels as a live option (`apply_flag_settings`
-/// switches it); `None` when the catalog has none.
+/// A catalog model's effort levels as choices (the first entry's for an
+/// unknown model); empty when it has none.
 fn effort_levels(models: &Value, model: &str) -> Vec<ConfigChoice> {
     let Some(entries) = models.as_array() else {
         return Vec::new();
@@ -331,16 +365,24 @@ fn effort_levels(models: &Value, model: &str) -> Vec<ConfigChoice> {
     level_choices(levels)
 }
 
-/// The `initialize` model catalog as config choices.
+/// The `initialize` model catalog as config choices, each with its own
+/// effort levels (the catalog names no default) and Fast mode.
 fn model_choices(models: &Value) -> Vec<ConfigChoice> {
     models
         .as_array()
         .into_iter()
         .flatten()
-        .map(|m| ConfigChoice {
-            value: m["value"].as_str().unwrap_or_default().to_owned(),
-            label: m["displayName"].as_str().unwrap_or_default().to_owned(),
-            description: m["description"].as_str().map(str::to_owned),
+        .map(|m| {
+            let value = m["value"].as_str().unwrap_or_default();
+            let fast = supports_fast(models, value);
+            ConfigChoice {
+                options: model_options(effort_levels(models, value), None, fast),
+                ..ConfigChoice::new(
+                    value,
+                    m["displayName"].as_str().unwrap_or_default(),
+                    m["description"].as_str().map(str::to_owned),
+                )
+            }
         })
         .collect()
 }
@@ -395,7 +437,7 @@ fn account_status(account: &Value, request: &ConnectRequest) -> AuthStatus {
     if account["tokenSource"].as_str() == Some("none") {
         // A gateway token is invisible on this wire (the account object
         // reads logged out); the env var is reported, never validated.
-        if std::env::var(GATEWAY_TOKEN_ENV).is_ok_and(|v| !v.trim().is_empty()) {
+        if child_env_set(&request.options, GATEWAY_TOKEN_ENV) {
             return AuthStatus::Authenticated {
                 kind: AuthKind::ApiKey,
                 account: None,
@@ -408,10 +450,16 @@ fn account_status(account: &Value, request: &ConnectRequest) -> AuthStatus {
     AuthStatus::Unknown
 }
 
-/// What the `initialize` response tells us, folded into the engine vocabulary.
-fn driver_info(init: &Value, version: Option<String>, request: &ConnectRequest) -> DriverInfo {
+/// What the `initialize` response and the skills rows tell us, folded into
+/// the engine vocabulary.
+fn driver_info(
+    init: &Value,
+    skills: &Value,
+    version: Option<String>,
+    request: &ConnectRequest,
+) -> DriverInfo {
     let auth = account_status(&init["account"], request);
-    let commands = slash_commands(&init["commands"]);
+    let commands = slash_commands(&init["commands"], skills);
     // The CLI's fixed permission modes, current from `initialize`.
     let mode = init["current_permission_mode"]
         .as_str()
@@ -423,11 +471,7 @@ fn driver_info(init: &Value, version: Option<String>, request: &ConnectRequest) 
         category: Some("mode".into()),
         kind: ConfigKind::Select {
             choices: ["default", "acceptEdits", "plan", "bypassPermissions"]
-                .map(|value| ConfigChoice {
-                    value: value.into(),
-                    label: value.into(),
-                    description: None,
-                })
+                .map(|value| ConfigChoice::new(value, value, None))
                 .to_vec(),
         },
         current: Some(ConfigValue::Text(mode.clone())),
@@ -474,6 +518,7 @@ fn driver_info(init: &Value, version: Option<String>, request: &ConnectRequest) 
                     Capability::SlashCommands,
                     Capability::Resume,
                     Capability::Plan,
+                    Capability::OutputSchema,
                 ]);
                 capabilities.mcp_transports =
                     vec![McpTransport::Stdio, McpTransport::Http, McpTransport::Sse];
@@ -550,6 +595,10 @@ struct Drive {
     configs: Vec<(String, ConfigId, ConfigValue)>,
     /// An in-flight `get_usage`, sent after each `result` frame.
     usage_request: Option<String>,
+    /// The in-flight `mcp_set_servers`, whose receipt names servers that failed.
+    mcp_request: Option<String>,
+    /// The in-flight `get_skills_dialog` and the changed command list it sources.
+    skills_request: Option<(String, Value)>,
     /// The last `interrupt` control request, whose receipt may name a
     /// cancelled queued prompt.
     interrupt_id: Option<String>,
@@ -574,6 +623,11 @@ struct Drive {
 impl Drive {
     /// Main loop until the engine or the agent goes away.
     async fn run(mut self, mut commands: mpsc::UnboundedReceiver<DriverCommand>) {
+        // First on the wire, so the first prompt waits on the servers.
+        if self.declare_mcp_servers().await.is_err() {
+            self.child.shutdown(CLOSE_GRACE).await;
+            return;
+        }
         loop {
             tokio::select! {
                 cmd = commands.recv() => match cmd {
@@ -681,6 +735,7 @@ impl Drive {
             "control_response" => self.on_control_response(&frame).await,
             "result" => self.on_result(&frame).await,
             "system" => self.on_system(&frame).await,
+            "tool_progress" => self.on_tool_progress(&frame).await,
             // Rate pushes are dropped (`get_usage` after each turn covers
             // quota); lifecycle frames only narrate the CLI's own queue.
             "rate_limit_event" | "control_cancel_request" | "command_lifecycle" => Ok(()),
@@ -814,6 +869,20 @@ impl Drive {
                 },
                 // Questions surface through `can_use_tool`, not as a tool.
                 "AskUserQuestion" => continue,
+                // `--json-schema`'s reply is this call's input: a message of its own,
+                // after any text the model wrote first (live 2026-09-27, 2.1.283).
+                "StructuredOutput" => {
+                    let message_id = MessageId::new(block["id"].as_str().unwrap_or("m0"));
+                    let text = block["input"].to_string();
+                    let kind = EventKind::TextDelta {
+                        message_id: message_id.clone(),
+                        text,
+                    };
+                    self.events
+                        .content(kind, parent.clone().map(ToolId::new), Extensions::new())
+                        .await?;
+                    EventKind::MessageEnded { message_id }
+                }
                 _ => {
                     let tool = fresh_tool(block);
                     self.tools.insert(tool.id.as_str().to_owned(), tool.clone());
@@ -891,6 +960,14 @@ impl Drive {
         }
         let id = RequestId::new(format!("r{wire_id}"));
         let input = request["input"].clone();
+        // Plan mode's `ExitPlanMode` carries the plan: it goes out before its request.
+        if request["tool_name"].as_str() == Some("ExitPlanMode")
+            && let Some(markdown) = text(&input["plan"])
+        {
+            self.events
+                .event(EventKind::PlanProposed { markdown })
+                .await?;
+        }
         let questions = (request["tool_name"].as_str() == Some("AskUserQuestion"))
             .then(|| questions(&input["questions"]));
         let open = match &questions {
@@ -954,6 +1031,31 @@ impl Drive {
                     .events
                     .send(DriverEvent::event(EventKind::PlanUsageUpdated(usage)))
                     .await;
+            }
+            return Ok(());
+        }
+        // The skills rows for a changed command list; a refusal marks none as skills.
+        let skills_request = self
+            .skills_request
+            .take_if(|(id, _)| response["request_id"].as_str() == Some(id));
+        if let Some((_, commands)) = skills_request {
+            self.info.details.commands = slash_commands(&commands, &response["response"]);
+            return self
+                .events
+                .send(DriverEvent::InfoChanged(self.info.clone()))
+                .await;
+        }
+        // The declared servers' receipt: a Warning per server that failed, or for a refusal.
+        let for_mcp = self
+            .mcp_request
+            .as_ref()
+            .is_some_and(|id| response["request_id"].as_str() == Some(id));
+        if for_mcp {
+            self.mcp_request = None;
+            for warning in mcp_warnings(response) {
+                self.events
+                    .diagnostic(DiagnosticLevel::Warning, warning)
+                    .await?;
             }
             return Ok(());
         }
@@ -1025,12 +1127,19 @@ impl Drive {
                 }))
                 .await?;
         }
+        if let Some(usage) = turn_usage(&frame["usage"]) {
+            self.events.send(DriverEvent::TurnUsage(usage)).await?;
+        }
         self.events
             .send(DriverEvent::TurnEnded(stop_reason(frame)))
             .await?;
         // Refresh plan quota after every turn; the receipt becomes
         // `PlanUsageUpdated` in `on_control_response`.
-        self.usage_request = Some(self.wire.control(json!({ "subtype": "get_usage" })).await?);
+        self.usage_request = Some(
+            self.wire
+                .control(json!({ "subtype": "get_usage", "skip_behaviors": true }))
+                .await?,
+        );
         Ok(())
     }
 
@@ -1040,10 +1149,8 @@ impl Drive {
         self.request.options.configure.push((id, value));
     }
 
-    /// Emulated rollback: respawn forked at the last kept turn's assistant
-    /// message. The resume token clears until the fork names itself on the
-    /// next `system/init`; the old session stays on disk. A failed respawn
-    /// closes the session.
+    /// Emulated rollback: respawn forked at the last kept turn's assistant message.
+    /// The token clears until the fork names itself; a failed respawn closes the session.
     async fn rollback(
         &mut self,
         turns: std::num::NonZeroU32,
@@ -1053,21 +1160,17 @@ impl Drive {
         if n >= self.history.len() {
             return self
                 .events
-                .diagnostic(
-                    DiagnosticLevel::Warning,
-                    format!(
-                        "rollback({n}) rejected: {} completed turns, and at least one must \
-                         remain (open a new session instead)",
-                        self.history.len()
-                    ),
-                )
+                .rollback_refused(format!(
+                    "rollback({n}) rejected: {} completed turns, and at least one must \
+                     remain (open a new session instead)",
+                    self.history.len()
+                ))
                 .await;
         }
         let Some(cut) = self.history[self.history.len() - n - 1].assistant.clone() else {
             return self
                 .events
-                .diagnostic(
-                    DiagnosticLevel::Warning,
+                .rollback_refused(
                     "rollback rejected: the turn at the cut point produced no assistant message",
                 )
                 .await;
@@ -1075,10 +1178,7 @@ impl Drive {
         let Some(token) = self.info.resume_token.clone() else {
             return self
                 .events
-                .diagnostic(
-                    DiagnosticLevel::Warning,
-                    "rollback rejected: no provider session id yet",
-                )
+                .rollback_refused("rollback rejected: no provider session id yet")
                 .await;
         };
         // Files first, on the still-live process: a failed rewind leaves the
@@ -1087,8 +1187,7 @@ impl Drive {
             let Some(user) = self.history[self.history.len() - n].user.clone() else {
                 return self
                     .events
-                    .diagnostic(
-                        DiagnosticLevel::Warning,
+                    .rollback_refused(
                         "rollback rejected: the first dropped turn has no user message to \
                          rewind files at",
                     )
@@ -1097,7 +1196,7 @@ impl Drive {
             if let Err(e) = self.rewind_files(&user).await? {
                 return self
                     .events
-                    .diagnostic(DiagnosticLevel::Warning, format!("rollback rejected: {e}"))
+                    .rollback_refused(format!("rollback rejected: {e}"))
                     .await;
             }
         }
@@ -1110,16 +1209,27 @@ impl Drive {
                 // In-flight state died with the old wire; the new one reuses
                 // its control ids, so stale ones would mis-match receipts.
                 self.messages.clear();
-                self.tools.clear();
                 self.requests.clear();
                 self.usage_request = None;
+                self.skills_request = None;
                 self.configs.clear();
                 self.interrupt_id = None;
                 self.info.resume_token = None;
+                // The old process took its running tools with it: settle them.
+                for (_, mut tool) in std::mem::take(&mut self.tools) {
+                    if tool.status.is_active() {
+                        tool.status = ToolStatus::Cancelled;
+                        self.events.event(EventKind::ToolUpdated(tool)).await?;
+                    }
+                }
+                // The fork is a new process: it needs the servers again.
+                self.declare_mcp_servers().await?;
                 self.events
                     .send(DriverEvent::InfoChanged(self.info.clone()))
-                    .await
+                    .await?;
+                self.events.send(DriverEvent::RolledBack(Ok(()))).await
             }
+            // The session is dead: no `RolledBack`, so the caller gets `SessionClosed`.
             Err(e) => {
                 self.events
                     .diagnostic(DiagnosticLevel::Error, format!("rollback failed: {e}"))
@@ -1153,6 +1263,19 @@ impl Drive {
         self.child = child;
         self.wire = wire;
         self.models = models;
+        Ok(())
+    }
+
+    /// Declares the app's MCP servers on the control channel, off argv. Unawaited:
+    /// a connect can take 30 s, and the CLI holds later input until it settles.
+    async fn declare_mcp_servers(&mut self) -> Result<(), Gone> {
+        self.mcp_request = None;
+        if self.request.options.mcp_servers.is_empty() {
+            return Ok(());
+        }
+        let servers = mcp_servers(&self.request.options.mcp_servers);
+        let request = json!({ "subtype": "mcp_set_servers", "servers": servers });
+        self.mcp_request = Some(self.wire.control(request).await?);
         Ok(())
     }
 
@@ -1213,13 +1336,15 @@ impl Drive {
                 }
                 Ok(())
             }
-            // The CLI pushes its whole slash-command list when it changes
-            // (2.1.261); it replaces the one from `initialize`.
+            // The CLI pushes its whole command list when it changes (2.1.261); it
+            // replaces the old one once fresh skills rows arrive (`on_control_response`).
             "commands_changed" => {
-                self.info.details.commands = slash_commands(&frame["commands"]);
-                self.events
-                    .send(DriverEvent::InfoChanged(self.info.clone()))
-                    .await
+                let id = self
+                    .wire
+                    .control(json!({ "subtype": "get_skills_dialog" }))
+                    .await?;
+                self.skills_request = Some((id, frame["commands"].clone()));
+                Ok(())
             }
             "status" if frame["status"].as_str() == Some("compacting") => {
                 self.events
@@ -1238,19 +1363,63 @@ impl Drive {
                     )
                     .await
             }
-            // A background task finished: complete the tool it ran under.
+            // The CLI changed its own mode (an allowed `ExitPlanMode`, probed 2.1.283).
+            "status" if frame["permissionMode"].is_string() => {
+                let id = ConfigId::new("mode");
+                let mode = ConfigValue::from(frame["permissionMode"].as_str().unwrap_or_default());
+                if !crate::adapter::apply_selection(&mut self.info, &id, &mode) {
+                    return Ok(());
+                }
+                self.remember_option(id, mode);
+                self.events
+                    .send(DriverEvent::InfoChanged(self.info.clone()))
+                    .await
+            }
+            // A subagent's latest progress line and token count (recording 05;
+            // 2.1.283 sets `summary` only with the agentProgressSummaries option).
+            "task_progress" => {
+                let Some(tool) = self.task_tool(frame) else {
+                    return Ok(());
+                };
+                let Some(info) = &mut tool.subagent else {
+                    return Ok(());
+                };
+                info.summary = text(&frame["summary"]).or_else(|| text(&frame["description"]));
+                info.tokens = frame["usage"]["total_tokens"].as_u64().or(info.tokens);
+                let tool = tool.clone();
+                self.events.event(EventKind::ToolUpdated(tool)).await
+            }
+            // A task finished: settle the tool it ran under. It stays tracked, so a
+            // foreground subagent's trailing `tool_result` still adds its output.
             "task_notification" => {
-                let Some(id) = frame["tool_use_id"].as_str() else {
+                let Some(tool) = self.task_tool(frame) else {
                     return Ok(());
                 };
-                let Some(mut tool) = self.tools.remove(id) else {
+                tool.status = match frame["status"].as_str() {
+                    Some("failed") => ToolStatus::Failed,
+                    Some("stopped") => ToolStatus::Cancelled,
+                    _ => ToolStatus::Completed,
+                };
+                // A background task's real result is the `summary` (2.1.283 schema).
+                let summary = text(&frame["summary"]).map(|s| cap(s, OUTPUT_CAP));
+                tool.output = summary.or(tool.output.take());
+                if let Some(info) = &mut tool.subagent {
+                    info.tokens = frame["usage"]["total_tokens"].as_u64().or(info.tokens);
+                }
+                let tool = tool.clone();
+                self.events.event(EventKind::ToolUpdated(tool)).await
+            }
+            // A deny rule or the CLI's mode refused a tool (probed 2026-09-27,
+            // 2.1.283); untracking it drops the error `tool_result` that trails.
+            "permission_denied" => {
+                let Some(mut tool) = frame["tool_use_id"]
+                    .as_str()
+                    .and_then(|id| self.tools.remove(id))
+                else {
                     return Ok(());
                 };
-                tool.status = if frame["status"].as_str() == Some("failed") {
-                    ToolStatus::Failed
-                } else {
-                    ToolStatus::Completed
-                };
+                tool.status = ToolStatus::Denied;
+                tool.output = text(&frame["message"]);
                 self.events
                     .send(DriverEvent::event(EventKind::ToolUpdated(tool)))
                     .await
@@ -1258,6 +1427,22 @@ impl Drive {
             // Hooks, task bookkeeping, statuses: nothing the engine needs.
             _ => Ok(()),
         }
+    }
+
+    /// A running tool's elapsed seconds. 2.1.283 names the tool in `parent_tool_use_id`
+    /// (`tool_use_id` is `bash-progress-N`; probed 2026-09-27); untracked ones are dropped.
+    async fn on_tool_progress(&mut self, frame: &Value) -> Result<(), Gone> {
+        let id = frame["parent_tool_use_id"].as_str();
+        let Some(id) = id.filter(|id| self.tools.contains_key(*id)) else {
+            return Ok(());
+        };
+        self.events
+            .event(EventKind::ToolProgress {
+                tool_id: ToolId::new(id),
+                message: None,
+                elapsed_ms: frame["elapsed_time_seconds"].as_u64().map(|s| s * 1000),
+            })
+            .await
     }
 
     /// Answers one stored `can_use_tool` request on the control channel.
@@ -1269,6 +1454,11 @@ impl Drive {
             (None, Answer::Permission(choice)) => permission_response(&pending, choice),
             (Some(questions), Answer::Question(answers)) => {
                 question_response(&pending, questions, &answers)
+            }
+            // The message becomes the tool result; `interrupt` ends the turn (probed 2026-09-27, 2.1.283).
+            (_, Answer::Deny { message }) => json!({ "behavior": "deny", "message": message }),
+            (_, Answer::Cancel) => {
+                json!({ "behavior": "deny", "message": "cancelled", "interrupt": true })
             }
             _ => json!({ "behavior": "deny", "message": "unsupported answer" }),
         };
@@ -1287,6 +1477,11 @@ impl Drive {
                 "input": request["input"],
             }))
         })
+    }
+
+    /// The tracked tool a `task_*` frame names in its `tool_use_id`.
+    fn task_tool(&mut self, frame: &Value) -> Option<&mut ToolUpdate> {
+        self.tools.get_mut(frame["tool_use_id"].as_str()?)
     }
 
     /// Writes one user message and returns its uuid. Attachments become
@@ -1348,9 +1543,9 @@ impl Drive {
 // FRAME DECODING
 // ---------------------------------------------------------------------------
 
-/// Declared MCP servers as a `--mcp-config` inline JSON value. The CLI takes
-/// every transport, so nothing is refused.
-fn mcp_config(servers: &[McpServer]) -> Value {
+/// Declared MCP servers as the `servers` object of `mcp_set_servers`. The CLI
+/// takes every transport, so nothing is refused.
+fn mcp_servers(servers: &[McpServer]) -> Value {
     let mut entries = serde_json::Map::new();
     for server in servers {
         let entry = match &server.connection {
@@ -1366,7 +1561,25 @@ fn mcp_config(servers: &[McpServer]) -> Value {
         };
         entries.insert(server.name.clone(), entry);
     }
-    json!({ "mcpServers": entries })
+    Value::Object(entries)
+}
+
+/// Warnings from a `mcp_set_servers` receipt: one for a refusal, one per server
+/// that did not connect. The CLI's messages name URLs, never headers or env.
+fn mcp_warnings(response: &Value) -> Vec<String> {
+    if response["subtype"].as_str() == Some("error") {
+        let message = response["error"].as_str().unwrap_or("refused");
+        return vec![format!("agent refused the declared MCP servers: {message}")];
+    }
+    response["response"]["errors"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(name, message)| {
+            let message = message.as_str().unwrap_or("connection failed");
+            format!("MCP server `{name}` did not connect: {message}")
+        })
+        .collect()
 }
 
 /// The subagent tool a frame belongs to, if any.
@@ -1384,6 +1597,13 @@ fn fresh_tool(block: &Value) -> ToolUpdate {
     let name = block["name"].as_str().unwrap_or_default();
     let input = &block["input"];
     let (kind, tool_input) = decode_tool(name, input);
+    // The Agent/Task input names the subagent; `model` only when the parent picks one
+    // (recording 05 line 36 has none; probed 2026-09-27, 2.1.283, it had "haiku").
+    let subagent = (kind == ToolKind::Subagent).then(|| SubagentInfo {
+        role: text(&input["subagent_type"]),
+        model: text(&input["model"]),
+        ..SubagentInfo::default()
+    });
     ToolUpdate {
         id: ToolId::new(block["id"].as_str().unwrap_or_default()),
         kind,
@@ -1397,6 +1617,7 @@ fn fresh_tool(block: &Value) -> ToolUpdate {
             name: name.to_owned(),
             input: input.clone(),
         }),
+        subagent,
     }
 }
 
@@ -1460,11 +1681,11 @@ fn title(name: &str, input: &Value) -> String {
     }
 }
 
-/// Applies a `tool_result` block and its typed `tool_use_result`. A result
-/// carrying a `backgroundTaskId` means the tool keeps running in the
-/// background; `task_notification` finishes it later.
+/// Applies a `tool_result` block and its typed `tool_use_result`. A backgrounded
+/// tool keeps running; `task_notification` finishes it later.
 fn complete_tool(tool: &mut ToolUpdate, block: &Value, typed: &Value) {
-    tool.status = if typed["backgroundTaskId"].is_string() {
+    // Bash names a `backgroundTaskId`; a background Agent says `async_launched` (2.1.283).
+    tool.status = if typed["backgroundTaskId"].is_string() || typed["status"] == "async_launched" {
         ToolStatus::Running
     } else if block["is_error"].as_bool().unwrap_or(false) {
         ToolStatus::Failed
@@ -1603,21 +1824,55 @@ fn question_response(
     json!({ "behavior": "allow", "updatedInput": updated })
 }
 
-/// The CLI's `commands` array (from `initialize` or `commands_changed`).
-fn slash_commands(commands: &Value) -> Vec<SlashCommand> {
+/// The CLI's `commands` array (from `initialize` or `commands_changed`),
+/// each sourced from the `get_skills_dialog` reply.
+fn slash_commands(commands: &Value, skills: &Value) -> Vec<SlashCommand> {
     commands
         .as_array()
         .into_iter()
         .flatten()
-        .map(|c| SlashCommand {
-            name: c["name"].as_str().unwrap_or_default().to_owned(),
-            description: c["description"].as_str().unwrap_or_default().to_owned(),
-            input_hint: c["argumentHint"]
-                .as_str()
-                .filter(|h| !h.is_empty())
-                .map(str::to_owned),
+        .map(|c| {
+            let name = c["name"].as_str().unwrap_or_default();
+            SlashCommand {
+                name: name.to_owned(),
+                description: c["description"].as_str().unwrap_or_default().to_owned(),
+                input_hint: c["argumentHint"]
+                    .as_str()
+                    .filter(|h| !h.is_empty())
+                    .map(str::to_owned),
+                source: command_source(skills, name),
+            }
         })
         .collect()
+}
+
+/// A skill when a `/skills` menu row shows `name`, scoped by the row's source
+/// label ("user", "project", "plugin"); built in otherwise.
+fn command_source(skills: &Value, name: &str) -> crate::agent::CommandSource {
+    // Rows carry no path (probed 2026-09-27, 2.1.283); `display_name` is the command's name.
+    skills["skills"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|row| row["display_name"].as_str() == Some(name))
+        .map_or(crate::agent::CommandSource::Builtin, |row| {
+            crate::agent::CommandSource::Skill {
+                path: None,
+                scope: row["source"].as_str().map(str::to_owned),
+            }
+        })
+}
+
+/// The `result` frame's usage: the whole turn, cache reads and writes
+/// counted as input.
+fn turn_usage(usage: &Value) -> Option<TurnUsage> {
+    let count = |key: &str| usage[key].as_u64().unwrap_or(0);
+    let cached = count("cache_read_input_tokens");
+    usage.is_object().then(|| TurnUsage {
+        input_tokens: count("input_tokens") + count("cache_creation_input_tokens") + cached,
+        cached_input_tokens: cached,
+        output_tokens: count("output_tokens"),
+    })
 }
 
 /// Context occupancy of one assistant message.
@@ -1668,7 +1923,42 @@ fn parse_plan_usage(response: &Value) -> Option<PlanUsage> {
     (!windows.is_empty()).then(|| PlanUsage {
         plan: response["subscription_type"].as_str().map(str::to_owned),
         windows,
+        reset_credits: reset_credits(&rate_limits["cedar_ember"]),
         fetched_at: std::time::SystemTime::now(),
+    })
+}
+
+/// `cedar_ember` → banked resets (live grants' `resets_left` summed, next expiry), or `None`.
+/// Shape from T3 Code's `claudeResetCredits.ts`; never seen live (null on 2.1.283).
+fn reset_credits(block: &Value) -> Option<ResetCredits> {
+    if block["eligible"] != true {
+        return None;
+    }
+    let now = std::time::SystemTime::now();
+    // Live: not paused, usable now, and `ends_at` null or in the future.
+    let live: Vec<&Value> = block["grants"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|grant| grant["paused"] != true && grant["usable_now"] == true)
+        .filter(|grant| match grant["ends_at"].as_str() {
+            Some(ends_at) => parse_rfc3339(ends_at).is_some_and(|t| t > now),
+            None => true,
+        })
+        .collect();
+    // Without a live next grant nothing can be used: count 0.
+    let next = block["next_grant_id"]
+        .as_str()
+        .and_then(|id| live.iter().find(|grant| grant["id"] == id));
+    let available = next.map_or(0, |_| {
+        let left: u64 = live.iter().filter_map(|g| g["resets_left"].as_u64()).sum();
+        u32::try_from(left).unwrap_or(u32::MAX)
+    });
+    Some(ResetCredits {
+        available,
+        next_expires_at: next
+            .and_then(|g| g["ends_at"].as_str())
+            .and_then(parse_rfc3339),
     })
 }
 
@@ -1753,7 +2043,12 @@ fn stop_reason(frame: &Value) -> StopReason {
             source: CompletionSource::Protocol,
         };
     }
-    if frame["terminal_reason"].as_str() == Some("aborted_streaming") {
+    // A deny with `interrupt` ends `aborted_tools`, or `aborted_streaming` when
+    // it lands mid-stream (both probed 2026-09-27, 2.1.283).
+    if matches!(
+        frame["terminal_reason"].as_str(),
+        Some("aborted_streaming" | "aborted_tools")
+    ) {
         return StopReason::Cancelled;
     }
     let message = frame["result"]
@@ -1846,5 +2141,69 @@ impl WireError {
             WireError::Closed => AgentError::ProtocolFailed("agent closed the wire".into()),
             WireError::Control(message) => AgentError::ProtocolFailed(message),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn turn_usage_counts_cache_tokens_as_input() {
+        let usage = turn_usage(&json!({
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 10,
+            "cache_read_input_tokens": 100,
+            "output_tokens": 7,
+        }))
+        .unwrap();
+        assert_eq!(usage.input_tokens, 114);
+        assert_eq!(usage.cached_input_tokens, 100);
+        assert_eq!(usage.output_tokens, 7);
+        assert_eq!(turn_usage(&Value::Null), None);
+    }
+
+    #[test]
+    fn plan_usage_has_no_credits_when_cedar_ember_is_null() {
+        // Live 2.1.283 reply.
+        assert_eq!(credits_of(Value::Null), None);
+    }
+
+    #[test]
+    fn reset_credits_sum_the_live_grants() {
+        let credits = credits_of(json!({
+            "eligible": true,
+            "next_grant_id": "a",
+            "grants": [
+                { "id": "a", "resets_left": 2, "ends_at": "2099-01-01T00:00:00Z", "paused": false, "usable_now": true },
+                { "id": "b", "resets_left": 3, "ends_at": null, "paused": false, "usable_now": true },
+                { "id": "old", "resets_left": 7, "ends_at": "2020-01-01T00:00:00Z", "paused": false, "usable_now": true },
+            ],
+        }))
+        .unwrap();
+        assert_eq!(credits.available, 5);
+        let ends = std::time::UNIX_EPOCH + Duration::from_secs(4_070_908_800);
+        assert_eq!(credits.next_expires_at, Some(ends));
+    }
+
+    #[test]
+    fn a_paused_next_grant_leaves_nothing_usable() {
+        let credits = credits_of(json!({
+            "eligible": true,
+            "next_grant_id": "a",
+            "grants": [{ "id": "a", "resets_left": 1, "ends_at": null, "paused": true, "usable_now": true }],
+        }))
+        .unwrap();
+        assert_eq!(credits.available, 0);
+        assert_eq!(credits.next_expires_at, None);
+    }
+
+    /// `get_usage` reply with one session window and this `cedar_ember` block.
+    fn credits_of(cedar_ember: Value) -> Option<ResetCredits> {
+        let reply = json!({ "rate_limits": {
+            "five_hour": { "utilization": 5, "resets_at": "2099-01-01T00:00:00Z" },
+            "cedar_ember": cedar_ember,
+        }});
+        parse_plan_usage(&reply).unwrap().reset_credits
     }
 }

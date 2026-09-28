@@ -11,7 +11,7 @@ use futures::StreamExt;
 use anyagent::{
     AgentError, AgentInstallation, AuthKind, AuthStatus, Capability, ConfigKind, ConfigValue,
     DiagnosticLevel, Event, EventKind, Events, LoginMethod, McpServer, PermissionMode, ResumeToken,
-    Runtime, Session, SessionOptions, StopReason, ToolInput, ToolKind, ToolStatus,
+    Runtime, Session, SessionOptions, StopReason, ToolInput, ToolKind, ToolStatus, TurnUsage,
 };
 
 mod common;
@@ -81,6 +81,14 @@ fn tools_of(kinds: &[EventKind]) -> Vec<&anyagent::ToolUpdate> {
 fn ended(kinds: &[EventKind]) -> &StopReason {
     match kinds.last() {
         Some(EventKind::TurnEnded { stop, .. }) => stop,
+        other => panic!("turn did not end: {other:?}"),
+    }
+}
+
+/// The usage the turn's closing `TurnEnded` carries.
+fn usage_at_end(kinds: &[EventKind]) -> Option<TurnUsage> {
+    match kinds.last() {
+        Some(EventKind::TurnEnded { usage, .. }) => *usage,
         other => panic!("turn did not end: {other:?}"),
     }
 }
@@ -165,6 +173,36 @@ async fn a_turn_streams_text_reports_usage_and_ends_once() {
         }
     )));
     assert!(matches!(ended(&kinds), StopReason::Completed { .. }));
+    session.close().await.unwrap();
+}
+
+/// TurnEnded sums the turn's own model calls: cache reads count as input,
+/// thinking is already in output. The next turn, and the one after a
+/// cancel, start from zero.
+#[tokio::test]
+async fn turn_usage_sums_each_turn_s_own_model_calls() {
+    let thought = TurnUsage {
+        input_tokens: 19456 + 3324 + 16297,
+        cached_input_tokens: 16297,
+        output_tokens: 62 + 4935,
+    };
+    let (session, mut events) = open("usage").await;
+    for _ in 0..2 {
+        session.prompt("think").await.unwrap();
+        assert_eq!(usage_at_end(&drain_turn(&mut events).await), Some(thought));
+    }
+    // The killed turn keeps what its spoken step spent.
+    session.prompt("sleep a while").await.unwrap();
+    while !matches!(next(&mut events).await.kind, EventKind::ToolUpdated(_)) {}
+    session.cancel(true).await.unwrap();
+    let spoken = TurnUsage {
+        input_tokens: 13762,
+        cached_input_tokens: 0,
+        output_tokens: 1,
+    };
+    assert_eq!(usage_at_end(&drain_turn(&mut events).await), Some(spoken));
+    session.prompt("think").await.unwrap();
+    assert_eq!(usage_at_end(&drain_turn(&mut events).await), Some(thought));
     session.close().await.unwrap();
 }
 
@@ -402,6 +440,52 @@ async fn failures_and_subagents_are_reported() {
     assert_eq!(tools[0].title, "subagent Pong Responder");
     assert_eq!(tools[1].status, ToolStatus::Completed);
     assert!(matches!(ended(&kinds), StopReason::Completed { .. }));
+    session.close().await.unwrap();
+}
+
+/// `instructions` lead a new session's first prompt only, after a blank
+/// line; a resumed conversation's prompts carry none.
+#[tokio::test]
+async fn instructions_lead_the_first_prompt_of_a_new_session() {
+    let dir = tempfile::tempdir().unwrap();
+    for (i, resume) in [false, true].into_iter().enumerate() {
+        let log = dir.path().join(format!("wire-{i}.jsonl"));
+        let mut options = SessionOptions::in_dir(dir.path())
+            .instructions("Be brief.")
+            .record_wire(&log);
+        if resume {
+            options = options.resume(ResumeToken::new("c7"));
+        }
+        let (session, mut events) = open_with("instructions", "", options).await.unwrap();
+        for prompt in ["one", "two"] {
+            session.prompt(prompt).await.unwrap();
+            drain_turn(&mut events).await;
+        }
+        let prompts = common::sent_frames(&log, 2, |f| f["event"] == "user").await;
+        let first = if resume { "one" } else { "Be brief.\n\none" };
+        assert_eq!(prompts[0]["message"]["content"], first, "resume={resume}");
+        assert_eq!(prompts[1]["message"]["content"], "two", "resume={resume}");
+        session.close().await.unwrap();
+    }
+}
+
+/// `env` reaches the CLI and both side processes; `arg` lands after
+/// anyagent's own flags.
+#[tokio::test]
+async fn env_and_args_reach_the_child() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.jsonl");
+    let options = SessionOptions::in_dir(dir.path())
+        .env("FIXTURE_ARGV_LOG", log.to_string_lossy())
+        .arg("--extra-flag");
+    let (session, _events) = open_with("env-args", "", options).await.unwrap();
+    let argv = common::logged_args(&log);
+    assert_eq!(argv.len(), 3, "wire, models, version: {argv:?}");
+    let wire = argv
+        .iter()
+        .find(|a| a[0] == "--input-format=stream-json")
+        .unwrap();
+    assert_eq!(wire.last().unwrap(), "--extra-flag", "{argv:?}");
     session.close().await.unwrap();
 }
 

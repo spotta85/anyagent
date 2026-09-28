@@ -11,6 +11,7 @@ use anyagent::{
     AgentError, AgentInstallation, Answer, AuthKind, AuthStatus, Capability, ConfigKind,
     ConfigValue, DeliveryKind, Event, EventKind, Events, McpServer, QuestionAnswer, Request,
     ResumeToken, Runtime, Session, SessionOptions, StopReason, ToolInput, ToolKind, ToolStatus,
+    TurnOrigin, TurnUsage,
 };
 
 mod common;
@@ -66,6 +67,23 @@ fn text_of(kinds: &[EventKind]) -> String {
             _ => None,
         })
         .collect()
+}
+
+/// `calls` fixture model calls summed: cache counts as input, reasoning is already in output.
+fn usage_of(calls: u64) -> TurnUsage {
+    TurnUsage {
+        input_tokens: 1200 * calls,
+        cached_input_tokens: 150 * calls,
+        output_tokens: 34 * calls,
+    }
+}
+
+/// The usage the turn's closing `TurnEnded` carries.
+fn usage_at_end(kinds: &[EventKind]) -> Option<TurnUsage> {
+    match kinds.last() {
+        Some(EventKind::TurnEnded { usage, .. }) => *usage,
+        other => panic!("turn did not end: {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -262,8 +280,38 @@ async fn a_turn_streams_text_reasoning_tools_and_usage_then_settles() {
                 source: anyagent::CompletionSource::Protocol,
             },
             background: Vec::new(),
+            usage: Some(usage_of(2)),
         },
-        "agent_settled ends the turn deterministically"
+        "agent_settled ends the turn deterministically, carrying both model calls"
+    );
+    session.close().await.unwrap();
+}
+
+/// A later turn, prompted or started by pi itself, sums its own model calls only.
+#[tokio::test]
+async fn a_later_turn_never_inherits_an_earlier_turn_s_usage() {
+    let (session, mut events) = open("usage-reset", "").await;
+    session.prompt("run the tool, then wake").await.unwrap();
+    assert_eq!(
+        usage_at_end(&drain_turn(&mut events).await),
+        Some(usage_of(2))
+    );
+    // The unprompted run opens an agent turn with one model call.
+    let woken = drain_turn(&mut events).await;
+    assert!(
+        woken.iter().any(|k| matches!(
+            k,
+            EventKind::TurnStarted {
+                origin: TurnOrigin::Agent
+            }
+        )),
+        "{woken:?}"
+    );
+    assert_eq!(usage_at_end(&woken), Some(usage_of(1)));
+    session.prompt("run the tool").await.unwrap();
+    assert_eq!(
+        usage_at_end(&drain_turn(&mut events).await),
+        Some(usage_of(2))
     );
     session.close().await.unwrap();
 }
@@ -478,6 +526,7 @@ async fn a_failed_model_turn_ends_the_turn_as_failed() {
                 message: "the provider refused".into(),
             },
             background: Vec::new(),
+            usage: Some(usage_of(1)),
         }
     );
 }
@@ -561,6 +610,29 @@ async fn resume_binds_the_session_file_and_config_home_reaches_the_child() {
         session.info().resume_token.map(|t| t.as_str().to_owned()),
         Some(dir.join("sessions").join("s1.jsonl").display().to_string())
     );
+}
+
+/// `instructions` ride `--append-system-prompt`; `env` reaches the RPC
+/// process and both side processes; `arg` lands after anyagent's flags.
+#[tokio::test]
+async fn instructions_env_and_args_reach_the_child() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.jsonl");
+    let options = SessionOptions::in_dir(dir.path())
+        .instructions("Be brief.")
+        .env("FIXTURE_ARGV_LOG", log.to_string_lossy())
+        .arg("--extra-flag");
+    let (session, _events) = open_with("env-args", "", options).await.unwrap();
+    let argv = common::logged_args(&log);
+    assert_eq!(argv.len(), 3, "rpc, auth check, version: {argv:?}");
+    let rpc = argv.iter().find(|a| a[0] == "--mode").unwrap();
+    assert!(
+        rpc.windows(2)
+            .any(|pair| pair == ["--append-system-prompt", "Be brief."]),
+        "{rpc:?}"
+    );
+    assert_eq!(rpc.last().unwrap(), "--extra-flag", "{argv:?}");
+    session.close().await.unwrap();
 }
 
 /// Fork/MCP unsupported -> UnsupportedFeature; bad sandbox/model -> InvalidConfiguration.

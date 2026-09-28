@@ -2,10 +2,11 @@
 
 import Foundation
 
-/// A catalog id like `"claude"`, or an ACP agent the catalog does not know.
+/// A catalog id like `"claude"`, a catalog agent at an exact path, or an unknown ACP agent.
 public enum AgentRef: Codable, Sendable, Equatable {
     case string(String)
     case acp(AcpSpec)
+    case agentAt(AgentAt)
     /// A variant this package does not know (a newer binary): its wire name.
     case unrecognized(String)
 
@@ -14,12 +15,14 @@ public enum AgentRef: Codable, Sendable, Equatable {
         switch self {
         case .string: "string"
         case .acp: "acp"
+        case .agentAt: "AgentAt"
         case .unrecognized(let tag): tag
         }
     }
 
     public init(from decoder: Decoder) throws {
         if let s = try? String(from: decoder) { self = .string(s); return }
+        if let v = try? AgentAt(from: decoder) { self = .agentAt(v); return }
         let c = try decoder.container(keyedBy: Key.self)
         switch c.allKeys.first?.stringValue {
         case "acp": self = .acp(try c.decode(AcpSpec.self, forKey: Key("acp")))
@@ -31,6 +34,7 @@ public enum AgentRef: Codable, Sendable, Equatable {
         switch self {
         case .string(let v): try encoder.raw(v)
         case .acp(let v): try encoder.tagged("acp", v)
+        case .agentAt(let v): try encoder.raw(v)
         case .unrecognized(let tag): try encoder.raw(tag)
         }
     }
@@ -52,9 +56,21 @@ public struct AcpSpec: Codable, Sendable, Equatable {
     }
 }
 
+/// A catalog agent run from one executable: `{"id": "claude", "path": "/opt/claude"}`.
+public struct AgentAt: Codable, Sendable, Equatable {
+    public var id: String
+    public var path: String
+
+    public init(id: String, path: String) {
+        self.id = id
+        self.path = path
+    }
+}
+
 /// How anyagent handles tool permission requests.
 public enum PermissionMode: String, Codable, Sendable, Equatable {
     case ask = "Ask"
+    case acceptEdits = "AcceptEdits"
     case autoApprove = "AutoApprove"
     /// A value this package does not know (a newer binary).
     case unrecognized
@@ -183,9 +199,19 @@ extension ConfigValue: ExpressibleByBooleanLiteral {
     public init(booleanLiteral v: Bool) { self = .bool(v) }
 }
 
+public struct Deny: Codable, Sendable, Equatable {
+    public var message: String
+
+    public init(message: String) {
+        self.message = message
+    }
+}
+
 public enum Answer: Codable, Sendable, Equatable {
     case permission(PermissionChoice)
     case question([QuestionAnswer])
+    case deny(Deny)
+    case cancel
     /// A variant this package does not know (a newer binary): its wire name.
     case unrecognized(String)
 
@@ -194,16 +220,25 @@ public enum Answer: Codable, Sendable, Equatable {
         switch self {
         case .permission: "Permission"
         case .question: "Question"
+        case .deny: "Deny"
+        case .cancel: "Cancel"
         case .unrecognized(let tag): tag
         }
     }
 
     public init(from decoder: Decoder) throws {
-        if let s = try? String(from: decoder) { self = .unrecognized(s); return }
+        if let s = try? String(from: decoder) {
+            switch s {
+            case "Cancel": self = .cancel
+            default: self = .unrecognized(s)
+            }
+            return
+        }
         let c = try decoder.container(keyedBy: Key.self)
         switch c.allKeys.first?.stringValue {
         case "Permission": self = .permission(try c.decode(PermissionChoice.self, forKey: Key("Permission")))
         case "Question": self = .question(try c.decode([QuestionAnswer].self, forKey: Key("Question")))
+        case "Deny": self = .deny(try c.decode(Deny.self, forKey: Key("Deny")))
         default: self = .unrecognized(c.allKeys.first?.stringValue ?? "?")
         }
     }
@@ -212,6 +247,8 @@ public enum Answer: Codable, Sendable, Equatable {
         switch self {
         case .permission(let v): try encoder.tagged("Permission", v)
         case .question(let v): try encoder.tagged("Question", v)
+        case .deny(let v): try encoder.tagged("Deny", v)
+        case .cancel: try encoder.raw("Cancel")
         case .unrecognized(let tag): try encoder.raw(tag)
         }
     }
@@ -414,11 +451,57 @@ public struct ToolOutputDelta: Codable, Sendable, Equatable {
     }
 }
 
+public struct ToolProgress: Codable, Sendable, Equatable {
+    public var toolId: String
+    public var message: String?
+    public var elapsedMs: UInt64?
+
+    public init(toolId: String, message: String? = nil, elapsedMs: UInt64? = nil) {
+        self.toolId = toolId
+        self.message = message
+        self.elapsedMs = elapsedMs
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case toolId = "tool_id"
+        case message
+        case elapsedMs = "elapsed_ms"
+    }
+}
+
+public struct TurnDiff: Codable, Sendable, Equatable {
+    public var unified: String
+
+    public init(unified: String) {
+        self.unified = unified
+    }
+}
+
+public struct ModelRerouted: Codable, Sendable, Equatable {
+    public var from: String
+    public var to: String
+    public var reason: String?
+
+    public init(from: String, to: String, reason: String? = nil) {
+        self.from = from
+        self.to = to
+        self.reason = reason
+    }
+}
+
 public struct PlanUpdated: Codable, Sendable, Equatable {
     public var entries: [PlanEntry]
 
     public init(entries: [PlanEntry]) {
         self.entries = entries
+    }
+}
+
+public struct PlanProposed: Codable, Sendable, Equatable {
+    public var markdown: String
+
+    public init(markdown: String) {
+        self.markdown = markdown
     }
 }
 
@@ -455,10 +538,12 @@ public struct ContextUsage: Codable, Sendable, Equatable {
 public struct TurnEnded: Codable, Sendable, Equatable {
     public var stop: StopReason
     public var background: [String]
+    public var usage: TurnUsage?
 
-    public init(stop: StopReason, background: [String]) {
+    public init(stop: StopReason, background: [String], usage: TurnUsage? = nil) {
         self.stop = stop
         self.background = background
+        self.usage = usage
     }
 }
 
@@ -470,7 +555,11 @@ public enum EventKind: Codable, Sendable, Equatable {
     case messageEnded(MessageEnded)
     case toolUpdated(ToolUpdate)
     case toolOutputDelta(ToolOutputDelta)
+    case toolProgress(ToolProgress)
+    case turnDiff(TurnDiff)
+    case modelRerouted(ModelRerouted)
     case planUpdated(PlanUpdated)
+    case planProposed(PlanProposed)
     case requestOpened(Request)
     case requestClosed(RequestClosed)
     case sessionUpdated(SessionInfo)
@@ -493,7 +582,11 @@ public enum EventKind: Codable, Sendable, Equatable {
         case .messageEnded: "MessageEnded"
         case .toolUpdated: "ToolUpdated"
         case .toolOutputDelta: "ToolOutputDelta"
+        case .toolProgress: "ToolProgress"
+        case .turnDiff: "TurnDiff"
+        case .modelRerouted: "ModelRerouted"
         case .planUpdated: "PlanUpdated"
+        case .planProposed: "PlanProposed"
         case .requestOpened: "RequestOpened"
         case .requestClosed: "RequestClosed"
         case .sessionUpdated: "SessionUpdated"
@@ -524,7 +617,11 @@ public enum EventKind: Codable, Sendable, Equatable {
         case "MessageEnded": self = .messageEnded(try c.decode(MessageEnded.self, forKey: Key("MessageEnded")))
         case "ToolUpdated": self = .toolUpdated(try c.decode(ToolUpdate.self, forKey: Key("ToolUpdated")))
         case "ToolOutputDelta": self = .toolOutputDelta(try c.decode(ToolOutputDelta.self, forKey: Key("ToolOutputDelta")))
+        case "ToolProgress": self = .toolProgress(try c.decode(ToolProgress.self, forKey: Key("ToolProgress")))
+        case "TurnDiff": self = .turnDiff(try c.decode(TurnDiff.self, forKey: Key("TurnDiff")))
+        case "ModelRerouted": self = .modelRerouted(try c.decode(ModelRerouted.self, forKey: Key("ModelRerouted")))
         case "PlanUpdated": self = .planUpdated(try c.decode(PlanUpdated.self, forKey: Key("PlanUpdated")))
+        case "PlanProposed": self = .planProposed(try c.decode(PlanProposed.self, forKey: Key("PlanProposed")))
         case "RequestOpened": self = .requestOpened(try c.decode(Request.self, forKey: Key("RequestOpened")))
         case "RequestClosed": self = .requestClosed(try c.decode(RequestClosed.self, forKey: Key("RequestClosed")))
         case "SessionUpdated": self = .sessionUpdated(try c.decode(SessionInfo.self, forKey: Key("SessionUpdated")))
@@ -546,7 +643,11 @@ public enum EventKind: Codable, Sendable, Equatable {
         case .messageEnded(let v): try encoder.tagged("MessageEnded", v)
         case .toolUpdated(let v): try encoder.tagged("ToolUpdated", v)
         case .toolOutputDelta(let v): try encoder.tagged("ToolOutputDelta", v)
+        case .toolProgress(let v): try encoder.tagged("ToolProgress", v)
+        case .turnDiff(let v): try encoder.tagged("TurnDiff", v)
+        case .modelRerouted(let v): try encoder.tagged("ModelRerouted", v)
         case .planUpdated(let v): try encoder.tagged("PlanUpdated", v)
+        case .planProposed(let v): try encoder.tagged("PlanProposed", v)
         case .requestOpened(let v): try encoder.tagged("RequestOpened", v)
         case .requestClosed(let v): try encoder.tagged("RequestClosed", v)
         case .sessionUpdated(let v): try encoder.tagged("SessionUpdated", v)
@@ -611,8 +712,9 @@ public struct ToolUpdate: Codable, Sendable, Equatable {
     public var diffs: [FileDiff]
     public var locations: [String]
     public var raw: RawTool?
+    public var subagent: SubagentInfo?
 
-    public init(id: String, kind: ToolKind, title: String, status: ToolStatus, input: ToolInput, output: String? = nil, diffs: [FileDiff], locations: [String], raw: RawTool? = nil) {
+    public init(id: String, kind: ToolKind, title: String, status: ToolStatus, input: ToolInput, output: String? = nil, diffs: [FileDiff], locations: [String], raw: RawTool? = nil, subagent: SubagentInfo? = nil) {
         self.id = id
         self.kind = kind
         self.title = title
@@ -622,6 +724,7 @@ public struct ToolUpdate: Codable, Sendable, Equatable {
         self.diffs = diffs
         self.locations = locations
         self.raw = raw
+        self.subagent = subagent
     }
 }
 
@@ -710,12 +813,14 @@ public enum ToolKind: Codable, Sendable, Equatable {
     }
 }
 
+/// `Denied`: refused by the agent's permission rules or mode without asking the caller.
 public enum ToolStatus: String, Codable, Sendable, Equatable {
     case pending = "Pending"
     case running = "Running"
     case completed = "Completed"
     case failed = "Failed"
     case cancelled = "Cancelled"
+    case denied = "Denied"
     /// A value this package does not know (a newer binary).
     case unrecognized
 
@@ -818,6 +923,21 @@ public struct RawTool: Codable, Sendable, Equatable {
     public init(name: String, input: JSONValue) {
         self.name = name
         self.input = input
+    }
+}
+
+/// What a subagent tool reports about the agent it spawned.
+public struct SubagentInfo: Codable, Sendable, Equatable {
+    public var role: String?
+    public var model: String?
+    public var summary: String?
+    public var tokens: UInt64?
+
+    public init(role: String? = nil, model: String? = nil, summary: String? = nil, tokens: UInt64? = nil) {
+        self.role = role
+        self.model = model
+        self.summary = summary
+        self.tokens = tokens
     }
 }
 
@@ -1269,6 +1389,7 @@ public enum Capability: String, Codable, Sendable, Equatable {
     case planUsage = "PlanUsage"
     case rollbackFiles = "RollbackFiles"
     case compact = "Compact"
+    case outputSchema = "OutputSchema"
     /// A value this package does not know (a newer binary).
     case unrecognized
 
@@ -1359,11 +1480,13 @@ public struct ConfigChoice: Codable, Sendable, Equatable {
     public var value: String
     public var label: String
     public var description: String?
+    public var options: [ConfigOption]?
 
-    public init(value: String, label: String, description: String? = nil) {
+    public init(value: String, label: String, description: String? = nil, options: [ConfigOption]? = nil) {
         self.value = value
         self.label = label
         self.description = description
+        self.options = options
     }
 }
 
@@ -1371,17 +1494,70 @@ public struct SlashCommand: Codable, Sendable, Equatable {
     public var name: String
     public var description: String
     public var inputHint: String?
+    public var source: CommandSource?
 
-    public init(name: String, description: String, inputHint: String? = nil) {
+    public init(name: String, description: String, inputHint: String? = nil, source: CommandSource? = nil) {
         self.name = name
         self.description = description
         self.inputHint = inputHint
+        self.source = source
     }
 
     enum CodingKeys: String, CodingKey {
         case name
         case description
         case inputHint = "input_hint"
+        case source
+    }
+}
+
+public struct Skill: Codable, Sendable, Equatable {
+    public var path: String?
+    public var scope: String?
+
+    public init(path: String? = nil, scope: String? = nil) {
+        self.path = path
+        self.scope = scope
+    }
+}
+
+/// Where a slash command comes from.
+public enum CommandSource: Codable, Sendable, Equatable {
+    case builtin
+    case skill(Skill)
+    /// A variant this package does not know (a newer binary): its wire name.
+    case unrecognized(String)
+
+    /// The variant's wire name: "Builtin", …
+    public var name: String {
+        switch self {
+        case .builtin: "Builtin"
+        case .skill: "Skill"
+        case .unrecognized(let tag): tag
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        if let s = try? String(from: decoder) {
+            switch s {
+            case "Builtin": self = .builtin
+            default: self = .unrecognized(s)
+            }
+            return
+        }
+        let c = try decoder.container(keyedBy: Key.self)
+        switch c.allKeys.first?.stringValue {
+        case "Skill": self = .skill(try c.decode(Skill.self, forKey: Key("Skill")))
+        default: self = .unrecognized(c.allKeys.first?.stringValue ?? "?")
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .builtin: try encoder.raw("Builtin")
+        case .skill(let v): try encoder.tagged("Skill", v)
+        case .unrecognized(let tag): try encoder.raw(tag)
+        }
     }
 }
 
@@ -1410,17 +1586,20 @@ public enum SessionStatus: String, Codable, Sendable, Equatable {
 public struct PlanUsage: Codable, Sendable, Equatable {
     public var plan: String?
     public var windows: [UsageWindow]
+    public var resetCredits: ResetCredits?
     public var fetchedAt: SystemTime
 
-    public init(plan: String? = nil, windows: [UsageWindow], fetchedAt: SystemTime) {
+    public init(plan: String? = nil, windows: [UsageWindow], resetCredits: ResetCredits? = nil, fetchedAt: SystemTime) {
         self.plan = plan
         self.windows = windows
+        self.resetCredits = resetCredits
         self.fetchedAt = fetchedAt
     }
 
     enum CodingKeys: String, CodingKey {
         case plan
         case windows
+        case resetCredits = "reset_credits"
         case fetchedAt = "fetched_at"
     }
 }
@@ -1440,6 +1619,22 @@ public struct UsageWindow: Codable, Sendable, Equatable {
         case label
         case usedPercent = "used_percent"
         case resetsAt = "resets_at"
+    }
+}
+
+/// Limit resets the account can use now.
+public struct ResetCredits: Codable, Sendable, Equatable {
+    public var available: UInt32
+    public var nextExpiresAt: SystemTime?
+
+    public init(available: UInt32, nextExpiresAt: SystemTime? = nil) {
+        self.available = available
+        self.nextExpiresAt = nextExpiresAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case available
+        case nextExpiresAt = "next_expires_at"
     }
 }
 
@@ -1536,6 +1731,25 @@ public enum CompletionSource: String, Codable, Sendable, Equatable {
 
     public init(from decoder: Decoder) throws {
         self = Self(rawValue: try String(from: decoder)) ?? .unrecognized
+    }
+}
+
+/// Tokens one turn spent, summed over its model calls.
+public struct TurnUsage: Codable, Sendable, Equatable {
+    public var inputTokens: UInt64
+    public var cachedInputTokens: UInt64
+    public var outputTokens: UInt64
+
+    public init(inputTokens: UInt64, cachedInputTokens: UInt64, outputTokens: UInt64) {
+        self.inputTokens = inputTokens
+        self.cachedInputTokens = cachedInputTokens
+        self.outputTokens = outputTokens
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case inputTokens = "input_tokens"
+        case cachedInputTokens = "cached_input_tokens"
+        case outputTokens = "output_tokens"
     }
 }
 

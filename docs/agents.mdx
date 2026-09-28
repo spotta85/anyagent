@@ -48,6 +48,7 @@ What each adapter reports after `open`. Read it from
 | `Subagents` | ✓ | ✓ | ✓ | | | |
 | `ContextUsage` | ✓ | ✓ | ✓ | ✓ | ✓ | on first sight |
 | `PlanUsage` | ✓ | ✓ | | | | |
+| `OutputSchema` | ✓ | ✓ | | | | |
 
 - **handshake**: the ACP `initialize` response says whether the agent takes
   images, loads sessions, and accepts steering. Cursor, for example, reports
@@ -58,12 +59,17 @@ What each adapter reports after `open`. Read it from
 Every gate holds the same way: an unsupported call fails typed with
 `UnsupportedFeature` instead of misbehaving.
 
+`TurnEnded.usage` (the turn's token counts) is not a capability: claude,
+codex, opencode, pi, and antigravity over `agy` fill it; ACP agents leave it
+`None`. A compaction turn carries the summary's tokens on opencode and none on
+pi, which reports no model call for it.
+
 ## Config options by agent
 
 | Agent | `model` | `effort` | `fast` | `mode` | other |
 |---|:-:|:-:|:-:|:-:|---|
-| claude | live | live, from the model | live, when the model supports it | | |
-| codex | live | live, from its catalog | live | | `sandbox`, approval policy |
+| claude | live | live, from the model | live, when the model supports it | live (`plan`, `acceptEdits`, …) | |
+| codex | live | live, from its catalog | live | live (approval policy, or `plan`) | `sandbox` |
 | opencode | live (`provider/id`) | live, as the model's `variant` | | | |
 | pi | live | live, thinking levels | | | |
 | antigravity (agy) | at open only | | | at open only (`accept-edits`, `plan`) | reopen with the resume token to change |
@@ -73,30 +79,80 @@ Every gate holds the same way: an unsupported call fails typed with
 | kiro | live | live (`low` … `max`), absent on models without it | | | |
 | hermes, qwen | live | none | | | |
 
+On claude, codex, and opencode each `model` choice also carries that model's
+own `effort` and `fast` in `options` (opencode: `effort` only). Other agents
+leave it empty.
+
+## Answers by agent
+
+What `Answer::Deny { message }` and `Answer::Cancel` send. Where the wire
+takes no message, the message is dropped.
+
+| Agent | `Deny { message }` | `Cancel` |
+|---|---|---|
+| claude | deny; the model reads the message as the tool's result | deny with `interrupt`: the turn ends `Cancelled` (a question too) |
+| codex | `decline`, no message | command and file approvals: `cancel`, which also ends the turn `Cancelled`; an MCP approval: action `cancel`, which withdraws it (codex's schema does not say it ends the turn); a question gets no answers |
+| opencode | `reject` with the message, on `/permission/{id}/reply` (confirmed on 1.18.29; the oldest version with it is not known) | a permission gets `reject`; a question takes the reject route |
+| ACP agents | the reject option, no message | outcome `cancelled` |
+| pi | not offered (pi asks only questions) | the dialog is cancelled |
+
 ## Per-agent notes
 
 <AccordionGroup>
 <Accordion title="Claude Code">
 The fullest native adapter. `fast` appears when the selected model reports
 `supportsFastMode`; switching it resumes the process under the hood with the
-same `Session` handle and conversation. Rollback can restore files.
+same `Session` handle and conversation. Rollback can restore files. A tool a
+`permissions.deny` rule or the CLI's own mode refuses ends `Denied`; a hook's
+refusal still shows as `Failed` (the CLI sends no denial frame for it).
+Client MCP servers ride the `mcp_set_servers` control request after
+`initialize`, so their header and env values never appear in argv. A server
+that fails to connect, or a CLI that refuses the request, is a Warning
+diagnostic. While a declared server is still connecting (up to 30 s for an
+unreachable one) the CLI holds later input, so the first turn and the answers
+to cancel, configure and usage requests wait for it. A running Bash reports
+`ToolProgress` only when the CLI runs with `CLAUDE_CODE_CONTAINER_ID` or
+`CLAUDE_CODE_REMOTE` set (2.1.283); a subagent's Bash sent none when probed.
+An output schema rides `--json-schema`; the CLI's `StructuredOutput` call
+arrives as a text message of its own holding the JSON, after any text the
+model wrote first.
 </Accordion>
 
 <Accordion title="Codex">
 Opts into the app-server's experimental API. Approval policy and sandbox
-switch live. Images ride as `localImage` items. Client MCP servers ride as
-launch overrides (stdio and HTTP; no SSE). `rollback` maps to
+switch live. `mode: plan` is codex's plan collaboration mode and keeps the
+last approval policy; to leave it, select an approval policy and prompt
+again. Images ride as `localImage` items. Client MCP servers ride as
+launch overrides (stdio and HTTP; no SSE). Header and env values ride env
+vars the overrides name, never argv. codex forwards stdio MCP env by name, so
+a declared name is also set on codex itself; `PATH`, or a name codex's
+environment already has with another value, is refused. Two server names that differ
+only by case or `-`/`_` are refused too: they would share env vars. `rollback` maps to
 `thread/revert`; files are never restored. Questions are translated
-defensively but the capability stays off until observed live.
+defensively but the capability stays off until observed live. MCP progress
+maps to `ToolProgress`, but 0.154.0 did not forward a stdio server's progress
+when probed. `probe` opens no thread: it reads `config/read` and
+`skills/list`, so the user's MCP servers and hooks never start. It may miss
+skills codex loads about 0.5 s after it starts (0.154.0: marketplace plugins;
+`forceReload` does not wait for them). An output schema rides every
+`turn/start` as `outputSchema`; the model API takes only strict schemas
+(every object `additionalProperties: false`) and fails the turn otherwise.
+A subagent's child thread nests under the `subAgentActivity` item or the
+`spawnAgent` call that names it (0.154.0 sends either); the spawn call also
+names the child's model.
 </Accordion>
 
 <Accordion title="opencode">
 anyagent starts `opencode serve` on a private localhost port per session,
 gated by a per-session secret, and drives its HTTP + SSE wire. Task-tool
-child sessions nest as subagents. No steer (mid-turn prompts queue) and no
+child sessions nest as subagents; the task names the child's role
+(`subagent_type`) and model. No steer (mid-turn prompts queue) and no
 plan quota. Pass a model as `configure("model", "provider/id")`; opencode's
-free `opencode/…` models need no key. To drive it over ACP instead:
-`AgentInstallation::acp("opencode", path, ["acp"])`.
+free `opencode/…` models need no key. Client MCP servers (stdio, HTTP, SSE)
+are added with `POST /mcp` at open. opencode keeps them per server process,
+and each session has its own, so they last for that session. A server
+opencode cannot connect fails `open` with `InvalidConfiguration`. To drive it
+over ACP instead: `AgentInstallation::acp("opencode", path, ["acp"])`.
 </Accordion>
 
 <Accordion title="pi">
@@ -120,11 +176,12 @@ discover("antigravity")
                             → installation.upgrade names the server
 ```
 
-The headless `agy` wire cannot prompt: in `Ask` mode every permission-gated
-tool is denied by the agent itself (the tool shows as failed), `AutoApprove`
-launches with `--dangerously-skip-permissions`, questions are skipped with a
-diagnostic, and a mid-turn prompt queues. Cancel kills the process and resumes
-the conversation in a fresh one, about two seconds.
+The headless `agy` wire cannot prompt: in `Ask` and `AcceptEdits` mode every
+permission-gated tool is denied by the agent itself (the tool shows as
+failed), `AutoApprove` launches with `--dangerously-skip-permissions`,
+questions are skipped with a diagnostic, and a mid-turn prompt queues. Cancel
+kills the process and resumes the conversation in a fresh one, about two
+seconds.
 
 The ACP server is Google's own (`antigravity-acp` in the
 [ACP registry](https://github.com/agentclientprotocol/registry/blob/main/antigravity-acp/agent.json),
@@ -235,3 +292,23 @@ SessionOptions::in_dir(".").config_home("/path/to/work-account")
 anyagent sets the agent's own config-home variable (`CLAUDE_CONFIG_DIR`,
 `CODEX_HOME`, …) for that process. An agent with no such variable fails with
 `InvalidConfiguration`; an isolation request is never silently dropped.
+
+## Launch options
+
+```rust
+SessionOptions::in_dir(".")
+    .instructions("Answer in British English.")
+    .env("HTTPS_PROXY", "http://proxy:8080")
+    .arg("--verbose")
+```
+
+| Agent | `instructions` | `arg` goes after |
+|---|---|---|
+| claude | `appendSystemPrompt` on the `initialize` control request, so not in argv | anyagent's flags |
+| codex | `developerInstructions` on thread start, resume and fork | `app-server` and anyagent's `-c` overrides |
+| opencode | `system` on every plain prompt; a slash command goes to opencode's command route, which has no `system`, so it carries none | `serve` and its bind flags |
+| pi | the `--append-system-prompt` launch flag: visible in `ps` and bound by the OS argument-length limit; pi reads it as a file when the text is an existing path | anyagent's flags |
+| antigravity (agy), ACP agents | before a new session's first prompt, then a blank line; a first prompt starting with `/` goes untouched and the next one carries them; a resumed session gets none | anyagent's flags |
+
+`env` reaches every agent process, side processes included, after
+`config_home`'s variable: on the same name, yours wins.

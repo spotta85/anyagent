@@ -12,16 +12,10 @@ export type Frame1 =
     }
   | {
       agent: AgentRef;
-      cmd: "probe";
-    }
-  | {
-      agent: AgentRef;
-      cmd: "plan_usage";
-    }
-  | {
-      agent: AgentRef;
-      dir: string;
-      prompt: string;
+      /**
+       * Default: the temp dir.
+       */
+      dir?: string | null;
       resume?: string | null;
       fork?: string | null;
       fork_at?: string | null;
@@ -30,6 +24,72 @@ export type Frame1 =
       configure?: {
         [k: string]: ConfigValue;
       };
+      instructions?: string | null;
+      /**
+       * A JSON schema each turn's final message must match (`open`, `generate`).
+       */
+      output_schema?: {
+        [k: string]: unknown;
+      };
+      env?: {
+        [k: string]: string;
+      };
+      args?: string[];
+      config_home?: string | null;
+      record_wire?: string | null;
+      cmd: "probe";
+    }
+  | {
+      agent: AgentRef;
+      resume?: string | null;
+      fork?: string | null;
+      fork_at?: string | null;
+      permission_mode?: PermissionMode | null;
+      mcp_servers?: McpServer[];
+      configure?: {
+        [k: string]: ConfigValue;
+      };
+      instructions?: string | null;
+      /**
+       * A JSON schema each turn's final message must match (`open`, `generate`).
+       */
+      output_schema?: {
+        [k: string]: unknown;
+      };
+      env?: {
+        [k: string]: string;
+      };
+      args?: string[];
+      config_home?: string | null;
+      record_wire?: string | null;
+      cmd: "plan_usage";
+    }
+  | {
+      agent: AgentRef;
+      dir: string;
+      prompt: string;
+      attachments?: string[];
+      resume?: string | null;
+      fork?: string | null;
+      fork_at?: string | null;
+      permission_mode?: PermissionMode | null;
+      mcp_servers?: McpServer[];
+      configure?: {
+        [k: string]: ConfigValue;
+      };
+      instructions?: string | null;
+      /**
+       * A JSON schema each turn's final message must match (`open`, `generate`).
+       */
+      output_schema?: {
+        [k: string]: unknown;
+      };
+      env?: {
+        [k: string]: string;
+      };
+      args?: string[];
+      config_home?: string | null;
+      record_wire?: string | null;
       cmd: "generate";
     }
   | {
@@ -43,6 +103,19 @@ export type Frame1 =
       configure?: {
         [k: string]: ConfigValue;
       };
+      instructions?: string | null;
+      /**
+       * A JSON schema each turn's final message must match (`open`, `generate`).
+       */
+      output_schema?: {
+        [k: string]: unknown;
+      };
+      env?: {
+        [k: string]: string;
+      };
+      args?: string[];
+      config_home?: string | null;
+      record_wire?: string | null;
       cmd: "open";
     }
   | {
@@ -81,6 +154,7 @@ export type Frame1 =
   | {
       session: string;
       clear_queue?: boolean;
+      turn?: string | null;
       cmd: "cancel";
     }
   | {
@@ -92,17 +166,18 @@ export type Frame1 =
       cmd: "close";
     };
 /**
- * A catalog id like `"claude"`, or an ACP agent the catalog does not know.
+ * A catalog id like `"claude"`, a catalog agent at an exact path, or an unknown ACP agent.
  */
 export type AgentRef =
   | string
   | {
       acp: AcpSpec;
-    };
+    }
+  | AgentAt;
 /**
  * How anyagent handles tool permission requests.
  */
-export type PermissionMode = "Ask" | "AutoApprove";
+export type PermissionMode = "Ask" | "AcceptEdits" | "AutoApprove";
 export type McpConnection =
   | {
       Stdio: {
@@ -136,7 +211,13 @@ export type Answer =
     }
   | {
       Question: QuestionAnswer[];
-    };
+    }
+  | {
+      Deny: {
+        message: string;
+      };
+    }
+  | "Cancel";
 export type PermissionChoice = "AllowOnce" | "AllowAlways" | "DenyOnce" | "DenyAlways";
 export type QuestionAnswer =
   | {
@@ -214,8 +295,32 @@ export type EventKind =
       };
     }
   | {
+      ToolProgress: {
+        tool_id: string;
+        message?: string | null;
+        elapsed_ms?: number | null;
+      };
+    }
+  | {
+      TurnDiff: {
+        unified: string;
+      };
+    }
+  | {
+      ModelRerouted: {
+        from: string;
+        to: string;
+        reason?: string | null;
+      };
+    }
+  | {
       PlanUpdated: {
         entries: PlanEntry[];
+      };
+    }
+  | {
+      PlanProposed: {
+        markdown: string;
       };
     }
   | {
@@ -250,6 +355,10 @@ export type EventKind =
       TurnEnded: {
         stop: StopReason;
         background: string[];
+        /**
+         * Tokens this turn spent, when the agent reports them.
+         */
+        usage?: TurnUsage | null;
       };
     };
 export type TurnOrigin =
@@ -266,7 +375,10 @@ export type ToolKind =
       };
     }
   | "Subagent";
-export type ToolStatus = "Pending" | "Running" | "Completed" | "Failed" | "Cancelled";
+/**
+ * `Denied`: refused by the agent's permission rules or mode without asking the caller.
+ */
+export type ToolStatus = "Pending" | "Running" | "Completed" | "Failed" | "Cancelled" | "Denied";
 export type ToolInput =
   | "None"
   | {
@@ -368,13 +480,25 @@ export type Capability =
       | "PlanUsage"
     )
   | "RollbackFiles"
-  | "Compact";
+  | "Compact"
+  | "OutputSchema";
 export type McpTransport = "Stdio" | "Http" | "Sse";
 export type ConfigKind =
   | "Boolean"
   | {
       Select: {
         choices: ConfigChoice[];
+      };
+    };
+/**
+ * Where a slash command comes from.
+ */
+export type CommandSource =
+  | "Builtin"
+  | {
+      Skill: {
+        path?: string | null;
+        scope?: string | null;
       };
     };
 /**
@@ -434,6 +558,13 @@ export interface AcpSpec {
   name: string;
   path: string;
   args?: string[];
+}
+/**
+ * A catalog agent run from one executable: `{"id": "claude", "path": "/opt/claude"}`.
+ */
+export interface AgentAt {
+  id: string;
+  path: string;
 }
 /**
  * A client-owned MCP server the agent should connect to, forwarded at open.
@@ -504,6 +635,10 @@ export interface ToolUpdate {
    * Agent's own tool name and raw input, for unknown or MCP tools.
    */
   raw?: RawTool | null;
+  /**
+   * For a `Subagent` tool: who runs and what it reports.
+   */
+  subagent?: SubagentInfo | null;
 }
 export interface FileDiff {
   path: string;
@@ -516,6 +651,24 @@ export interface FileDiff {
 export interface RawTool {
   name: string;
   input: unknown;
+}
+/**
+ * What a subagent tool reports about the agent it spawned.
+ */
+export interface SubagentInfo {
+  /**
+   * The kind of agent, as the parent named it ("general-purpose").
+   */
+  role?: string | null;
+  model?: string | null;
+  /**
+   * Its latest progress line.
+   */
+  summary?: string | null;
+  /**
+   * Tokens as the agent reports them: claude the latest call's size, codex the child thread's total.
+   */
+  tokens?: number | null;
 }
 export interface PlanEntry {
   text: string;
@@ -617,6 +770,7 @@ export interface Capabilities {
 /**
  * A session setting the agent advertises. Well-known ids: `model`, `effort`,
  * `mode`, `sandbox`, `fast` (boolean, lower latency with increased usage).
+ * The `mode` choice `plan` is plan mode on every agent that has one.
  */
 export interface ConfigOption {
   id: string;
@@ -633,11 +787,19 @@ export interface ConfigChoice {
   value: string;
   label: string;
   description?: string | null;
+  /**
+   * For a `model` choice: the options this model offers once selected.
+   */
+  options?: ConfigOption[];
 }
 export interface SlashCommand {
   name: string;
   description: string;
   input_hint?: string | null;
+  /**
+   * Where the command comes from; absent on the wire means `Builtin`.
+   */
+  source?: CommandSource;
 }
 export interface SessionConfiguration {
   options: {
@@ -653,6 +815,10 @@ export interface PlanUsage {
    */
   plan?: string | null;
   windows: UsageWindow[];
+  /**
+   * Banked limit resets on the account. `None` when this report does not carry them.
+   */
+  reset_credits?: ResetCredits | null;
   fetched_at: SystemTime;
 }
 export interface UsageWindow {
@@ -663,9 +829,36 @@ export interface UsageWindow {
   used_percent: number;
   resets_at?: SystemTime | null;
 }
+/**
+ * Limit resets the account can use now.
+ */
+export interface ResetCredits {
+  available: number;
+  /**
+   * When the next one to be used expires.
+   */
+  next_expires_at?: SystemTime | null;
+}
 export interface Diagnostic {
   level: DiagnosticLevel;
   message: string;
+}
+/**
+ * Tokens one turn spent, summed over its model calls.
+ */
+export interface TurnUsage {
+  /**
+   * Input tokens, cached ones included.
+   */
+  input_tokens: number;
+  /**
+   * The part of `input_tokens` read from cache.
+   */
+  cached_input_tokens: number;
+  /**
+   * Output tokens, reasoning included.
+   */
+  output_tokens: number;
 }
 /**
  * The `error` object: `kind`, `message`, and the variant's own fields.

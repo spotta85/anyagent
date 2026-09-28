@@ -33,6 +33,12 @@ export type * from "./types.ts";
 export type Command = Frame1;
 /** What `open` accepts besides the agent. */
 export type OpenOptions = Omit<Extract<Command, { cmd: "open" }>, "cmd" | "agent">;
+/** What `generate` accepts besides the agent and prompt: `open`'s fields plus `attachments`. */
+export type GenerateOptions = Omit<Extract<Command, { cmd: "generate" }>, "cmd" | "agent" | "prompt">;
+/** What `probe` accepts besides the agent: an optional `dir` plus every `open` option; `resume` or `fork` fails. */
+export type ProbeOptions = Omit<Extract<Command, { cmd: "probe" }>, "cmd" | "agent">;
+/** What `planUsage` accepts besides the agent: every `open` option but `dir`; `config_home`, `env` and `args` matter. */
+export type PlanUsageOptions = Omit<Extract<Command, { cmd: "plan_usage" }>, "cmd" | "agent">;
 /** The variant name of an `EventKind`: `"TextDelta"`, `"TurnEnded"`, … */
 export type EventKindName = EventKind extends infer K ? (K extends string ? K : keyof K) : never;
 
@@ -61,7 +67,8 @@ export class Runtime {
   private pending = new Map<number, Pending>();
   private sessions = new Map<string, Session>();
   private dead?: AnyagentError;
-  private exited!: Promise<number | null>;
+  /** Settles with the exit code once the process is gone: closed, killed, or crashed. */
+  exited!: Promise<number | null>;
   private onHello?: () => void;
 
   /** Spawns the binary; resolves after its hello line. */
@@ -84,14 +91,14 @@ export class Runtime {
   discover(): Promise<DiscoveryReport> {
     return this.call({ cmd: "discover" });
   }
-  probe(agent: AgentRef): Promise<AgentDetails> {
-    return this.call({ cmd: "probe", agent });
+  probe(agent: AgentRef, opts: ProbeOptions = {}): Promise<AgentDetails> {
+    return this.call({ cmd: "probe", agent, ...opts });
   }
-  planUsage(agent: AgentRef): Promise<PlanUsage> {
-    return this.call({ cmd: "plan_usage", agent });
+  planUsage(agent: AgentRef, opts: PlanUsageOptions = {}): Promise<PlanUsage> {
+    return this.call({ cmd: "plan_usage", agent, ...opts });
   }
   /** One-shot text with no session to manage: titles, commit messages. */
-  generate(agent: AgentRef, opts: OpenOptions, prompt: string): Promise<string> {
+  generate(agent: AgentRef, opts: GenerateOptions, prompt: string): Promise<string> {
     return this.call({ cmd: "generate", agent, ...opts, prompt });
   }
 
@@ -205,8 +212,8 @@ export class Session {
   configure(option: string, value: ConfigValue): Promise<void> {
     return this.rt.call({ cmd: "configure", session: this.id, option, value });
   }
-  cancel(clearQueue = false): Promise<void> {
-    return this.rt.call({ cmd: "cancel", session: this.id, clear_queue: clearQueue });
+  cancel(clearQueue = false, turn?: string): Promise<void> {
+    return this.rt.call({ cmd: "cancel", session: this.id, clear_queue: clearQueue, turn });
   }
   dequeue(prompt: string): Promise<void> {
     return this.rt.call({ cmd: "dequeue", session: this.id, prompt });

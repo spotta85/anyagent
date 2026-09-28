@@ -8,10 +8,11 @@ use std::time::Duration;
 use futures::StreamExt;
 
 use anyagent::{
-    AgentError, AgentInstallation, Answer, AuthKind, AuthStatus, Capability, ConfigId, ConfigKind,
-    ConfigValue, DeliveryKind, Event, EventKind, Events, Input, LoginMethod, McpServer, MessageId,
-    PermissionChoice, PlanStatus, QuestionAnswer, Request, RollbackScope, Runtime, Session,
-    SessionOptions, StopReason, ToolKind, ToolStatus, TurnOrigin,
+    AgentError, AgentInstallation, Answer, AuthKind, AuthStatus, Capability, CommandSource,
+    ConfigId, ConfigKind, ConfigValue, DeliveryKind, DiagnosticLevel, Event, EventKind, Events,
+    Input, LoginMethod, McpServer, MessageId, PermissionChoice, PlanStatus, QuestionAnswer,
+    Request, RollbackScope, Runtime, Session, SessionOptions, StopReason, SubagentInfo, ToolKind,
+    ToolStatus, TurnOrigin,
 };
 
 mod common;
@@ -240,7 +241,7 @@ async fn files_rollback_rewinds_at_the_first_dropped_turn() {
     session.close().await.unwrap();
 }
 
-/// Files rollback refusal emits diagnostic and leaves session/token/files untouched.
+/// Files rollback refusal fails the call and leaves session/token/files untouched.
 #[tokio::test]
 async fn files_rollback_refusal_leaves_the_session_untouched() {
     let dir = std::env::temp_dir().join(format!("anyagent-rwfail-{}", std::process::id()));
@@ -249,30 +250,59 @@ async fn files_rollback_refusal_leaves_the_session_untouched() {
         echoed_turn(&session, &mut events, prompt).await;
     }
 
-    // The rejection is a diagnostic; nothing is rewound and nothing respawns.
-    session
+    // The rejection is the call's error; nothing is rewound and nothing respawns.
+    let err = session
         .rollback(
             std::num::NonZeroU32::new(1).unwrap(),
             RollbackScope::ConversationAndFiles,
         )
         .await
+        .err()
         .unwrap();
-    loop {
-        if let EventKind::Diagnostic(d) = next(&mut events).await.kind {
-            assert!(
-                d.message.contains("rollback rejected"),
-                "got: {}",
-                d.message
-            );
-            break;
-        }
-    }
+    assert!(
+        matches!(&err, AgentError::InvalidRequest(r) if r.starts_with("rollback rejected")),
+        "{err}"
+    );
     assert!(!dir.join("rewound-at.txt").exists());
     assert_eq!(session.info().resume_token.unwrap().as_str(), "sess-c1");
     session.prompt("three").await.unwrap();
     let text = complete_turn(&session, &mut events).await;
     assert!(!text.contains("fork="), "unexpected fork: {text}");
     session.close().await.unwrap();
+}
+
+/// A fork that dies at launch ends the session: the rollback call gets
+/// `SessionClosed`, and the stream says why before it fails.
+#[tokio::test]
+async fn a_failed_rollback_respawn_closes_the_session() {
+    let (session, mut events) = open("rollback-dies", "--echo-uuid --fork-fails").await;
+    for prompt in ["one", "two"] {
+        echoed_turn(&session, &mut events, prompt).await;
+    }
+    let err = session
+        .rollback(
+            std::num::NonZeroU32::new(1).unwrap(),
+            RollbackScope::Conversation,
+        )
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(err, AgentError::SessionClosed), "{err}");
+    let mut failed = false;
+    while let Some(item) = events.next().await {
+        match item {
+            Ok(event) => {
+                if let EventKind::Diagnostic(d) = event.kind {
+                    failed |= d.message.starts_with("rollback failed");
+                }
+            }
+            Err(e) => {
+                assert!(matches!(e, AgentError::ProcessExited { .. }), "{e}");
+                break;
+            }
+        }
+    }
+    assert!(failed, "the stream names the failed respawn");
 }
 
 /// Fork at MessageEnded fork_point branches at cut; tip fork creates new session without cut.
@@ -417,6 +447,92 @@ async fn runtime_plan_usage_probes_without_a_session_and_caches() {
     assert_eq!(again.fetched_at, usage.fetched_at);
 }
 
+/// A throwaway session (`probe_with` here) launches without user hooks or
+/// MCP servers, the hook switch merged into `fast`'s one `--settings`
+/// value; an ordinary open keeps both.
+#[tokio::test]
+async fn throwaway_sessions_skip_user_hooks_and_mcp_servers() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.jsonl");
+    let agent = AgentInstallation::at("claude", wrapper("throwaway", ""));
+    let options = SessionOptions::in_dir(dir.path())
+        .configure("fast", true)
+        .env("FIXTURE_ARGV_LOG", log.to_string_lossy())
+        .arg("--extra-flag");
+    let runtime = Runtime::new();
+    let details = runtime.probe_with(&agent, options.clone()).await.unwrap();
+    assert!(!details.commands.is_empty());
+    let (session, _events) = runtime.open(&agent, options).await.unwrap();
+    session.close().await.unwrap();
+
+    let argv = common::logged_args(&log);
+    let settings = |argv: &[String]| -> Vec<serde_json::Value> {
+        argv.windows(2)
+            .filter(|pair| pair[0] == "--settings")
+            .map(|pair| serde_json::from_str(&pair[1]).unwrap())
+            .collect()
+    };
+    let has = |argv: &[String], flag: &str| argv.iter().any(|a| a == flag);
+    let (probe, open) = (&argv[0], &argv[1]);
+    assert!(has(probe, "--strict-mcp-config"), "{probe:?}");
+    assert!(has(probe, "--no-session-persistence"), "{probe:?}");
+    assert_eq!(
+        settings(probe),
+        [serde_json::json!({ "disableAllHooks": true, "fastMode": true })]
+    );
+    assert_eq!(probe.last().unwrap(), "--extra-flag", "{probe:?}");
+    assert!(!has(open, "--strict-mcp-config"), "{open:?}");
+    assert_eq!(settings(open), [serde_json::json!({ "fastMode": true })]);
+}
+
+/// An output schema rides `--json-schema`; the `StructuredOutput` call is the
+/// turn's final message, so `generate` returns just the JSON.
+#[tokio::test]
+async fn an_output_schema_rides_the_launch_and_generate_returns_the_structured_reply() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.jsonl");
+    let schema = serde_json::json!({ "type": "object", "properties": { "title": { "type": "string" } }, "required": ["title"] });
+    let agent = AgentInstallation::at("claude", wrapper("schema", ""));
+    let options = SessionOptions::in_dir(dir.path())
+        .output_schema(schema.clone())
+        .env("FIXTURE_ARGV_LOG", log.to_string_lossy());
+    let text = Runtime::new()
+        .generate(&agent, options, "title this")
+        .await
+        .unwrap();
+    assert_eq!(text, r#"{"title":"Fix flaky login test"}"#);
+    let argv = &common::logged_args(&log)[0];
+    let at = argv.iter().position(|a| a == "--json-schema").unwrap();
+    let sent: serde_json::Value = serde_json::from_str(&argv[at + 1]).unwrap();
+    assert_eq!(sent, schema);
+}
+
+/// `plan_usage_with` spawns its short-lived process isolated like a
+/// throwaway session, with the options' env and args and nothing else.
+#[tokio::test]
+async fn plan_usage_with_applies_env_and_args() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.jsonl");
+    let agent = AgentInstallation::at("claude", wrapper("usage-with", ""));
+    let options = SessionOptions::in_dir(dir.path())
+        .configure("fast", true)
+        .env("FIXTURE_ARGV_LOG", log.to_string_lossy())
+        .arg("--extra-flag");
+    Runtime::new()
+        .plan_usage_with(&agent, options)
+        .await
+        .unwrap();
+    let argv = &common::logged_args(&log)[0];
+    assert!(argv.iter().any(|a| a == "--strict-mcp-config"), "{argv:?}");
+    let settings = argv.iter().position(|a| a == "--settings").unwrap();
+    assert_eq!(
+        argv[settings + 1],
+        r#"{"disableAllHooks":true}"#,
+        "{argv:?}"
+    );
+    assert_eq!(argv.last().unwrap(), "--extra-flag", "{argv:?}");
+}
+
 /// Handshake fills version, auth, 9 capabilities (!Steer), commands, and model/effort selects.
 #[tokio::test]
 async fn the_handshake_fills_details() {
@@ -444,7 +560,19 @@ async fn the_handshake_fills_details() {
     }
     // The CLI queues mid-turn messages; it cannot steer.
     assert!(!details.capabilities.supports(Capability::Steer));
-    assert!(details.commands.iter().any(|c| c.name == "compact"));
+    // A `/skills` menu row makes a command a skill, scoped by its source label.
+    let source = |name: &str| {
+        let command = details.commands.iter().find(|c| c.name == name).unwrap();
+        command.source.clone()
+    };
+    assert_eq!(source("compact"), CommandSource::Builtin);
+    assert_eq!(
+        source("review"),
+        CommandSource::Skill {
+            path: None,
+            scope: Some("project".into())
+        }
+    );
     // The model catalog from `initialize` becomes the `model` option.
     let model = details
         .config_options
@@ -488,6 +616,40 @@ async fn the_handshake_fills_details() {
     // The adapter mints the session id, so the token exists before any turn.
     assert!(session.info().resume_token.is_some());
     session.close().await.unwrap();
+}
+
+/// A command list the CLI pushes mid-session is sourced from fresh `/skills` rows. A CLI
+/// that refuses `get_skills_dialog` leaves every command `Builtin`, at the handshake and after.
+#[tokio::test]
+async fn a_pushed_command_list_is_sourced_from_skills() {
+    let user = CommandSource::Skill {
+        path: None,
+        scope: Some("user".into()),
+    };
+    for (name, flags, source) in [
+        ("new-skill", "", user),
+        ("skills-refused", "--skills-refused", CommandSource::Builtin),
+    ] {
+        let (session, mut events) = open(name, flags).await;
+        let refused = source == CommandSource::Builtin;
+        let all_builtin = |session: &Session| {
+            let commands = session.info().details.commands;
+            assert!(!commands.is_empty());
+            commands.iter().all(|c| c.source == CommandSource::Builtin)
+        };
+        assert_eq!(all_builtin(&session), refused, "{name}");
+        session.prompt("new-skill").await.unwrap();
+        let fresh = loop {
+            next(&mut events).await;
+            let commands = session.info().details.commands;
+            if let Some(fresh) = commands.into_iter().find(|c| c.name == "fresh") {
+                break fresh;
+            }
+        };
+        assert_eq!(fresh.source, source, "{name}");
+        assert_eq!(all_builtin(&session), refused, "{name}");
+        session.close().await.unwrap();
+    }
 }
 
 /// Probe reports identical details to open for explorer use.
@@ -590,6 +752,27 @@ async fn a_logged_out_handshake_reports_unauthenticated_with_login_methods() {
             ..
         }
     ));
+}
+
+/// A gateway token given in the session's `env` reads as an API-key login,
+/// though the account object reads logged out.
+#[tokio::test]
+async fn a_gateway_token_in_the_session_env_reads_as_a_login() {
+    let agent = AgentInstallation::at("claude", wrapper("gateway", "--logged-out"));
+    let options =
+        SessionOptions::in_dir(std::env::temp_dir()).env("ANTHROPIC_AUTH_TOKEN", "gateway-token");
+    let details = Runtime::new().probe_with(&agent, options).await.unwrap();
+    assert!(
+        matches!(
+            details.auth,
+            AuthStatus::Authenticated {
+                kind: AuthKind::ApiKey,
+                ..
+            }
+        ),
+        "got {:?}",
+        details.auth
+    );
 }
 
 /// Cancel mid-permission reaches agent and ends turn as Cancelled.
@@ -759,6 +942,94 @@ async fn a_question_is_typed_and_the_answer_reaches_the_agent() {
     session.close().await.unwrap();
 }
 
+/// A deny's message replaces the fixed text; a cancel denies with
+/// `interrupt`, which ends the turn `Cancelled`, for a question too.
+#[tokio::test]
+async fn deny_carries_its_message_and_cancel_interrupts() {
+    let deny = Answer::Deny {
+        message: "not now".into(),
+    };
+    for (name, flags, answer, expected) in [
+        ("deny-why", "", deny, "Hello perm=deny(not now) done"),
+        ("cancel-perm", "", Answer::Cancel, "Hello "),
+        ("cancel-question", "--question", Answer::Cancel, ""),
+    ] {
+        let (session, mut events) = open(name, flags).await;
+        session.prompt("hi").await.unwrap();
+        let mut text = String::new();
+        let stop = loop {
+            match next(&mut events).await.kind {
+                EventKind::RequestOpened(request) => {
+                    session.answer(request.id(), answer.clone()).await.unwrap()
+                }
+                EventKind::TextDelta { text: t, .. } => text.push_str(&t),
+                EventKind::TurnEnded { stop, .. } => break stop,
+                _ => {}
+            }
+        };
+        assert_eq!(text, expected, "{name}");
+        let cancelled = answer == Answer::Cancel;
+        assert_eq!(stop == StopReason::Cancelled, cancelled, "{name}: {stop:?}");
+        session.close().await.unwrap();
+    }
+}
+
+/// ExitPlanMode's plan arrives as `PlanProposed` right before its permission
+/// request; an empty plan leaves only the request.
+#[tokio::test]
+async fn exit_plan_mode_proposes_the_plan_before_its_request() {
+    let (session, mut events) = open("plan", "--plan").await;
+    let mode =
+        |session: &Session| session.info().configuration.options[&ConfigId::new("mode")].clone();
+    session.configure("mode", "plan").await.unwrap();
+    while mode(&session) != "plan".into() {
+        next(&mut events).await;
+    }
+    for (prompt, plan) in [
+        ("plan it", Some("# Plan\n\n1. Add README.md")),
+        ("no-plan", None),
+    ] {
+        session.prompt(prompt).await.unwrap();
+        let mut kinds = Vec::new();
+        loop {
+            let kind = next(&mut events).await.kind;
+            if let EventKind::RequestOpened(Request::Permission(request)) = &kind {
+                assert_eq!(request.tool.title, "ExitPlanMode");
+                session.answer(request.id.clone(), allow()).await.unwrap();
+            }
+            let ended = matches!(kind, EventKind::TurnEnded { .. });
+            kinds.push(kind);
+            if ended {
+                break;
+            }
+        }
+        let proposed: Vec<_> = kinds
+            .iter()
+            .filter_map(|kind| match kind {
+                EventKind::PlanProposed { markdown } => Some(markdown.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(proposed, Vec::from_iter(plan));
+        let request = kinds
+            .iter()
+            .position(|kind| matches!(kind, EventKind::RequestOpened(_)))
+            .unwrap();
+        assert_eq!(
+            matches!(kinds[request - 1], EventKind::PlanProposed { .. }),
+            plan.is_some(),
+            "{kinds:?}"
+        );
+        assert!(kinds.contains(&EventKind::TextDelta {
+            message_id: MessageId::new("msg_1"),
+            text: "plan=allow".into(),
+        }));
+        // The allow ended plan mode in the CLI; `mode` follows it.
+        assert_eq!(mode(&session), "default".into());
+    }
+    session.close().await.unwrap();
+}
+
 /// Agent death mid-turn fails turn and yields ProcessExited status 3 with stderr.
 #[tokio::test]
 async fn agent_death_mid_turn_fails_the_turn() {
@@ -867,36 +1138,117 @@ async fn switching_the_model_round_trips_and_updates_the_session() {
     session.close().await.unwrap();
 }
 
-/// MCP http+stdio servers ride launch config and appear in wire.
+/// Declared MCP servers of every transport ride `mcp_set_servers`, never argv,
+/// and the rollback respawn declares them again. The recording redacts them.
 #[tokio::test]
-async fn mcp_servers_ride_the_launch_config() {
-    let runtime = Runtime::new();
+async fn mcp_servers_ride_the_control_channel() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.jsonl");
+    let wire = dir.path().join("wire.jsonl");
+    let received = dir.path().join("mcp.jsonl");
     let agent = AgentInstallation::at("claude", wrapper("mcp", ""));
-    let (session, mut events) = runtime
-        .open(
-            &agent,
-            SessionOptions::in_dir(std::env::temp_dir())
-                .mcp_server(McpServer::http("voice", "http://127.0.0.1:1/mcp"))
-                .mcp_server(McpServer::stdio("tool", "/bin/echo", ["hi"])),
+    let options = SessionOptions::in_dir(dir.path())
+        .mcp_server(
+            McpServer::http("voice", "http://127.0.0.1:1/mcp")
+                .with("Authorization", "Bearer HTTP-SECRET"),
+        )
+        .mcp_server(McpServer::sse("feed", "http://127.0.0.1:1/sse").with("X-Key", "SSE-SECRET"))
+        .mcp_server(McpServer::stdio("tool", "/bin/echo", ["hi"]).with("TOKEN", "ENV-SECRET"))
+        .record_wire(&wire)
+        .env("FIXTURE_ARGV_LOG", log.to_string_lossy())
+        .env("FIXTURE_MCP_LOG", received.to_string_lossy());
+    let (session, mut events) = Runtime::new().open(&agent, options).await.unwrap();
+    for prompt in ["one", "two"] {
+        session.prompt(prompt).await.unwrap();
+        complete_turn(&session, &mut events).await;
+    }
+    session
+        .rollback(
+            std::num::NonZeroU32::new(1).unwrap(),
+            RollbackScope::Conversation,
         )
         .await
         .unwrap();
-    session.prompt("hi").await.unwrap();
-    let mut text = String::new();
-    loop {
-        let event = next(&mut events).await;
-        match event.kind {
-            EventKind::TextDelta { text: t, .. } => text.push_str(&t),
-            EventKind::RequestOpened(request) => {
-                session.answer(request.id(), allow()).await.unwrap()
-            }
-            EventKind::TurnEnded { .. } => break,
-            _ => {}
-        }
+    session.prompt("three").await.unwrap();
+    let text = complete_turn(&session, &mut events).await;
+    for decl in ["http:voice", "sse:feed", "stdio:tool"] {
+        assert!(
+            text.contains(decl),
+            "{decl} lost after the respawn: {text:?}"
+        );
     }
-    assert!(text.contains("http:voice"), "declaration lost: {text:?}");
-    assert!(text.contains("stdio:tool"), "declaration lost: {text:?}");
+    common::sent_frames(&wire, 2, |f| f["request"]["subtype"] == "mcp_set_servers").await;
+    let secrets = [
+        ("Authorization", "Bearer HTTP-SECRET"),
+        ("X-Key", "SSE-SECRET"),
+        ("TOKEN", "ENV-SECRET"),
+    ];
+    common::assert_mcp_redacted(&wire, &received, &secrets);
+    let launches = common::logged_args(&log);
+    assert_eq!(launches.len(), 2, "{launches:?}");
+    for argv in &launches {
+        assert!(
+            !argv
+                .iter()
+                .any(|a| a.contains("SECRET") || a == "--mcp-config"),
+            "{argv:?}"
+        );
+    }
     session.close().await.unwrap();
+}
+
+/// A declared server that did not connect, or a refused `mcp_set_servers`
+/// (an older CLI), is a Warning naming it, never carrying a header value.
+#[tokio::test]
+async fn failed_mcp_servers_are_warnings() {
+    let server = McpServer::http("voice", "http://127.0.0.1:1/mcp")
+        .with("Authorization", "Bearer HTTP-SECRET");
+    for (flag, expected) in [
+        (
+            "--mcp-fails",
+            "MCP server `voice` did not connect: MCP endpoint not found at http://127.0.0.1:1/mcp",
+        ),
+        (
+            "--mcp-refused",
+            "agent refused the declared MCP servers: Unsupported control request subtype",
+        ),
+    ] {
+        let agent = AgentInstallation::at("claude", wrapper(&flag[2..], flag));
+        let options = SessionOptions::in_dir(std::env::temp_dir()).mcp_server(server.clone());
+        let (session, mut events) = Runtime::new().open(&agent, options).await.unwrap();
+        let warning = loop {
+            if let EventKind::Diagnostic(d) = next(&mut events).await.kind {
+                break d;
+            }
+        };
+        assert_eq!(warning.level, DiagnosticLevel::Warning);
+        assert!(warning.message.starts_with(expected), "{}", warning.message);
+        assert!(!warning.message.contains("SECRET"), "{}", warning.message);
+        session.close().await.unwrap();
+    }
+}
+
+/// A throwaway session (a probe here) keeps the declared servers:
+/// `--strict-mcp-config` drops only the user's own.
+#[tokio::test]
+async fn throwaway_sessions_keep_declared_mcp_servers() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.jsonl");
+    let wire = dir.path().join("wire.jsonl");
+    let agent = AgentInstallation::at("claude", wrapper("throwaway-mcp", ""));
+    let options = SessionOptions::in_dir(dir.path())
+        .mcp_server(McpServer::stdio("tool", "/bin/echo", ["hi"]))
+        .record_wire(&wire)
+        .env("FIXTURE_ARGV_LOG", log.to_string_lossy());
+    Runtime::new().probe_with(&agent, options).await.unwrap();
+    let sent =
+        common::sent_frames(&wire, 1, |f| f["request"]["subtype"] == "mcp_set_servers").await;
+    assert_eq!(
+        sent[0]["request"]["servers"]["tool"]["command"],
+        "/bin/echo"
+    );
+    let argv = &common::logged_args(&log)[0];
+    assert!(argv.iter().any(|a| a == "--strict-mcp-config"), "{argv:?}");
 }
 
 /// Mismatched answer type or not-offered choice rejected typed; request stays open for correct answer.
@@ -976,6 +1328,61 @@ async fn a_background_task_wakes_an_agent_originated_turn() {
     session.close().await.unwrap();
 }
 
+/// A rule-refused tool ends `Denied` with the CLI's reason; the error
+/// `tool_result` that trails does not turn it `Failed`.
+#[tokio::test]
+async fn a_rule_refused_tool_ends_denied() {
+    let (session, mut events) = open("denied", "--denied").await;
+    session.prompt("hi").await.unwrap();
+    let mut states = Vec::new();
+    loop {
+        match next(&mut events).await.kind {
+            EventKind::ToolUpdated(tool) => states.push((tool.status, tool.output)),
+            EventKind::TurnEnded { background, .. } => {
+                assert!(background.is_empty(), "a denied tool is not running");
+                break;
+            }
+            _ => {}
+        }
+    }
+    let reason = "Permission to use Bash with command echo probe-denied has been denied.";
+    assert_eq!(
+        states,
+        [
+            (ToolStatus::Running, None),
+            (ToolStatus::Denied, Some(reason.to_owned())),
+        ]
+    );
+    session.close().await.unwrap();
+}
+
+/// A running Bash's `tool_progress` is its elapsed time in the turn; progress
+/// naming no known tool is dropped.
+#[tokio::test]
+async fn tool_progress_reports_the_running_tools_elapsed_time() {
+    let (session, mut events) = open("progress", "--progress").await;
+    session.prompt("hi").await.unwrap();
+    let mut progress = Vec::new();
+    loop {
+        let event = next(&mut events).await;
+        match event.kind {
+            EventKind::ToolProgress {
+                tool_id,
+                message,
+                elapsed_ms,
+            } => progress.push((tool_id, message, elapsed_ms, event.turn_info)),
+            EventKind::TurnEnded { .. } => break,
+            _ => {}
+        }
+    }
+    assert_eq!(progress.len(), 1, "{progress:?}");
+    let (tool_id, message, elapsed_ms, turn) = &progress[0];
+    assert_eq!(tool_id.as_str(), "toolu_sleep");
+    assert_eq!((message, elapsed_ms), (&None, &Some(3000)));
+    assert!(turn.as_ref().is_some_and(|t| t.parent_tool_id.is_none()));
+    session.close().await.unwrap();
+}
+
 /// Subagent Task spawn and nested text/user messages carry parent_tool_id.
 #[tokio::test]
 async fn subagent_events_carry_the_parent_tool_id() {
@@ -1002,6 +1409,129 @@ async fn subagent_events_carry_the_parent_tool_id() {
     assert!(spawn_seen, "Task spawn tool missing");
     assert_eq!(nested_text, "sub ");
     assert_eq!(nested_user.as_deref(), Some("look deeper"));
+    session.close().await.unwrap();
+}
+
+/// A subagent tool carries role and model from the start, the progress line and
+/// tokens after `task_progress`, and ends with its output and final tokens.
+#[tokio::test]
+async fn a_subagent_tool_reports_role_model_progress_and_tokens() {
+    let (session, mut events) = open("subagent-info", "--subagent").await;
+    session.prompt("hi").await.unwrap();
+    let mut snapshots = Vec::new();
+    loop {
+        match next(&mut events).await.kind {
+            EventKind::ToolUpdated(tool) if tool.kind == ToolKind::Subagent => snapshots.push(tool),
+            EventKind::TurnEnded { .. } => break,
+            _ => {}
+        }
+    }
+    let info = |summary: Option<&str>, tokens: Option<u64>| {
+        Some(SubagentInfo {
+            role: Some("Explore".into()),
+            model: Some("haiku".into()),
+            summary: summary.map(str::to_owned),
+            tokens,
+        })
+    };
+    assert_eq!(snapshots[0].status, ToolStatus::Running);
+    assert_eq!(snapshots[0].subagent, info(None, None));
+    assert_eq!(snapshots[1].status, ToolStatus::Running);
+    assert_eq!(
+        snapshots[1].subagent,
+        info(Some("Running List files"), Some(16390))
+    );
+    let last = snapshots.last().unwrap();
+    assert_eq!(last.status, ToolStatus::Completed);
+    assert_eq!(last.output.as_deref(), Some("4 files"));
+    assert_eq!(last.subagent, info(Some("Running List files"), Some(17870)));
+    session.close().await.unwrap();
+}
+
+/// A background subagent's tool is still Running at turn end and listed in
+/// `background`; its progress and completion arrive after it, outside any turn.
+#[tokio::test]
+async fn a_background_subagent_runs_past_its_turn() {
+    let (session, mut events) = open("bg-subagent", "--bg-subagent").await;
+    session.prompt("hi").await.unwrap();
+    let mut launched = None;
+    loop {
+        match next(&mut events).await.kind {
+            EventKind::ToolUpdated(tool) => launched = Some(tool),
+            EventKind::TurnEnded { background, .. } => {
+                assert_eq!(background.len(), 1);
+                assert_eq!(background[0].as_str(), "toolu_bga");
+                break;
+            }
+            _ => {}
+        }
+    }
+    let launched = launched.unwrap();
+    assert_eq!(launched.status, ToolStatus::Running);
+    let role = launched.subagent.and_then(|s| s.role);
+    assert_eq!(role.as_deref(), Some("general-purpose"));
+    // Progress then completion, neither opening a turn; the wake turn follows.
+    let mut late = Vec::new();
+    loop {
+        let event = next(&mut events).await;
+        match event.kind {
+            EventKind::ToolUpdated(tool) => {
+                assert!(event.turn_info.is_none(), "opened a turn: {tool:?}");
+                late.push((tool.status, tool.subagent.unwrap(), tool.output));
+            }
+            EventKind::TurnStarted { origin } => {
+                assert_eq!(origin, TurnOrigin::Agent);
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(late.len(), 2);
+    assert_eq!(late[0].0, ToolStatus::Running);
+    assert_eq!(
+        late[0].1.summary.as_deref(),
+        Some("Running Echo the word hi")
+    );
+    assert_eq!(late[0].1.tokens, Some(20584));
+    assert_eq!(late[1].0, ToolStatus::Completed);
+    assert_eq!(late[1].1.tokens, Some(21582));
+    // The notification's summary replaces the launch placeholder.
+    assert_eq!(late[1].2.as_deref(), Some("PONG"));
+    session.close().await.unwrap();
+}
+
+/// A rollback kills a background Agent that never reported: it settles
+/// `Cancelled` outside any turn.
+#[tokio::test]
+async fn a_rollback_cancels_a_background_tool() {
+    let (session, mut events) = open("bg-rollback", "").await;
+    session.prompt("one").await.unwrap();
+    complete_turn(&session, &mut events).await;
+    session.prompt("bg-never-reports").await.unwrap();
+    complete_turn(&session, &mut events).await;
+    session
+        .rollback(
+            std::num::NonZeroU32::new(1).unwrap(),
+            RollbackScope::Conversation,
+        )
+        .await
+        .unwrap();
+    let mut last = None;
+    loop {
+        let event = next(&mut events).await;
+        match event.kind {
+            EventKind::ToolUpdated(tool) => {
+                assert!(event.turn_info.is_none(), "opened a turn: {tool:?}");
+                last = Some(tool);
+            }
+            EventKind::TurnStarted { .. } => panic!("the settle opened a turn"),
+            EventKind::SessionUpdated(_) => break,
+            _ => {}
+        }
+    }
+    let last = last.unwrap();
+    assert_eq!(last.id.as_str(), "toolu_bga");
+    assert_eq!(last.status, ToolStatus::Cancelled);
     session.close().await.unwrap();
 }
 
@@ -1126,6 +1656,33 @@ async fn config_home_reaches_the_child_as_an_env_var() {
         text.contains(&format!("cfg={}", home.display())),
         "child did not see the config home: {text:?}"
     );
+    session.close().await.unwrap();
+}
+
+/// `instructions` ride `initialize` as `appendSystemPrompt`, never argv; `env`
+/// reaches the child and beats `config_home` on the same name; `arg` is last.
+#[tokio::test]
+async fn instructions_env_and_args_reach_the_child() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.jsonl");
+    let wire = dir.path().join("wire.jsonl");
+    let agent = AgentInstallation::at("claude", wrapper("env-args", "--echo-config-home"));
+    let options = SessionOptions::in_dir(dir.path())
+        .instructions("Be brief.")
+        .record_wire(&wire)
+        .config_home(dir.path().join("home"))
+        .env("CLAUDE_CONFIG_DIR", "from-env")
+        .env("FIXTURE_ARGV_LOG", log.to_string_lossy())
+        .arg("--extra-flag");
+    let (session, mut events) = Runtime::new().open(&agent, options).await.unwrap();
+    session.prompt("hi").await.unwrap();
+    let text = complete_turn(&session, &mut events).await;
+    assert!(text.contains("cfg=from-env"), "{text:?}");
+    let init = common::sent_frames(&wire, 1, |f| f["request"]["subtype"] == "initialize").await;
+    assert_eq!(init[0]["request"]["appendSystemPrompt"], "Be brief.");
+    let argv = &common::logged_args(&log)[0];
+    assert!(!argv.iter().any(|a| a.contains("Be brief.")), "{argv:?}");
+    assert_eq!(argv.last().unwrap(), "--extra-flag", "{argv:?}");
     session.close().await.unwrap();
 }
 
@@ -1633,5 +2190,49 @@ async fn effort_choices_follow_a_live_model_switch() {
         info.configuration.options.get(&ConfigId::new("effort")),
         None
     );
+    session.close().await.unwrap();
+}
+
+/// Each model choice carries that model's own options, and the selected
+/// model's live `effort` equals its nested one.
+#[tokio::test]
+async fn model_choices_carry_each_models_own_options() {
+    let (session, _events) = open("model-options", "").await;
+    let option = |info: &anyagent::SessionInfo, id: &str| {
+        info.details
+            .config_options
+            .iter()
+            .find(|o| o.id.as_str() == id)
+            .cloned()
+    };
+    let model = option(&session.info(), "model").unwrap();
+    let ConfigKind::Select { choices } = &model.kind else {
+        panic!("expected Select, got {:?}", model.kind);
+    };
+    let nested = |value: &str| {
+        choices
+            .iter()
+            .find(|c| c.value == value)
+            .unwrap()
+            .options
+            .clone()
+    };
+    // haiku has no effort levels and no Fast mode.
+    assert!(nested("haiku").is_empty());
+    // default lists `max`, which sonnet lacks, and Fast mode off.
+    let default = nested("default");
+    let ids: Vec<&str> = default.iter().map(|o| o.id.as_str()).collect();
+    assert_eq!(ids, ["effort", "fast"]);
+    let ConfigKind::Select { choices: levels } = &default[0].kind else {
+        panic!("effort is a select");
+    };
+    assert!(levels.iter().any(|c| c.value == "max"));
+    assert_eq!(default[1].current, Some(ConfigValue::Bool(false)));
+    // Nested options carry no options of their own.
+    assert!(levels.iter().all(|c| c.options.is_empty()));
+    // sonnet has effort only.
+    assert_eq!(nested("sonnet").len(), 1);
+    // default is selected at open: its live effort is its nested one.
+    assert_eq!(option(&session.info(), "effort").as_ref(), default.first());
     session.close().await.unwrap();
 }

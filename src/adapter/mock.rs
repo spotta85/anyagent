@@ -15,13 +15,13 @@ use crate::adapter::{
     Adapter, ConnectRequest, DriverCommand, DriverConnection, DriverEvent, DriverInfo,
 };
 use crate::agent::{
-    AgentDetails, AuthKind, AuthStatus, Capabilities, Capability, ConfigOption,
-    SessionConfiguration,
+    AgentDetails, AgentInstallation, AuthKind, AuthStatus, Capabilities, Capability, ConfigOption,
+    ResumeToken, SessionConfiguration, SessionOptions, SessionStart,
 };
 use crate::error::AgentError;
 use crate::event::{
-    CompletionSource, EventKind, MessageId, PermissionChoice, PermissionRequest, Request,
-    RequestId, StopReason, ToolId, ToolInput, ToolKind, ToolStatus, ToolUpdate,
+    CompletionSource, EventKind, MessageId, PermissionChoice, PermissionRequest, PlanUsage,
+    Request, RequestId, StopReason, ToolId, ToolInput, ToolKind, ToolStatus, ToolUpdate,
 };
 
 // ---------------------------------------------------------------------------
@@ -34,8 +34,12 @@ use crate::event::{
 #[allow(clippy::large_enum_variant)]
 pub enum Step {
     Emit(EventKind),
+    /// Emit as an event of this tool's subagent (`parent_tool_id` set).
+    Nested(ToolId, EventKind),
     /// Pause until the engine forwards an `Answer`.
     AwaitAnswer,
+    /// Report what the turn has spent; rides on the next `End`.
+    Usage(crate::event::TurnUsage),
     /// Report the turn ended. Steps after it play immediately, which is how
     /// a script models agent-originated continuation and trailing noise.
     End(StopReason),
@@ -77,8 +81,20 @@ pub struct Script {
     /// Advertise compaction; `compact` then reports `ContextCompacted`.
     pub compact: bool,
     pub permissions: bool,
+    /// Advertise `Resume` and mint a token; resuming fails, as the mock keeps no history.
+    pub resume: bool,
+    /// Advertise `Rollback`; each rollback is confirmed.
+    pub rollback: bool,
+    /// Refuse every rollback with this reason instead.
+    pub rollback_refusal: Option<String>,
     /// Advertised config options; `configure` sets one and reports it back.
     pub options: Vec<ConfigOption>,
+    /// Refuse `open` and `plan_usage` with `InvalidRequest` whose detail is
+    /// a JSON echo of the launch options received, so a test can read them.
+    pub echo_options: bool,
+    /// Start each turn's text with the prompt's `Input` as JSON (text and
+    /// attachments), so a test can read what reached the adapter.
+    pub echo_input: bool,
 }
 
 impl Default for Script {
@@ -95,7 +111,12 @@ impl Default for Script {
             stale_before_ack: None,
             compact: false,
             permissions: true,
+            resume: false,
+            rollback: false,
+            rollback_refusal: None,
             options: Vec::new(),
+            echo_options: false,
+            echo_input: false,
         }
     }
 }
@@ -146,7 +167,13 @@ impl MockAdapter {
 
 #[async_trait]
 impl Adapter for MockAdapter {
-    async fn connect(&self, _request: ConnectRequest) -> Result<DriverConnection, AgentError> {
+    async fn connect(&self, request: ConnectRequest) -> Result<DriverConnection, AgentError> {
+        if self.script.echo_options {
+            return Err(echo(&request.installation, &request.options));
+        }
+        if self.script.resume && matches!(request.options.start, SessionStart::Resume(_)) {
+            return Err(AgentError::ResumeFailed("the mock keeps no history".into()));
+        }
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (ev_tx, ev_rx) = mpsc::channel(self.script.buffer);
         tokio::spawn(drive(
@@ -159,6 +186,18 @@ impl Adapter for MockAdapter {
             info: info(&self.script, &initial_configuration(&self.script)),
             commands: cmd_tx,
             events: ev_rx,
+        })
+    }
+
+    /// No quota; with `echo_options` the refusal names what arrived.
+    async fn plan_usage(
+        &self,
+        installation: &AgentInstallation,
+        options: &SessionOptions,
+    ) -> Result<PlanUsage, AgentError> {
+        Err(match self.script.echo_options {
+            true => echo(installation, options),
+            false => AgentError::UnsupportedFeature("plan usage".into()),
         })
     }
 }
@@ -195,10 +234,19 @@ async fn drive(
             let Some(step) = steps.pop_front() else { break };
             let ok = match step {
                 Step::Emit(kind) => send(DriverEvent::event(kind)).await,
+                Step::Nested(parent, kind) => {
+                    send(DriverEvent::Event {
+                        kind,
+                        parent_tool_id: Some(parent),
+                        extensions: Default::default(),
+                    })
+                    .await
+                }
                 Step::AwaitAnswer => {
                     waiting = true;
                     true
                 }
+                Step::Usage(usage) => send(DriverEvent::TurnUsage(usage)).await,
                 Step::End(stop) => {
                     turn_open = false;
                     send(DriverEvent::TurnEnded(stop)).await
@@ -235,7 +283,7 @@ async fn drive(
             return;
         };
         match cmd {
-            DriverCommand::StartTurn { .. } => {
+            DriverCommand::StartTurn { input } => {
                 if let Some(kind) = script.stale_before_ack.clone()
                     && !send(DriverEvent::event(kind)).await
                 {
@@ -245,6 +293,10 @@ async fn drive(
                     return;
                 }
                 steps = script.turns.pop_front().unwrap_or_default().into();
+                if script.echo_input {
+                    let echo = serde_json::to_string(&input).expect("an input serializes");
+                    steps.push_front(Step::Emit(text("echo", &echo)));
+                }
                 turn_open = true;
             }
             DriverCommand::Steer { .. } => {
@@ -279,7 +331,13 @@ async fn drive(
                     return;
                 }
             }
-            DriverCommand::Cancel | DriverCommand::Rollback(..) => {}
+            DriverCommand::Rollback(..) => {
+                let outcome = script.rollback_refusal.clone().map_or(Ok(()), Err);
+                if !send(DriverEvent::RolledBack(outcome)).await {
+                    return;
+                }
+            }
+            DriverCommand::Cancel => {}
             DriverCommand::Close if script.ignore_close => {}
             DriverCommand::Close => return,
         }
@@ -296,6 +354,12 @@ fn info(script: &Script, configuration: &SessionConfiguration) -> DriverInfo {
     }
     if script.compact {
         caps.push(Capability::Compact);
+    }
+    if script.resume {
+        caps.push(Capability::Resume);
+    }
+    if script.rollback {
+        caps.push(Capability::Rollback);
     }
     // Each option's `current` follows the configuration.
     let config_options = script
@@ -321,13 +385,30 @@ fn info(script: &Script, configuration: &SessionConfiguration) -> DriverInfo {
             commands: Vec::new(),
         },
         configuration: configuration.clone(),
-        resume_token: None,
+        resume_token: script.resume.then(|| ResumeToken::new("mock-token")),
         title: None,
         deterministic_turn_end: script.deterministic,
         deterministic_agent_turn_end: script.deterministic_agent,
         tools_disabled: false,
         effort_wire: None,
     }
+}
+
+/// The `echo_options` refusal: the launch facts the adapter received, as a
+/// JSON object the test parses back.
+fn echo(installation: &AgentInstallation, options: &SessionOptions) -> AgentError {
+    let echoed = serde_json::json!({
+        "executable_path": installation.executable_path,
+        "source": installation.source,
+        "cwd": options.cwd,
+        "throwaway": options.throwaway,
+        "instructions": options.instructions,
+        "env": options.env.0,
+        "args": options.args,
+        "config_home": options.config_home,
+        "record_wire": options.record_wire,
+    });
+    AgentError::InvalidRequest(echoed.to_string())
 }
 
 /// Each option's `current` value, as the session starts.
@@ -367,6 +448,7 @@ pub fn tool(id: &str, status: ToolStatus) -> EventKind {
         diffs: Vec::new(),
         locations: Vec::new(),
         raw: None,
+        subagent: None,
     })
 }
 

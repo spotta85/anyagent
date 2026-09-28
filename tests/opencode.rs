@@ -10,9 +10,9 @@ use futures::StreamExt;
 
 use anyagent::{
     AgentError, AgentInstallation, Answer, AuthStatus, Capability, ConfigId, ConfigKind,
-    ConfigValue, Event, EventKind, Events, Input, MessageId, PermissionChoice, QuestionAnswer,
-    Request, RollbackScope, Runtime, Session, SessionOptions, StopReason, ToolKind, ToolStatus,
-    TurnOrigin,
+    ConfigValue, Event, EventKind, Events, Input, McpServer, McpTransport, MessageId,
+    PermissionChoice, QuestionAnswer, Request, RollbackScope, Runtime, Session, SessionOptions,
+    StopReason, SubagentInfo, ToolKind, ToolStatus, TurnOrigin, TurnUsage,
 };
 
 mod common;
@@ -67,6 +67,15 @@ async fn complete_turn(session: &Session, events: &mut Events, answer: Permissio
             }
             EventKind::TurnEnded { .. } => return text,
             _ => {}
+        }
+    }
+}
+
+/// Drives one turn to its end and returns the usage its `TurnEnded` carries.
+async fn turn_usage(events: &mut Events) -> Option<TurnUsage> {
+    loop {
+        if let EventKind::TurnEnded { usage, .. } = next(events).await.kind {
+            return usage;
         }
     }
 }
@@ -178,8 +187,16 @@ async fn logged_out_reports_unauthenticated_with_no_models() {
     session.close().await.unwrap();
 }
 
+/// The fixture turn's two steps summed: cache counts as input, reasoning as output.
+const TURN_USAGE: TurnUsage = TurnUsage {
+    input_tokens: 1840,
+    cached_input_tokens: 500,
+    output_tokens: 260,
+};
+
 /// A full turn maps text, reasoning, the bash tool with output, the plan,
-/// usage with the model's window, one MessageEnded, and a protocol end.
+/// usage with the model's window, one MessageEnded, and a protocol end
+/// carrying the turn's summed usage.
 #[tokio::test]
 async fn a_full_turn_maps_every_frame_kind() {
     let (session, mut events) = open("full", "").await;
@@ -211,13 +228,14 @@ async fn a_full_turn_maps_every_frame_kind() {
                 assert!(event.extensions.contains_key("opencode/fork_point"));
                 ended.push(message_id);
             }
-            EventKind::TurnEnded { stop, .. } => {
+            EventKind::TurnEnded { stop, usage, .. } => {
                 assert_eq!(
                     stop,
                     StopReason::Completed {
                         source: anyagent::CompletionSource::Protocol
                     }
                 );
+                assert_eq!(usage, Some(TURN_USAGE));
                 break;
             }
             _ => {}
@@ -242,21 +260,53 @@ async fn a_full_turn_maps_every_frame_kind() {
     session.close().await.unwrap();
 }
 
-/// A write asks permission; allow completes it, deny fails it, and both
-/// reach the agent as its own reply codes.
+/// A second turn and a compaction each sum their own steps only.
+#[tokio::test]
+async fn a_later_turn_never_inherits_an_earlier_turn_s_usage() {
+    let (session, mut events) = open("usage-reset", "").await;
+    session.prompt("one").await.unwrap();
+    assert_eq!(turn_usage(&mut events).await, Some(TURN_USAGE));
+    session.prompt("two").await.unwrap();
+    assert_eq!(turn_usage(&mut events).await, Some(TURN_USAGE));
+    session.compact().await.unwrap();
+    let summary = TurnUsage {
+        input_tokens: 100,
+        cached_input_tokens: 0,
+        output_tokens: 50,
+    };
+    assert_eq!(turn_usage(&mut events).await, Some(summary));
+    session.close().await.unwrap();
+}
+
+/// A write asks permission; allow completes it, deny and cancel fail it, and
+/// each reaches the agent as its own reply code, a deny's message with it.
 #[tokio::test]
 async fn permissions_allow_and_deny_the_write() {
-    for (name, choice, expected, status) in [
+    for (name, answer, expected, status) in [
         (
             "perm-allow",
-            PermissionChoice::AllowOnce,
-            "perm=once",
+            Answer::Permission(PermissionChoice::AllowOnce),
+            "perm=once ",
             ToolStatus::Completed,
         ),
         (
             "perm-deny",
-            PermissionChoice::DenyOnce,
-            "perm=reject",
+            Answer::Permission(PermissionChoice::DenyOnce),
+            "perm=reject ",
+            ToolStatus::Failed,
+        ),
+        (
+            "perm-deny-why",
+            Answer::Deny {
+                message: "not now".into(),
+            },
+            "perm=reject:not now ",
+            ToolStatus::Failed,
+        ),
+        (
+            "perm-cancel",
+            Answer::Cancel,
+            "perm=reject ",
             ToolStatus::Failed,
         ),
     ] {
@@ -270,10 +320,7 @@ async fn permissions_allow_and_deny_the_write() {
                 EventKind::RequestOpened(Request::Permission(request)) => {
                     assert_eq!(request.tool.title, "write fruit.txt");
                     assert_eq!(request.detail.as_deref(), Some("fruit.txt"));
-                    session
-                        .answer(request.id, Answer::Permission(choice))
-                        .await
-                        .unwrap();
+                    session.answer(request.id, answer.clone()).await.unwrap();
                 }
                 EventKind::ToolUpdated(tool) if tool.kind == ToolKind::Edit => {
                     write = Some(tool.status)
@@ -288,35 +335,33 @@ async fn permissions_allow_and_deny_the_write() {
     }
 }
 
-/// The question tool becomes a question request; the chosen label goes back.
+/// The question tool becomes a question request; the chosen label goes back,
+/// and a cancel takes the reject route.
 #[tokio::test]
 async fn a_question_round_trips() {
-    let (session, mut events) = open("question", "").await;
-    session.prompt("question time").await.unwrap();
-    let mut text = String::new();
-    loop {
-        match next(&mut events).await.kind {
-            EventKind::TextDelta { text: t, .. } => text.push_str(&t),
-            EventKind::RequestOpened(Request::Question(request)) => {
-                let q = &request.questions[0];
-                assert_eq!(q.text, "Which color?");
-                assert_eq!(q.header.as_deref(), Some("Color"));
-                assert_eq!(q.choices.len(), 2);
-                assert!(!q.allows_free_text);
-                session
-                    .answer(
-                        request.id,
-                        Answer::Question(vec![QuestionAnswer::Choices(vec!["Red".into()])]),
-                    )
-                    .await
-                    .unwrap();
+    let red = Answer::Question(vec![QuestionAnswer::Choices(vec!["Red".into()])]);
+    for (answer, expected) in [(red, "q=Red"), (Answer::Cancel, "q=rejected")] {
+        let (session, mut events) = open("question", "").await;
+        session.prompt("question time").await.unwrap();
+        let mut text = String::new();
+        loop {
+            match next(&mut events).await.kind {
+                EventKind::TextDelta { text: t, .. } => text.push_str(&t),
+                EventKind::RequestOpened(Request::Question(request)) => {
+                    let q = &request.questions[0];
+                    assert_eq!(q.text, "Which color?");
+                    assert_eq!(q.header.as_deref(), Some("Color"));
+                    assert_eq!(q.choices.len(), 2);
+                    assert!(!q.allows_free_text);
+                    session.answer(request.id, answer.clone()).await.unwrap();
+                }
+                EventKind::TurnEnded { .. } => break,
+                _ => {}
             }
-            EventKind::TurnEnded { .. } => break,
-            _ => {}
         }
+        assert!(text.contains(expected), "{text}");
+        session.close().await.unwrap();
     }
-    assert!(text.contains("q=Red"), "{text}");
-    session.close().await.unwrap();
 }
 
 /// Cancel aborts the turn; the abort's second idle is ignored and the next
@@ -397,6 +442,25 @@ async fn rollback_reverts_at_the_dropped_turns_user_message() {
     session.close().await.unwrap();
 }
 
+/// A failed message listing refuses the rollback with the real failure,
+/// not "nothing to roll back".
+#[tokio::test]
+async fn rollback_reports_a_failed_message_listing() {
+    let (session, mut events) = open("rollback-list-fails", "--messages-fail").await;
+    session.prompt("one").await.unwrap();
+    complete_turn(&session, &mut events, PermissionChoice::AllowOnce).await;
+    let err = session
+        .rollback(NonZeroU32::new(1).unwrap(), RollbackScope::Conversation)
+        .await
+        .err()
+        .unwrap();
+    assert!(
+        matches!(&err, AgentError::InvalidRequest(r) if r.starts_with("rollback rejected:") && r.contains("500")),
+        "{err}"
+    );
+    session.close().await.unwrap();
+}
+
 /// Fork cuts after the anchor message; no anchor forks at the tip.
 #[tokio::test]
 async fn fork_cuts_after_the_anchor_or_at_the_tip() {
@@ -424,8 +488,23 @@ async fn fork_cuts_after_the_anchor_or_at_the_tip() {
     }
 }
 
-/// A task-tool child session streams under its task tool and its
-/// permission reaches the caller.
+/// Only a 404 on the session fetch is `ResumeFailed`; a 500 stays a
+/// protocol failure.
+#[tokio::test]
+async fn only_a_missing_session_fails_the_resume() {
+    for (token, resume_failed) in [("ses_gone", true), ("3b1c9f2e-5a6d", false)] {
+        let options = SessionOptions::in_dir(std::env::temp_dir()).resume(token.into());
+        let err = open_with("resume-gone", "", options).await.err().unwrap();
+        assert_eq!(
+            matches!(err, AgentError::ResumeFailed(_)),
+            resume_failed,
+            "{token}: {err}"
+        );
+    }
+}
+
+/// A task-tool child session streams under its task tool, its permission
+/// reaches the caller, and the task names the child's role and model.
 #[tokio::test]
 async fn a_child_session_nests_under_its_task_tool() {
     let (session, mut events) = open("child", "").await;
@@ -433,6 +512,7 @@ async fn a_child_session_nests_under_its_task_tool() {
     let mut nested_text = String::new();
     let mut text = String::new();
     let mut task_parent = None;
+    let mut infos = Vec::new();
     loop {
         let event = next(&mut events).await;
         let parent = event
@@ -445,6 +525,9 @@ async fn a_child_session_nests_under_its_task_tool() {
                 nested_text.push_str(&t);
             }
             EventKind::TextDelta { text: t, .. } => text.push_str(&t),
+            EventKind::ToolUpdated(tool) if tool.kind == ToolKind::Subagent => {
+                infos.push(tool.subagent)
+            }
             EventKind::RequestOpened(Request::Permission(request)) => {
                 assert_eq!(request.tool.title, "bash ls");
                 session
@@ -459,6 +542,12 @@ async fn a_child_session_nests_under_its_task_tool() {
     assert_eq!(nested_text, "child text");
     assert!(text.contains("child=once"), "{text}");
     assert!(task_parent.unwrap().as_str().starts_with("call_task"));
+    let general = Some(SubagentInfo {
+        role: Some("general".into()),
+        model: Some("opencode/ling-3.0-flash-fin-free".into()),
+        ..SubagentInfo::default()
+    });
+    assert_eq!(infos, vec![general.clone(), general]);
     session.close().await.unwrap();
 }
 
@@ -611,6 +700,110 @@ async fn a_dead_server_surfaces_the_exit() {
     let _ = session;
 }
 
+/// Declared MCP servers are added with `POST /mcp` in the shape opencode
+/// takes; the fixture echoes the request bodies it recorded.
+#[tokio::test]
+async fn mcp_servers_are_added_through_post_mcp() {
+    let exe = std::env::current_exe().unwrap();
+    let options = SessionOptions::in_dir(std::env::temp_dir())
+        .mcp_server(McpServer::stdio("tool", &exe, ["--serve"]).with("K", "V"))
+        .mcp_server(
+            McpServer::http("voice", "http://127.0.0.1:1/mcp").with("Authorization", "Bearer x"),
+        )
+        .mcp_server(McpServer::sse("events", "http://127.0.0.1:1/sse"));
+    let (session, mut events) = open_with("mcp", "", options).await.unwrap();
+    assert_eq!(
+        session.info().details.capabilities.mcp_transports,
+        vec![McpTransport::Stdio, McpTransport::Http, McpTransport::Sse]
+    );
+    session.prompt("hi").await.unwrap();
+    let text = complete_turn(&session, &mut events, PermissionChoice::AllowOnce).await;
+    let recorded = text.split("mcp=").nth(1).and_then(|r| r.lines().next());
+    let recorded: serde_json::Value = serde_json::from_str(recorded.unwrap()).unwrap();
+    assert_eq!(
+        recorded,
+        serde_json::json!([
+            { "name": "tool", "config": { "type": "local", "command": [exe, "--serve"], "environment": { "K": "V" } } },
+            { "name": "voice", "config": { "type": "remote", "url": "http://127.0.0.1:1/mcp", "headers": { "Authorization": "Bearer x" } } },
+            { "name": "events", "config": { "type": "remote", "url": "http://127.0.0.1:1/sse", "headers": {} } },
+        ])
+    );
+    session.close().await.unwrap();
+}
+
+/// `POST /mcp` carries the real MCP header and env values; the wire
+/// recording keeps their names with `<redacted>` values.
+#[tokio::test]
+async fn mcp_secrets_are_redacted_in_the_recording() {
+    let dir = tempfile::tempdir().unwrap();
+    let wire = dir.path().join("wire.jsonl");
+    let received = dir.path().join("mcp.jsonl");
+    let exe = std::env::current_exe().unwrap();
+    let options = SessionOptions::in_dir(dir.path())
+        .mcp_server(
+            McpServer::http("voice", "http://127.0.0.1:1/mcp")
+                .with("Authorization", "Bearer HTTP-SECRET"),
+        )
+        .mcp_server(McpServer::stdio("tool", &exe, ["--serve"]).with("TOKEN", "ENV-SECRET"))
+        .record_wire(&wire)
+        .env("FIXTURE_MCP_LOG", received.to_string_lossy());
+    let (session, _events) = open_with("mcp-redact", "", options).await.unwrap();
+    common::sent_frames(&wire, 2, |f| f["path"] == "/mcp").await;
+    let secrets = [
+        ("Authorization", "Bearer HTTP-SECRET"),
+        ("TOKEN", "ENV-SECRET"),
+    ];
+    common::assert_mcp_redacted(&wire, &received, &secrets);
+    session.close().await.unwrap();
+}
+
+/// A server opencode refuses fails the open typed, with the agent's reason.
+#[tokio::test]
+async fn a_refused_mcp_server_fails_the_open() {
+    let options = SessionOptions::in_dir(std::env::temp_dir()).mcp_server(McpServer::stdio(
+        "bad",
+        "/nonexistent/mcp-cmd",
+        ["--serve"],
+    ));
+    let err = open_with("mcp-refused", "", options).await.err().unwrap();
+    assert!(
+        matches!(&err, AgentError::InvalidConfiguration(m) if m.contains("`bad`") && m.contains("ENOENT")),
+        "{err:?}"
+    );
+}
+
+/// MCP calls are `ToolKind::Mcp`, longest server name first (user "my docs"
+/// over declared "my"); one `GET /mcp`, on the first such call, none at open.
+#[tokio::test]
+async fn mcp_tool_calls_name_their_server() {
+    let options = SessionOptions::in_dir(std::env::temp_dir())
+        .mcp_server(McpServer::http("my", "http://127.0.0.1:1/mcp"));
+    let (session, mut events) = open_with("mcp-kind", "", options).await.unwrap();
+    session.prompt("mcp-call").await.unwrap();
+    let mut text = String::new();
+    let mut kinds = Vec::new();
+    loop {
+        match next(&mut events).await.kind {
+            EventKind::TextDelta { text: t, .. } => text.push_str(&t),
+            EventKind::ToolUpdated(tool) => kinds.push(tool.kind),
+            EventKind::TurnEnded { .. } => break,
+            _ => {}
+        }
+    }
+    assert!(text.contains("mcp-gets=0"), "open read the list: {text}");
+    let mcp = |tool: &str| ToolKind::Mcp {
+        server: "my docs".into(),
+        tool: tool.into(),
+    };
+    assert!(kinds.contains(&mcp("lookup")), "{kinds:?}");
+    assert!(kinds.contains(&mcp("search")), "{kinds:?}");
+    assert!(kinds.contains(&ToolKind::Execute), "{kinds:?}");
+    session.prompt("mcp count").await.unwrap();
+    let text = complete_turn(&session, &mut events, PermissionChoice::AllowOnce).await;
+    assert!(text.contains("mcp-gets=1"), "two calls, one read: {text}");
+    session.close().await.unwrap();
+}
+
 /// Probe reads the same details an open does, without leaving a session.
 #[tokio::test]
 async fn probe_reports_details() {
@@ -618,4 +811,44 @@ async fn probe_reports_details() {
     let details = Runtime::new().probe(&agent).await.unwrap();
     assert_eq!(details.version.as_deref(), Some("1.18.24"));
     assert!(details.commands.iter().any(|c| c.name == "init"));
+}
+
+/// `instructions` ride every prompt as `system`.
+#[tokio::test]
+async fn instructions_ride_every_prompt_as_system() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("wire.jsonl");
+    let options = SessionOptions::in_dir(dir.path())
+        .instructions("Be brief.")
+        .record_wire(&log);
+    let (session, mut events) = open_with("instructions", "", options).await.unwrap();
+    for prompt in ["one", "two"] {
+        session.prompt(prompt).await.unwrap();
+        complete_turn(&session, &mut events, PermissionChoice::AllowOnce).await;
+    }
+    let prompts = common::sent_frames(&log, 2, |f| {
+        f["path"]
+            .as_str()
+            .is_some_and(|p| p.ends_with("/prompt_async"))
+    })
+    .await;
+    for prompt in &prompts {
+        assert_eq!(prompt["body"]["system"], "Be brief.", "{prompt}");
+    }
+    session.close().await.unwrap();
+}
+
+/// `env` reaches the server; `arg` lands after `serve` and its bind flags.
+#[tokio::test]
+async fn env_and_args_reach_the_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.jsonl");
+    let options = SessionOptions::in_dir(dir.path())
+        .env("FIXTURE_ARGV_LOG", log.to_string_lossy())
+        .arg("--extra-flag");
+    let (session, _events) = open_with("env-args", "", options).await.unwrap();
+    let argv = common::logged_args(&log);
+    assert_eq!(argv[0][0], "serve", "{argv:?}");
+    assert_eq!(argv[0].last().unwrap(), "--extra-flag", "{argv:?}");
+    session.close().await.unwrap();
 }

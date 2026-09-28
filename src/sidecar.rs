@@ -29,7 +29,7 @@ use tokio::sync::mpsc;
 use crate::{
     AgentError, AgentInstallation, Answer, ConfigId, ConfigValue, DiscoveryReport, Events, Input,
     McpServer, MessageId, PermissionMode, PromptId, RequestId, ResumeToken, RollbackScope, Runtime,
-    Session, SessionId, SessionOptions,
+    Session, SessionId, SessionOptions, TurnId,
 };
 
 // ---------------------------------------------------------------------------
@@ -121,23 +121,31 @@ async fn handle(state: &State, cmd: Cmd) -> Result<Reply, Fail> {
             *state.report.lock().unwrap() = Some(report);
             reply
         }
-        Cmd::Probe { agent } => {
+        Cmd::Probe {
+            agent,
+            dir,
+            options,
+        } => {
             let agent = state.resolve(agent).await?;
-            Reply::ok(state.runtime.probe(&agent).await?)
+            let options = options.into_session_options(dir.unwrap_or_else(std::env::temp_dir));
+            Reply::ok(state.runtime.probe_with(&agent, options).await?)
         }
-        Cmd::PlanUsage { agent } => {
+        Cmd::PlanUsage { agent, options } => {
             let agent = state.resolve(agent).await?;
-            Reply::ok(state.runtime.plan_usage(&agent).await?)
+            let options = options.into_session_options(std::env::temp_dir());
+            Reply::ok(state.runtime.plan_usage_with(&agent, options).await?)
         }
         Cmd::Generate {
             agent,
             dir,
             prompt,
+            attachments,
             options,
         } => {
             let agent = state.resolve(agent).await?;
             let options = options.into_session_options(dir);
-            Reply::ok(state.runtime.generate(&agent, options, prompt).await?)
+            let input = with_attachments(prompt, attachments);
+            Reply::ok(state.runtime.generate(&agent, options, input).await?)
         }
         Cmd::Open {
             agent,
@@ -161,9 +169,7 @@ async fn handle(state: &State, cmd: Cmd) -> Result<Reply, Fail> {
             text,
             attachments,
         } => {
-            let input = attachments
-                .into_iter()
-                .fold(Input::text(text), |input, path| input.attach(path));
+            let input = with_attachments(text, attachments);
             Reply::ok(state.session(&session)?.prompt(input).await?)
         }
         Cmd::Dequeue { session, prompt } => {
@@ -188,10 +194,25 @@ async fn handle(state: &State, cmd: Cmd) -> Result<Reply, Fail> {
         Cmd::Cancel {
             session,
             clear_queue,
-        } => Reply::ok(state.session(&session)?.cancel(clear_queue).await?),
+            turn,
+        } => {
+            let session = state.session(&session)?;
+            match turn {
+                Some(turn) => session.cancel_turn(turn, clear_queue).await?,
+                None => session.cancel(clear_queue).await?,
+            }
+            Reply::ok(())
+        }
         Cmd::Info { session } => Reply::ok(state.session(&session)?.info()),
         Cmd::Close { session } => Reply::ok(state.session(&session)?.close().await?),
     }
+}
+
+/// A prompt's text plus its attachment paths, for `prompt` and `generate`.
+fn with_attachments(text: String, attachments: Vec<PathBuf>) -> Input {
+    attachments
+        .into_iter()
+        .fold(Input::text(text), Input::attach)
 }
 
 /// Copies one session's events to the output. A stream error is written
@@ -262,14 +283,22 @@ enum Cmd {
     Discover,
     Probe {
         agent: AgentRef,
+        /// Default: the temp dir.
+        dir: Option<PathBuf>,
+        #[serde(flatten)]
+        options: OpenOptions,
     },
     PlanUsage {
         agent: AgentRef,
+        #[serde(flatten)]
+        options: OpenOptions,
     },
     Generate {
         agent: AgentRef,
         dir: PathBuf,
         prompt: String,
+        #[serde(default)]
+        attachments: Vec<PathBuf>,
         #[serde(flatten)]
         options: OpenOptions,
     },
@@ -311,6 +340,8 @@ enum Cmd {
         session: SessionId,
         #[serde(default)]
         clear_queue: bool,
+        #[serde(default)]
+        turn: Option<TurnId>,
     },
     Info {
         session: SessionId,
@@ -320,13 +351,22 @@ enum Cmd {
     },
 }
 
-/// A catalog id like `"claude"`, or an ACP agent the catalog does not know.
+/// A catalog id like `"claude"`, a catalog agent at an exact path, or an unknown ACP agent.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(untagged)]
 enum AgentRef {
     Id(String),
     Acp { acp: AcpSpec },
+    At(AgentAt),
+}
+
+/// A catalog agent run from one executable: `{"id": "claude", "path": "/opt/claude"}`.
+#[derive(Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+struct AgentAt {
+    id: String,
+    path: PathBuf,
 }
 
 #[derive(Deserialize)]
@@ -338,8 +378,8 @@ struct AcpSpec {
     args: Vec<String>,
 }
 
-/// The `SessionOptions` the wire exposes, as top-level fields of `open`
-/// and `generate`.
+/// The `SessionOptions` the wire exposes, as top-level fields of `open`,
+/// `generate`, `probe` and `plan_usage`.
 #[derive(Deserialize, Default)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 struct OpenOptions {
@@ -351,6 +391,15 @@ struct OpenOptions {
     mcp_servers: Vec<McpServer>,
     #[serde(default)]
     configure: BTreeMap<ConfigId, ConfigValue>,
+    instructions: Option<String>,
+    /// A JSON schema each turn's final message must match (`open`, `generate`).
+    output_schema: Option<Value>,
+    #[serde(default)]
+    env: BTreeMap<String, String>,
+    #[serde(default)]
+    args: Vec<String>,
+    config_home: Option<PathBuf>,
+    record_wire: Option<PathBuf>,
 }
 
 impl OpenOptions {
@@ -371,6 +420,24 @@ impl OpenOptions {
         }
         for (id, value) in self.configure {
             options = options.configure(id, value);
+        }
+        if let Some(text) = self.instructions {
+            options = options.instructions(text);
+        }
+        if let Some(schema) = self.output_schema {
+            options = options.output_schema(schema);
+        }
+        for (key, value) in self.env {
+            options = options.env(key, value);
+        }
+        for arg in self.args {
+            options = options.arg(arg);
+        }
+        if let Some(dir) = self.config_home {
+            options = options.config_home(dir);
+        }
+        if let Some(path) = self.record_wire {
+            options = options.record_wire(path);
         }
         options
     }
@@ -492,12 +559,13 @@ impl State {
     }
 
     /// A catalog id resolves against the last discovery, running one if
-    /// needed; an inline ACP spec needs no lookup.
+    /// needed; an exact path or an inline ACP spec needs no lookup.
     async fn resolve(&self, agent: AgentRef) -> Result<AgentInstallation, Fail> {
         let id = match agent {
             AgentRef::Acp { acp } => {
                 return Ok(AgentInstallation::acp(acp.name, acp.path, acp.args));
             }
+            AgentRef::At(at) => return Ok(AgentInstallation::at(at.id, at.path)),
             AgentRef::Id(id) => id,
         };
         let cached = self

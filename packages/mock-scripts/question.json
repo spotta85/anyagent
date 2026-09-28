@@ -1,0 +1,14 @@
+{"turns": [[
+  {"Emit": {"RequestOpened": {"Question": {
+    "id": "q1",
+    "questions": [
+      {"id": "color", "text": "Which color?", "header": "Color",
+       "choices": [{"id": "c-red", "label": "Red", "description": null},
+                   {"id": "c-blue", "label": "Blue", "description": null}],
+       "multi_select": false, "allows_free_text": false},
+      {"id": "name", "text": "Name it", "header": null, "choices": [],
+       "multi_select": false, "allows_free_text": true}
+    ]}}}},
+  "AwaitAnswer",
+  {"End": {"Completed": {"source": "Protocol"}}}
+]]}
