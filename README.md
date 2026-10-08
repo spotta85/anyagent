@@ -1,5 +1,5 @@
 # anyagent
-### For apps that want to use the AI subscriptions a user already pays for. 
+### For apps that want to use the AI subscriptions a user already pays for.
 
 [![CI](https://github.com/spotta85/anyagent/actions/workflows/ci.yml/badge.svg)](https://github.com/spotta85/anyagent/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/anyagent.svg)](https://crates.io/crates/anyagent)
@@ -137,4 +137,4 @@ Contributions are welcome! Please be sure to open an issue first. Upon approval 
 
 ## License
 
-MIT
+MIT & Apache
